@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EchoScape mixer</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="top">
+        <div>
+          <p class="kicker">EchoScape</p>
+          <h1>Touchpad mixer</h1>
+        </div>
+        <div class="status" data-state="offline">
+          <span class="dot"></span>
+          <span data-status-label>Waiting for Max</span>
+        </div>
+      </header>
+
+      <section class="stage">
+        <div class="pad" data-pad>
+          <div class="quad nw" data-quad="tl">
+            <span class="name">Forest</span>
+            <span class="pct" data-vol="tl">0%</span>
+          </div>
+          <div class="quad ne" data-quad="tr">
+            <span class="name">Beach</span>
+            <span class="pct" data-vol="tr">0%</span>
+          </div>
+          <div class="quad sw" data-quad="bl">
+            <span class="name">Meditation</span>
+            <span class="pct" data-vol="bl">0%</span>
+          </div>
+          <div class="quad se" data-quad="br">
+            <span class="name">River</span>
+            <span class="pct" data-vol="br">0%</span>
+          </div>
+          <div class="crosshair x"></div>
+          <div class="crosshair y"></div>
+          <div class="cursor" data-cursor></div>
+        </div>
+
+        <aside class="readout">
+          <dl>
+            <div>
+              <dt>Source</dt>
+              <dd data-source>mouse</dd>
+            </div>
+            <div>
+              <dt>X</dt>
+              <dd data-x>0.50</dd>
+            </div>
+            <div>
+              <dt>Y</dt>
+              <dd data-y>0.50</dd>
+            </div>
+            <div>
+              <dt>D-pad</dt>
+              <dd data-dpad>—</dd>
+            </div>
+          </dl>
+          <p class="hint">
+            Drag on the pad to preview. With Max + the web-bridge patch open, DualSense
+            position takes over. Each D-pad arrow ramps to that quadrant over 2 seconds.
+          </p>
+        </aside>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
