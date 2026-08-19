@@ -62,12 +62,91 @@
             </div>
           </dl>
           <p class="hint">
-            Drag on the pad to preview. With Max + the web-bridge patch open, DualSense
-            position takes over. Each D-pad arrow ramps to that quadrant over 2 seconds.
+            Drag on the pad to preview. With Max + the web-bridge open, the cursor
+            follows the live mixer XY from Max. Face buttons switch which plugin
+            is in the audio gate. Stick numbers are the scaled values Max sends
+            into that VST, not the raw DualSense axes.
           </p>
         </aside>
       </section>
+
+      <section class="fx" data-fx>
+        <header class="fx-head">
+          <div>
+            <p class="kicker">Face buttons</p>
+            <h2>Active plugin</h2>
+          </div>
+          <p class="fx-active" data-fx-active>X · Saturn 2</p>
+        </header>
+        <div class="fx-raw">
+          <span>Left stick raw</span>
+          <span>X <strong data-stick-raw-x>0.00</strong></span>
+          <span>Y <strong data-stick-raw-y>0.00</strong></span>
+        </div>
+        <div class="fx-grid">
+          <article class="fx-card" data-fx-card="cross" data-on="true">
+            <p class="fx-btn">X</p>
+            <h3>Saturn 2</h3>
+            <dl>
+              <div>
+                <dt>Param 112</dt>
+                <dd data-fx-x>0.00</dd>
+              </div>
+              <div>
+                <dt>Param 6</dt>
+                <dd data-fx-y>0.00</dd>
+              </div>
+            </dl>
+            <p class="fx-scale">X −1…1 → 0…1 · Y 0…1 → 0…0.75</p>
+          </article>
+          <article class="fx-card" data-fx-card="square">
+            <p class="fx-btn">Square</p>
+            <h3>kHs Comb Filter</h3>
+            <dl>
+              <div>
+                <dt>Stick X</dt>
+                <dd data-fx-x>0.00</dd>
+              </div>
+              <div>
+                <dt>Stick Y</dt>
+                <dd data-fx-y>0.00</dd>
+              </div>
+            </dl>
+            <p class="fx-scale">X/Y −1…1 → 0.3…0.7</p>
+          </article>
+          <article class="fx-card" data-fx-card="triangle">
+            <p class="fx-btn">Triangle</p>
+            <h3>kHs Formant Filter</h3>
+            <dl>
+              <div>
+                <dt>Param 2</dt>
+                <dd data-fx-x>0.00</dd>
+              </div>
+              <div>
+                <dt>Param 3</dt>
+                <dd data-fx-y>0.00</dd>
+              </div>
+            </dl>
+            <p class="fx-scale">X/Y −1…1 → 0…1</p>
+          </article>
+          <article class="fx-card" data-fx-card="circle">
+            <p class="fx-btn">Circle</p>
+            <h3>Crystallizer</h3>
+            <dl>
+              <div>
+                <dt>Param 17</dt>
+                <dd data-fx-x>0.00</dd>
+              </div>
+              <div>
+                <dt>Param 4</dt>
+                <dd data-fx-y>0.00</dd>
+              </div>
+            </dl>
+            <p class="fx-scale">X −1…1 → 0.825…0.65 · Y −1…1 → 0.6…1</p>
+          </article>
+        </div>
+      </section>
     </main>
-    <script src="/app.js"></script>
+    <script src="/app.js?v=fx4"></script>
   </body>
 </html>

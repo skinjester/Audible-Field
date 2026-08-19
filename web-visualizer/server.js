@@ -23,6 +23,18 @@ function oscArgs(msg) {
   return args.map((arg) => (arg && typeof arg === "object" && "value" in arg ? arg.value : arg));
 }
 
+function parseButton(value) {
+  const name = String(value || "").toLowerCase();
+  if (name === "x") return "cross";
+  return name;
+}
+
+function oscTokens(address, args) {
+  return [address, ...args]
+    .flatMap((part) => String(part).split(/\s+/))
+    .filter(Boolean);
+}
+
 function handleOsc(msg, broadcast) {
   if (!msg) return;
   if (msg.oscType === "bundle") {
@@ -31,23 +43,63 @@ function handleOsc(msg, broadcast) {
   }
   if (msg.oscType !== "message") return;
 
-  const address = msg.address;
+  const address = String(msg.address || "");
   const args = oscArgs(msg);
+  const tokens = oscTokens(address, args);
+  const path = tokens[0] || "";
+  const rest = tokens.slice(1);
+  const parts = path.split("/").filter(Boolean);
 
-  if (address === "/mixer/xy" && args.length >= 2) {
-    broadcast({ type: "xy", source: "mixer", x: Number(args[0]), y: Number(args[1]) });
+  if (path === "/mixer/xy" && rest.length >= 2) {
+    broadcast({ type: "xy", source: "mixer", x: Number(rest[0]), y: Number(rest[1]) });
     return;
   }
-  if (address === "/mixer/touch" && args.length >= 2) {
-    broadcast({ type: "xy", source: "touch", x: Number(args[0]), y: Number(args[1]) });
+  if (path === "/mixer/touch" && rest.length >= 2) {
+    broadcast({ type: "xy", source: "touch", x: Number(rest[0]), y: Number(rest[1]) });
     return;
   }
-  if (address === "/mixer/dpad" && args.length >= 1) {
+  if (path === "/mixer/dpad" || (parts[0] === "mixer" && parts[1] === "dpad")) {
+    const dir = String(parts[2] || rest[0] || "");
+    const raw = parts[2] != null ? rest[0] : rest[1];
+    const value = raw == null || raw === "" ? 1 : Number(raw);
     broadcast({
       type: "dpad",
-      dir: String(args[0]),
-      value: args.length > 1 ? Number(args[1]) : 1,
+      dir,
+      value: Number.isFinite(value) ? value : 1,
     });
+    return;
+  }
+  if (parts[0] === "fx" && parts[1] === "select") {
+    const button = parseButton(parts[2] || rest[0]);
+    const raw = parts[2] != null ? rest[0] : rest[1];
+    const value = raw == null || raw === "" ? 1 : Number(raw);
+    broadcast({
+      type: "fx-select",
+      button,
+      value: Number.isFinite(value) ? value : 1,
+    });
+    return;
+  }
+  if (parts[0] === "fx" && parts[1] === "stick") {
+    const button = parseButton(parts[2] || rest[0]);
+    const x = Number(parts[2] != null ? rest[0] : rest[1]);
+    const y = Number(parts[2] != null ? rest[1] : rest[2]);
+    broadcast({ type: "fx-stick", button, x, y });
+    return;
+  }
+  if (path === "/fx/raw" && rest.length >= 2) {
+    broadcast({
+      type: "fx-raw",
+      x: Number(rest[0]),
+      y: Number(rest[1]),
+    });
+    return;
+  }
+  if (parts[0] === "fx" && parts[1] === "name") {
+    const button = parseButton(parts[2] || args[0]);
+    const nameParts = parts[2] != null ? args : args.slice(1);
+    const name = nameParts.map(String).join(" ").trim();
+    if (name) broadcast({ type: "fx-name", button, name });
   }
 }
 
@@ -88,13 +140,23 @@ function broadcast(payload) {
 }
 
 const udp = dgram.createSocket("udp4");
+const seenOsc = new Set();
 
 udp.on("message", (buf) => {
   let parsed;
   try {
     parsed = osc.fromBuffer(buf);
-  } catch {
+  } catch (err) {
+    if (seenOsc.size < 8) {
+      console.warn("OSC parse failed:", err.message);
+      seenOsc.add(`parse-error-${seenOsc.size}`);
+    }
     return;
+  }
+  const address = parsed && parsed.address;
+  if (address && !seenOsc.has(address) && seenOsc.size < 20) {
+    seenOsc.add(address);
+    console.log("OSC", address, oscArgs(parsed));
   }
   handleOsc(parsed, broadcast);
 });
