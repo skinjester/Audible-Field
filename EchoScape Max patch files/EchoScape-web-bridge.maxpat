@@ -9,7 +9,7 @@
             "modernui": 1
         },
         "classnamespace": "box",
-        "rect": [ 80.0, 80.0, 1100.0, 720.0 ],
+        "rect": [ 80.0, 80.0, 1180.0, 860.0 ],
         "boxes": [
             {
                 "box": {
@@ -29,7 +29,7 @@
                     "numinlets": 1,
                     "numoutlets": 0,
                     "patching_rect": [ 18.0, 40.0, 488.0, 62.0 ],
-                    "text": "OSC: /mixer/xy live mixer, /mixer/touch raw pad, /mixer/dpad label, /fx/select face button, /fx/stick scaled left-stick into that plugin, /fx/raw unscaled left stick, /fx/name live vst~ plugin name."
+                    "text": "OSC: /mixer/xy live mixer, /mixer/touch raw pad, /mixer/dpad, /fx/select face button, /fx/stick scaled left-stick, /fx/raw unscaled left stick, /fx/name vst~ name, /pad/right right stick, /pad/lt /pad/rt triggers, /pad/l1 /pad/r1 shoulders, /pad/ls /pad/rs stick clicks."
                 }
             },
             {
@@ -807,6 +807,225 @@
                     "patching_rect": [ 940.0, 608.0, 148.0, 22.0 ],
                     "text": "prepend /fx/name/circle"
                 }
+            },
+            {
+                "box": {
+                    "id": "obj-pad-lab",
+                    "maxclass": "comment",
+                    "numinlets": 1,
+                    "numoutlets": 0,
+                    "patching_rect": [ 18.0, 548.0, 360.0, 20.0 ],
+                    "text": "right stick, LT/RT, L1/R1, LS/RS clicks"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-rrx",
+                    "maxclass": "newobj",
+                    "numinlets": 0,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 18.0, 572.0, 85.0, 22.0 ],
+                    "text": "r right_x"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-rry",
+                    "maxclass": "newobj",
+                    "numinlets": 0,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 132.0, 572.0, 85.0, 22.0 ],
+                    "text": "r right_y"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-pak-right",
+                    "maxclass": "newobj",
+                    "numinlets": 2,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 18.0, 604.0, 55.0, 22.0 ],
+                    "text": "pak 0. 0."
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-lim-right",
+                    "maxclass": "newobj",
+                    "numinlets": 2,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 18.0, 636.0, 76.0, 22.0 ],
+                    "text": "speedlim 16"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-pre-right",
+                    "maxclass": "newobj",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 18.0, 668.0, 113.0, 22.0 ],
+                    "text": "prepend /pad/right"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-lt",
+                    "maxclass": "newobj",
+                    "numinlets": 0,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 260.0, 572.0, 106.0, 22.0 ],
+                    "text": "r left_trigger"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-rt",
+                    "maxclass": "newobj",
+                    "numinlets": 0,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 388.0, 572.0, 113.0, 22.0 ],
+                    "text": "r right_trigger"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-lim-lt",
+                    "maxclass": "newobj",
+                    "numinlets": 2,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 260.0, 604.0, 76.0, 22.0 ],
+                    "text": "speedlim 16"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-lim-rt",
+                    "maxclass": "newobj",
+                    "numinlets": 2,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 388.0, 604.0, 76.0, 22.0 ],
+                    "text": "speedlim 16"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-pre-lt",
+                    "maxclass": "newobj",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 260.0, 636.0, 89.0, 22.0 ],
+                    "text": "prepend /pad/lt"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-pre-rt",
+                    "maxclass": "newobj",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 388.0, 636.0, 93.0, 22.0 ],
+                    "text": "prepend /pad/rt"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-lclick",
+                    "maxclass": "newobj",
+                    "numinlets": 0,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 260.0, 676.0, 95.0, 22.0 ],
+                    "text": "r left_click"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-rclick",
+                    "maxclass": "newobj",
+                    "numinlets": 0,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 388.0, 676.0, 102.0, 22.0 ],
+                    "text": "r right_click"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-pre-lclick",
+                    "maxclass": "newobj",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 260.0, 708.0, 95.0, 22.0 ],
+                    "text": "prepend /pad/ls"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-pre-rclick",
+                    "maxclass": "newobj",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 388.0, 708.0, 99.0, 22.0 ],
+                    "text": "prepend /pad/rs"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-l1",
+                    "maxclass": "newobj",
+                    "numinlets": 0,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 520.0, 572.0, 47.0, 22.0 ],
+                    "text": "r l1"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-r1",
+                    "maxclass": "newobj",
+                    "numinlets": 0,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 588.0, 572.0, 49.0, 22.0 ],
+                    "text": "r r1"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-pre-l1",
+                    "maxclass": "newobj",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 520.0, 604.0, 95.0, 22.0 ],
+                    "text": "prepend /pad/l1"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-pre-r1",
+                    "maxclass": "newobj",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 588.0, 604.0, 99.0, 22.0 ],
+                    "text": "prepend /pad/r1"
+                }
             }
         ],
         "lines": [
@@ -1218,6 +1437,120 @@
                 "patchline": {
                     "destination": [ "obj-udp", 0 ],
                     "source": [ "obj-pre-no", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-pak-right", 0 ],
+                    "source": [ "obj-rrx", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-pak-right", 1 ],
+                    "source": [ "obj-rry", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-lim-right", 0 ],
+                    "source": [ "obj-pak-right", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-pre-right", 0 ],
+                    "source": [ "obj-lim-right", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-lim-lt", 0 ],
+                    "source": [ "obj-lt", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-lim-rt", 0 ],
+                    "source": [ "obj-rt", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-pre-lt", 0 ],
+                    "source": [ "obj-lim-lt", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-pre-rt", 0 ],
+                    "source": [ "obj-lim-rt", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-pre-lclick", 0 ],
+                    "source": [ "obj-lclick", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-pre-rclick", 0 ],
+                    "source": [ "obj-rclick", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-udp", 0 ],
+                    "source": [ "obj-pre-right", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-udp", 0 ],
+                    "source": [ "obj-pre-lt", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-udp", 0 ],
+                    "source": [ "obj-pre-rt", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-udp", 0 ],
+                    "source": [ "obj-pre-lclick", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-udp", 0 ],
+                    "source": [ "obj-pre-rclick", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-pre-l1", 0 ],
+                    "source": [ "obj-l1", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-pre-r1", 0 ],
+                    "source": [ "obj-r1", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-udp", 0 ],
+                    "source": [ "obj-pre-l1", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-udp", 0 ],
+                    "source": [ "obj-pre-r1", 0 ]
                 }
             }
         ],

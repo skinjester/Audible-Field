@@ -8,6 +8,7 @@ const { WebSocketServer } = require("ws");
 const OSC_PORT = Number(process.env.OSC_PORT) || 9000;
 const HTTP_PORT = Number(process.env.PORT) || 8080;
 const PUBLIC_DIR = path.join(__dirname, "public");
+const THREE_DIR = path.join(__dirname, "node_modules", "three");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -16,7 +17,22 @@ const MIME = {
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
+  ".map": "application/json; charset=utf-8",
 };
+
+function resolveFilePath(urlPath) {
+  if (urlPath.startsWith("/vendor/three/")) {
+    const relative = urlPath.slice("/vendor/three/".length);
+    const filePath = path.normalize(path.join(THREE_DIR, relative));
+    if (!filePath.startsWith(THREE_DIR)) return null;
+    return filePath;
+  }
+
+  const relative = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
+  const filePath = path.normalize(path.join(PUBLIC_DIR, relative));
+  if (!filePath.startsWith(PUBLIC_DIR)) return null;
+  return filePath;
+}
 
 function oscArgs(msg) {
   const args = msg.args || [];
@@ -50,16 +66,24 @@ function handleOsc(msg, broadcast) {
   const rest = tokens.slice(1);
   const parts = path.split("/").filter(Boolean);
 
-  if (path === "/mixer/xy" && rest.length >= 2) {
-    broadcast({ type: "xy", source: "mixer", x: Number(rest[0]), y: Number(rest[1]) });
+  if (path === "/mixer/xy" || (parts[0] === "mixer" && parts[1] === "xy")) {
+    const x = Number(parts[2] != null ? parts[2] : rest[0]);
+    const y = Number(parts[3] != null ? parts[3] : rest[1]);
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      broadcast({ type: "xy", source: "mixer", x, y });
+    }
     return;
   }
-  if (path === "/mixer/touch" && rest.length >= 2) {
-    broadcast({ type: "xy", source: "touch", x: Number(rest[0]), y: Number(rest[1]) });
+  if (path === "/mixer/touch" || (parts[0] === "mixer" && parts[1] === "touch")) {
+    const x = Number(parts[2] != null ? parts[2] : rest[0]);
+    const y = Number(parts[3] != null ? parts[3] : rest[1]);
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      broadcast({ type: "xy", source: "touch", x, y });
+    }
     return;
   }
   if (path === "/mixer/dpad" || (parts[0] === "mixer" && parts[1] === "dpad")) {
-    const dir = String(parts[2] || rest[0] || "");
+    const dir = String(parts[2] || rest[0] || "").toLowerCase();
     const raw = parts[2] != null ? rest[0] : rest[1];
     const value = raw == null || raw === "" ? 1 : Number(raw);
     broadcast({
@@ -100,15 +124,50 @@ function handleOsc(msg, broadcast) {
     const nameParts = parts[2] != null ? args : args.slice(1);
     const name = nameParts.map(String).join(" ").trim();
     if (name) broadcast({ type: "fx-name", button, name });
+    return;
+  }
+  if (path === "/pad/right" && rest.length >= 2) {
+    broadcast({ type: "pad-right", x: Number(rest[0]), y: Number(rest[1]) });
+    return;
+  }
+  if (path === "/pad/lt" || (parts[0] === "pad" && parts[1] === "lt")) {
+    broadcast({ type: "pad-trigger", side: "lt", value: Number(rest[0]) });
+    return;
+  }
+  if (path === "/pad/rt" || (parts[0] === "pad" && parts[1] === "rt")) {
+    broadcast({ type: "pad-trigger", side: "rt", value: Number(rest[0]) });
+    return;
+  }
+  if (path === "/pad/ls" || (parts[0] === "pad" && parts[1] === "ls")) {
+    const raw = rest[0];
+    const value = raw == null || raw === "" ? 1 : Number(raw);
+    broadcast({ type: "pad-click", side: "ls", value: Number.isFinite(value) ? value : 1 });
+    return;
+  }
+  if (path === "/pad/rs" || (parts[0] === "pad" && parts[1] === "rs")) {
+    const raw = rest[0];
+    const value = raw == null || raw === "" ? 1 : Number(raw);
+    broadcast({ type: "pad-click", side: "rs", value: Number.isFinite(value) ? value : 1 });
+    return;
+  }
+  if (path === "/pad/l1" || (parts[0] === "pad" && parts[1] === "l1")) {
+    const raw = rest[0];
+    const value = raw == null || raw === "" ? 1 : Number(raw);
+    broadcast({ type: "pad-shoulder", side: "l1", value: Number.isFinite(value) ? value : 1 });
+    return;
+  }
+  if (path === "/pad/r1" || (parts[0] === "pad" && parts[1] === "r1")) {
+    const raw = rest[0];
+    const value = raw == null || raw === "" ? 1 : Number(raw);
+    broadcast({ type: "pad-shoulder", side: "r1", value: Number.isFinite(value) ? value : 1 });
   }
 }
 
 const httpServer = http.createServer((req, res) => {
   const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
-  const relative = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
-  const filePath = path.normalize(path.join(PUBLIC_DIR, relative));
+  const filePath = resolveFilePath(urlPath);
 
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  if (!filePath) {
     res.writeHead(403).end("Forbidden");
     return;
   }
@@ -118,7 +177,10 @@ const httpServer = http.createServer((req, res) => {
       res.writeHead(err.code === "ENOENT" ? 404 : 500).end("Not found");
       return;
     }
-    res.writeHead(200, { "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream" });
+    res.writeHead(200, {
+      "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream",
+      "Cache-Control": "no-store",
+    });
     res.end(data);
   });
 });
@@ -154,9 +216,12 @@ udp.on("message", (buf) => {
     return;
   }
   const address = parsed && parsed.address;
-  if (address && !seenOsc.has(address) && seenOsc.size < 20) {
+  const args = oscArgs(parsed);
+  if (String(address || "").includes("dpad")) {
+    console.log("OSC", address, args);
+  } else if (address && !seenOsc.has(address) && seenOsc.size < 20) {
     seenOsc.add(address);
-    console.log("OSC", address, oscArgs(parsed));
+    console.log("OSC", address, args);
   }
   handleOsc(parsed, broadcast);
 });

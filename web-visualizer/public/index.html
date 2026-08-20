@@ -4,7 +4,15 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape mixer</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=67" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "/vendor/three/build/three.module.js",
+          "three/addons/": "/vendor/three/examples/jsm/"
+        }
+      }
+    </script>
   </head>
   <body>
     <main class="app">
@@ -19,134 +27,224 @@
         </div>
       </header>
 
-      <section class="stage">
-        <div class="pad" data-pad>
-          <div class="quad nw" data-quad="tl">
-            <span class="name">Forest</span>
-            <span class="pct" data-vol="tl">0%</span>
+      <nav class="tabs" aria-label="EchoScape views">
+        <button type="button" data-tab="diagnostics" aria-selected="true">
+          Diagnostics
+        </button>
+        <button type="button" data-tab="visualize" aria-selected="false">
+          Visualize
+        </button>
+      </nav>
+
+      <div data-panel="diagnostics">
+        <div class="diag-top">
+        <div class="mixer-col">
+          <div class="pad-slot">
+            <div class="pad" data-pad>
+              <div class="pad-blobs" aria-hidden="true">
+                <span class="pad-blob" data-corner="tl"></span>
+                <span class="pad-blob" data-corner="tr"></span>
+                <span class="pad-blob" data-corner="bl"></span>
+                <span class="pad-blob" data-corner="br"></span>
+              </div>
+              <div class="quad nw" data-quad="tl">
+                <span class="name">Forest</span>
+                <span class="pct" data-vol="tl">0%</span>
+              </div>
+              <div class="quad ne" data-quad="tr">
+                <span class="name">Beach</span>
+                <span class="pct" data-vol="tr">0%</span>
+              </div>
+              <div class="quad sw" data-quad="bl">
+                <span class="name">Meditation</span>
+                <span class="pct" data-vol="bl">0%</span>
+              </div>
+              <div class="quad se" data-quad="br">
+                <span class="name">River</span>
+                <span class="pct" data-vol="br">0%</span>
+              </div>
+              <div class="crosshair x"></div>
+              <div class="crosshair y"></div>
+              <div class="cursor" data-cursor></div>
+            </div>
           </div>
-          <div class="quad ne" data-quad="tr">
-            <span class="name">Beach</span>
-            <span class="pct" data-vol="tr">0%</span>
-          </div>
-          <div class="quad sw" data-quad="bl">
-            <span class="name">Meditation</span>
-            <span class="pct" data-vol="bl">0%</span>
-          </div>
-          <div class="quad se" data-quad="br">
-            <span class="name">River</span>
-            <span class="pct" data-vol="br">0%</span>
-          </div>
-          <div class="crosshair x"></div>
-          <div class="crosshair y"></div>
-          <div class="cursor" data-cursor></div>
+
+            <aside class="readout">
+              <dl>
+                <div>
+                  <dt>Source</dt>
+                  <dd data-source>mouse</dd>
+                </div>
+                <div>
+                  <dt>X</dt>
+                  <dd data-x>0.50</dd>
+                </div>
+                <div>
+                  <dt>Y</dt>
+                  <dd data-y>0.50</dd>
+                </div>
+                <div>
+                  <dt>D-pad</dt>
+                  <dd data-dpad>—</dd>
+                </div>
+              </dl>
+            </aside>
         </div>
 
-        <aside class="readout">
-          <dl>
-            <div>
-              <dt>Source</dt>
-              <dd data-source>mouse</dd>
+          <section class="ctrl">
+            <header class="fx-head">
+              <div>
+                <p class="kicker">DualSense</p>
+                <h2>Sticks, triggers, clicks</h2>
+              </div>
+            </header>
+            <div class="ctrl-grid">
+              <article class="ctrl-card ctrl-card-stick">
+                <p class="fx-btn">Left stick</p>
+                <div class="stick-body">
+                  <div class="mini-stick" aria-hidden="true">
+                    <span class="mini-stick-dot" data-stick-dot="left" data-ls></span>
+                  </div>
+                  <dl class="stick-axes">
+                    <div>
+                      <dt>X</dt>
+                      <dd data-stick-raw-x>0.00</dd>
+                    </div>
+                    <div>
+                      <dt>Y</dt>
+                      <dd data-stick-raw-y>0.00</dd>
+                    </div>
+                  </dl>
+                </div>
+              </article>
+              <article class="ctrl-card ctrl-card-stick">
+                <p class="fx-btn">Right stick</p>
+                <div class="stick-body">
+                  <div class="mini-stick" aria-hidden="true">
+                    <span class="mini-stick-dot" data-stick-dot="right" data-rs></span>
+                  </div>
+                  <dl class="stick-axes">
+                    <div>
+                      <dt>X</dt>
+                      <dd data-right-x>0.00</dd>
+                    </div>
+                    <div>
+                      <dt>Y</dt>
+                      <dd data-right-y>0.00</dd>
+                    </div>
+                  </dl>
+                </div>
+              </article>
+              <article class="ctrl-card">
+                <p class="fx-btn">Triggers</p>
+                <div class="trig">
+                  <div class="trig-row">
+                    <span>LT</span>
+                    <div class="trig-bar"><span data-lt-bar></span></div>
+                    <strong data-lt>0.00</strong>
+                  </div>
+                  <div class="trig-row">
+                    <span>RT</span>
+                    <div class="trig-bar"><span data-rt-bar></span></div>
+                    <strong data-rt>0.00</strong>
+                  </div>
+                </div>
+              </article>
+              <article class="ctrl-card">
+                <p class="fx-btn">Shoulders</p>
+                <div class="trig">
+                  <div class="click-row">
+                    <span class="click-pill" data-l1>L1</span>
+                    <span class="click-pill" data-r1>R1</span>
+                  </div>
+                </div>
+              </article>
             </div>
-            <div>
-              <dt>X</dt>
-              <dd data-x>0.50</dd>
-            </div>
-            <div>
-              <dt>Y</dt>
-              <dd data-y>0.50</dd>
-            </div>
-            <div>
-              <dt>D-pad</dt>
-              <dd data-dpad>—</dd>
-            </div>
-          </dl>
-          <p class="hint">
-            Drag on the pad to preview. With Max + the web-bridge open, the cursor
-            follows the live mixer XY from Max. Face buttons switch which plugin
-            is in the audio gate. Stick numbers are the scaled values Max sends
-            into that VST, not the raw DualSense axes.
-          </p>
-        </aside>
-      </section>
+          </section>
 
-      <section class="fx" data-fx>
-        <header class="fx-head">
-          <div>
-            <p class="kicker">Face buttons</p>
-            <h2>Active plugin</h2>
+        <section class="fx" data-fx>
+          <header class="fx-head">
+            <div>
+              <p class="kicker">Face buttons</p>
+              <h2>Active plugin</h2>
+            </div>
+            <p class="fx-active" data-fx-active>X · Saturn 2</p>
+          </header>
+          <div class="fx-grid">
+            <article class="fx-card" data-fx-card="cross" data-on="true">
+              <p class="fx-btn">X</p>
+              <h3>Saturn 2</h3>
+              <dl>
+                <div>
+                  <dt>Param 112</dt>
+                  <dd data-fx-x>0.00</dd>
+                </div>
+                <div>
+                  <dt>Param 6</dt>
+                  <dd data-fx-y>0.00</dd>
+                </div>
+              </dl>
+            </article>
+            <article class="fx-card" data-fx-card="square">
+              <p class="fx-btn">Square</p>
+              <h3>kHs Comb Filter</h3>
+              <dl>
+                <div>
+                  <dt>Stick X</dt>
+                  <dd data-fx-x>0.00</dd>
+                </div>
+                <div>
+                  <dt>Stick Y</dt>
+                  <dd data-fx-y>0.00</dd>
+                </div>
+              </dl>
+            </article>
+            <article class="fx-card" data-fx-card="triangle">
+              <p class="fx-btn">Triangle</p>
+              <h3>kHs Formant Filter</h3>
+              <dl>
+                <div>
+                  <dt>Param 2</dt>
+                  <dd data-fx-x>0.00</dd>
+                </div>
+                <div>
+                  <dt>Param 3</dt>
+                  <dd data-fx-y>0.00</dd>
+                </div>
+              </dl>
+            </article>
+            <article class="fx-card" data-fx-card="circle">
+              <p class="fx-btn">Circle</p>
+              <h3>Crystallizer</h3>
+              <dl>
+                <div>
+                  <dt>Param 17</dt>
+                  <dd data-fx-x>0.00</dd>
+                </div>
+                <div>
+                  <dt>Param 4</dt>
+                  <dd data-fx-y>0.00</dd>
+                </div>
+              </dl>
+            </article>
           </div>
-          <p class="fx-active" data-fx-active>X · Saturn 2</p>
-        </header>
-        <div class="fx-raw">
-          <span>Left stick raw</span>
-          <span>X <strong data-stick-raw-x>0.00</strong></span>
-          <span>Y <strong data-stick-raw-y>0.00</strong></span>
+        </section>
         </div>
-        <div class="fx-grid">
-          <article class="fx-card" data-fx-card="cross" data-on="true">
-            <p class="fx-btn">X</p>
-            <h3>Saturn 2</h3>
-            <dl>
-              <div>
-                <dt>Param 112</dt>
-                <dd data-fx-x>0.00</dd>
-              </div>
-              <div>
-                <dt>Param 6</dt>
-                <dd data-fx-y>0.00</dd>
-              </div>
-            </dl>
-            <p class="fx-scale">X −1…1 → 0…1 · Y 0…1 → 0…0.75</p>
-          </article>
-          <article class="fx-card" data-fx-card="square">
-            <p class="fx-btn">Square</p>
-            <h3>kHs Comb Filter</h3>
-            <dl>
-              <div>
-                <dt>Stick X</dt>
-                <dd data-fx-x>0.00</dd>
-              </div>
-              <div>
-                <dt>Stick Y</dt>
-                <dd data-fx-y>0.00</dd>
-              </div>
-            </dl>
-            <p class="fx-scale">X/Y −1…1 → 0.3…0.7</p>
-          </article>
-          <article class="fx-card" data-fx-card="triangle">
-            <p class="fx-btn">Triangle</p>
-            <h3>kHs Formant Filter</h3>
-            <dl>
-              <div>
-                <dt>Param 2</dt>
-                <dd data-fx-x>0.00</dd>
-              </div>
-              <div>
-                <dt>Param 3</dt>
-                <dd data-fx-y>0.00</dd>
-              </div>
-            </dl>
-            <p class="fx-scale">X/Y −1…1 → 0…1</p>
-          </article>
-          <article class="fx-card" data-fx-card="circle">
-            <p class="fx-btn">Circle</p>
-            <h3>Crystallizer</h3>
-            <dl>
-              <div>
-                <dt>Param 17</dt>
-                <dd data-fx-x>0.00</dd>
-              </div>
-              <div>
-                <dt>Param 4</dt>
-                <dd data-fx-y>0.00</dd>
-              </div>
-            </dl>
-            <p class="fx-scale">X −1…1 → 0.825…0.65 · Y −1…1 → 0.6…1</p>
-          </article>
-        </div>
-      </section>
+      </div>
+
+      <div data-panel="visualize" hidden>
+        <section class="viz-stage">
+          <div class="viz-canvas-wrap">
+            <canvas data-viz-canvas aria-label="EchoScape terrain visualization"></canvas>
+            <p class="viz-error" data-viz-error hidden></p>
+            <div class="viz-hud" aria-live="polite">
+              <div><span data-viz-fps>--</span> fps · <span data-viz-verts>--</span></div>
+              <div class="viz-hud-flags" data-viz-flags></div>
+            </div>
+          </div>
+        </section>
+      </div>
     </main>
-    <script src="/app.js?v=fx4"></script>
+    <script type="module" src="/app.js?v=74"></script>
   </body>
 </html>
