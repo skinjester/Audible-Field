@@ -16,7 +16,7 @@ import {
   state,
   tickMixer,
 } from "./mixer-core.js?v=59";
-import { hideVisualize, showVisualize } from "./visualize.js?v=74";
+import { hideVisualize, showVisualize } from "./visualize.js?v=78";
 
 const pad = document.querySelector("[data-pad]");
 const cursor = document.querySelector("[data-cursor]");

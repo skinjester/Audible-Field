@@ -2,10 +2,10 @@ import * as THREE from "three";
 import { controller, mix, state } from "./mixer-core.js?v=59";
 
 const QUADS = [
-  { key: "tl", name: "Forest", terrain: "Ridges", color: 0x5a5058 },
-  { key: "tr", name: "Beach", terrain: "Terraces", color: 0x454e5c },
-  { key: "bl", name: "Meditation", terrain: "Craters", color: 0x4a5c64 },
-  { key: "br", name: "River", terrain: "Canals", color: 0x4a574e },
+  { key: "tl", name: "Sphere", terrain: "Sphere", color: 0x5a5058 },
+  { key: "tr", name: "Cube", terrain: "Square", color: 0x454e5c },
+  { key: "bl", name: "Torus", terrain: "Torus", color: 0x4a5c64 },
+  { key: "br", name: "Cylinder", terrain: "Cylinder", color: 0x4a574e },
 ];
 
 const FX = {
@@ -33,7 +33,6 @@ const ZOOM_MIN = 0.7;
 const ZOOM_MAX = 2.6;
 const ZOOM_DEFAULT = 1.15;
 const MIX_GAMMA = 2.35;
-const HEIGHT_SCALE = 1.35;
 
 let scene = null;
 let renderer = null;
@@ -167,7 +166,7 @@ function leftStickParams(ctrl, dt = 0) {
       y,
       mag,
       drive,
-      amp: drive * (0.55 + ((y + 1) * 0.5) * 2.1),
+      amp: drive * (0.38 + ((y + 1) * 0.5) * 1.5),
       rate: 0.08 + ((x + 1) * 0.5) * 2.7,
       spread: 0.2 + ((x + 1) * 0.5) * 1.4,
       lift: 0.2 + ((y + 1) * 0.5) * 1.6,
@@ -295,14 +294,14 @@ vec3 echoDisplace(vec3 pos) {
         vec3 east = normalize(cross(vec3(0.0, 1.0, 0.0), nrm));
         if (length(east) < 0.001) east = vec3(1.0, 0.0, 0.0);
         vec3 north = normalize(cross(nrm, east));
-        float ampK = 1.15 + uAmp * 3.4 + uPulse * 1.2;
-        float rise = uStick.y * (2.4 + n * 6.5) * (0.4 + uMag * 2.1) * ampK;
-        float bob = sin(uPhase2.x + n * 12.0) * abs(uStick.y) * 0.55 * ampK;
-        float fallPull = uStick.y < 0.0 ? uStick.y * (1.6 + n2 * 4.0) * (0.55 + uMag) * ampK : 0.0;
-        float sway = uStick.x * (1.1 + n2 * 3.4) * (0.35 + uMag) * ampK;
-        float wander = sin(uPhase2.x * 0.7 + n2 * 9.0) * abs(uStick.x) * 1.35 * ampK;
-        bump += (rise + bob + fallPull + uPulse * (0.45 + n * 0.9) * ampK) * motion;
-        tang += (east * (sway + wander) + north * cos(uPhase2.x + n * 7.0) * abs(uStick.x) * 1.4 * ampK) * motion;
+        float ampK = 0.9 + uAmp * 1.15 + uPulse * 0.35;
+        float rise = uStick.y * (1.35 + n * 3.6) * (0.3 + uMag * 1.45) * ampK;
+        float bob = sin(uPhase2.x + n * 12.0) * abs(uStick.y) * 0.32 * ampK;
+        float fallPull = uStick.y < 0.0 ? uStick.y * (0.9 + n2 * 2.4) * (0.4 + uMag) * ampK : 0.0;
+        float sway = uStick.x * (0.55 + n2 * 1.8) * (0.25 + uMag) * ampK;
+        float wander = sin(uPhase2.x * 0.7 + n2 * 9.0) * abs(uStick.x) * 0.7 * ampK;
+        bump += (rise + bob + fallPull + uPulse * (0.25 + n * 0.5) * ampK) * motion;
+        tang += (east * (sway + wander) + north * cos(uPhase2.x + n * 7.0) * abs(uStick.x) * 0.75 * ampK) * motion;
       }
     }
   }
@@ -450,85 +449,40 @@ function blendColor(weights) {
   return c;
 }
 
-function wrapMod(value, size) {
-  return ((value % size) + size) % size;
+function radiusSphere(_nx, _ny, _nz) {
+  return SPHERE_RADIUS;
 }
 
-function sphereSurf(x, y, z) {
-  // Arc-length-ish lon/lat so lattice periods sit evenly on the globe
-  const nx = x / SPHERE_RADIUS;
-  const ny = y / SPHERE_RADIUS;
-  const nz = z / SPHERE_RADIUS;
-  const lon = Math.atan2(nx, nz);
-  const lat = Math.asin(Math.max(-1, Math.min(1, ny)));
-  return { s: lon * SPHERE_RADIUS, t: lat * SPHERE_RADIUS };
+function radiusCube(nx, ny, nz) {
+  const m = Math.max(Math.abs(nx), Math.abs(ny), Math.abs(nz));
+  return SPHERE_RADIUS / Math.max(m, 1e-5);
 }
 
-function heightCross(s, t) {
-  // Ridge lattice wrapping the sphere (Forest)
-  const period = 8;
-  const lx = wrapMod(s + period * 0.5, period) - period * 0.5;
-  const lz = wrapMod(t + period * 0.5, period) - period * 0.5;
-  const ridgeX = Math.exp(-lx * lx * 0.42);
-  const ridgeZ = Math.exp(-lz * lz * 0.42);
-  const node = Math.exp(-(lx * lx + lz * lz) * 0.28);
-  const weave =
-    Math.sin((s / period) * Math.PI * 2) * Math.sin((t / period) * Math.PI * 2) * 0.28;
-  return ridgeX * 1.45 + ridgeZ * 1.45 + node * 1.05 + weave - 0.4;
+function radiusTorus(nx, ny, nz) {
+  // Map sphere direction → torus surface (axis Y), return radial distance
+  const A = SPHERE_RADIUS * 0.82;
+  const B = SPHERE_RADIUS * 0.16;
+  const u = Math.atan2(nx, nz);
+  const v = Math.asin(Math.max(-1, Math.min(1, ny))) * 2;
+  const ring = A + B * Math.cos(v);
+  const x = ring * Math.sin(u);
+  const y = B * Math.sin(v);
+  const z = ring * Math.cos(u);
+  return Math.hypot(x, y, z);
 }
 
-function heightSquare(s, t) {
-  // Even stepped terraces (Beach)
-  const cell = 12;
-  const lx = wrapMod(s + cell * 0.5, cell) - cell * 0.5;
-  const lz = wrapMod(t + cell * 0.5, cell) - cell * 0.5;
-  const cheb = Math.max(Math.abs(lx), Math.abs(lz));
-  const half = cell * 0.38;
-  if (cheb > half) return -0.15;
-  const steps = 5;
-  const u = 1 - cheb / half;
-  const leveled = Math.floor(u * steps) / steps;
-  const soft = leveled + (u * steps - Math.floor(u * steps)) * 0.12;
-  return soft * 2.2 - 0.2;
-}
-
-function heightTriangle(s, t) {
-  // Hex peaks / bowls (Meditation)
-  const cell = 5.2;
-  const q = ((Math.sqrt(3) / 3) * s - t / 3) / cell;
-  const r = ((2 / 3) * t) / cell;
-  const qn = Math.round(q);
-  const rn = Math.round(r);
-  const cx = cell * (Math.sqrt(3) * qn + (Math.sqrt(3) / 2) * rn);
-  const cz = cell * (1.5 * rn);
-  const d = Math.hypot(s - cx, t - cz);
-  const peak = Math.exp(-d * d * 0.22) * 2.35;
-  const crater =
-    Math.tanh((d - 1.15) * 2.4) * 0.75 - Math.exp(-d * d * 1.35) * 1.35;
-  return (qn + rn) & 1 ? peak : crater * 1.05;
-}
-
-function heightCircle(s, t) {
-  // Diamond canals (River)
-  const u = (s + t) * 0.7071;
-  const v = (t - s) * 0.7071;
-  const cell = 7.2;
-  const lu = wrapMod(u, cell) - cell * 0.5;
-  const lv = wrapMod(v, cell) - cell * 0.5;
-  const diamond = Math.abs(lu) + Math.abs(lv);
-  const canal = Math.max(0, 1.1 - diamond * 0.5);
-  const ridge = Math.max(0, diamond - 1.55) * 0.32;
-  const iu = Math.floor(wrapMod(u + cell * 50, cell * 100) / cell);
-  const iv = Math.floor(wrapMod(v + cell * 50, cell * 100) / cell);
-  const bank = ((iu + iv) & 1) === 0 ? 0.4 : -0.2;
-  return canal * 2.0 + ridge + bank;
+function radiusCylinder(nx, ny, nz) {
+  // Vertical cylinder with flat caps
+  const radial = Math.hypot(nx, nz);
+  const m = Math.max(radial, Math.abs(ny));
+  return SPHERE_RADIUS / Math.max(m, 1e-5);
 }
 
 const HEIGHT_FNS = {
-  tl: heightCross,
-  tr: heightSquare,
-  bl: heightTriangle,
-  br: heightCircle,
+  tl: radiusSphere,
+  tr: radiusCube,
+  bl: radiusTorus,
+  br: radiusCylinder,
 };
 
 function dominantStyle() {
@@ -570,11 +524,15 @@ function bakeHeightFields(geo) {
     const x = pos.getX(i);
     const y = pos.getY(i);
     const z = pos.getZ(i);
-    const { s, t } = sphereSurf(x, y, z);
-    heightFields.tl[i] = heightCross(s, t) * HEIGHT_SCALE;
-    heightFields.tr[i] = heightSquare(s, t) * HEIGHT_SCALE;
-    heightFields.bl[i] = heightTriangle(s, t) * HEIGHT_SCALE;
-    heightFields.br[i] = heightCircle(s, t) * HEIGHT_SCALE;
+    const len = Math.hypot(x, y, z) || 1;
+    const nx = x / len;
+    const ny = y / len;
+    const nz = z / len;
+    // Store radial offset from the base sphere so shapes morph via mix
+    heightFields.tl[i] = radiusSphere(nx, ny, nz) - SPHERE_RADIUS;
+    heightFields.tr[i] = radiusCube(nx, ny, nz) - SPHERE_RADIUS;
+    heightFields.bl[i] = radiusTorus(nx, ny, nz) - SPHERE_RADIUS;
+    heightFields.br[i] = radiusCylinder(nx, ny, nz) - SPHERE_RADIUS;
   }
   geo.setAttribute("hTl", new THREE.BufferAttribute(heightFields.tl, 1));
   geo.setAttribute("hTr", new THREE.BufferAttribute(heightFields.tr, 1));
