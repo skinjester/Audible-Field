@@ -1,5 +1,5 @@
 /EchoScape Max patch files/plugins/
 
-# Large media kept locally, not in git
-/Docs/Pitch Decks & Materials/*.mp4
+# Project docs kept locally, not in git
+/Docs/
 
