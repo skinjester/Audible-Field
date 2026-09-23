@@ -54,6 +54,52 @@ body {
   flex: 0 0 auto;
 }
 
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.mode-toggle button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.mode-toggle button[aria-pressed="true"] {
+  background: rgba(110, 231, 183, 0.16);
+  color: var(--live);
+}
+
+.status[data-state="audio"] {
+  color: var(--live);
+  border-color: rgba(110, 231, 183, 0.35);
+}
+
+.status[data-state="audio"] .dot {
+  background: var(--live);
+  box-shadow: 0 0 0 3px rgba(110, 231, 183, 0.2);
+}
+
+.status[data-state="loading"] {
+  color: var(--warn);
+}
+
 .kicker {
   margin: 0 0 2px;
   letter-spacing: 0.18em;

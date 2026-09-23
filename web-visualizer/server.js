@@ -9,6 +9,7 @@ const OSC_PORT = Number(process.env.OSC_PORT) || 9000;
 const HTTP_PORT = Number(process.env.PORT) || 8080;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const THREE_DIR = path.join(__dirname, "node_modules", "three");
+const BEDS_DIR = path.join(PUBLIC_DIR, "beds");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -18,13 +19,33 @@ const MIME = {
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
   ".map": "application/json; charset=utf-8",
+  ".wav": "audio/wav",
+  ".mp3": "audio/mpeg",
+  ".ogg": "audio/ogg",
 };
+
+const BED_ALLOW = new Set([
+  "Beach-rx.wav",
+  "Forest-rx.wav",
+  "River-rx.wav",
+  "Meditation Synth-rx.wav",
+]);
 
 function resolveFilePath(urlPath) {
   if (urlPath.startsWith("/vendor/three/")) {
     const relative = urlPath.slice("/vendor/three/".length);
     const filePath = path.normalize(path.join(THREE_DIR, relative));
     if (!filePath.startsWith(THREE_DIR)) return null;
+    return filePath;
+  }
+
+  if (urlPath.startsWith("/beds/")) {
+    const name = decodeURIComponent(urlPath.slice("/beds/".length));
+    if (!BED_ALLOW.has(name) || name.includes("..") || name.includes("/") || name.includes("\\")) {
+      return null;
+    }
+    const filePath = path.normalize(path.join(BEDS_DIR, name));
+    if (!filePath.startsWith(BEDS_DIR)) return null;
     return filePath;
   }
 
@@ -172,16 +193,41 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      res.writeHead(err.code === "ENOENT" ? 404 : 500).end("Not found");
+  fs.stat(filePath, (statErr, stat) => {
+    if (statErr || !stat.isFile()) {
+      res.writeHead(statErr && statErr.code === "ENOENT" ? 404 : 500).end("Not found");
       return;
     }
-    res.writeHead(200, {
-      "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream",
+
+    const contentType = MIME[path.extname(filePath)] || "application/octet-stream";
+    const headers = {
+      "Content-Type": contentType,
       "Cache-Control": "no-store",
-    });
-    res.end(data);
+      "Accept-Ranges": "bytes",
+      "Access-Control-Allow-Origin": "*",
+    };
+
+    // Stream large bed WAVs (and support Range) instead of buffering whole files.
+    const range = req.headers.range;
+    if (range && /^bytes=/.test(range)) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = Number(parts[0]);
+      const end = parts[1] ? Number(parts[1]) : stat.size - 1;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || end >= stat.size) {
+        res.writeHead(416, { "Content-Range": `bytes */${stat.size}` }).end();
+        return;
+      }
+      res.writeHead(206, {
+        ...headers,
+        "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+        "Content-Length": end - start + 1,
+      });
+      fs.createReadStream(filePath, { start, end }).pipe(res);
+      return;
+    }
+
+    res.writeHead(200, { ...headers, "Content-Length": stat.size });
+    fs.createReadStream(filePath).pipe(res);
   });
 });
 
@@ -235,5 +281,6 @@ udp.bind(OSC_PORT, "127.0.0.1", () => {
     console.log(`EchoScape mixer viz`);
     console.log(`  OSC listen   udp://127.0.0.1:${OSC_PORT}`);
     console.log(`  Web app      http://127.0.0.1:${HTTP_PORT}`);
+    console.log(`  Beds         http://127.0.0.1:${HTTP_PORT}/beds/…`);
   });
 });

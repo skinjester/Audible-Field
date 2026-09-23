@@ -15,8 +15,11 @@ import {
   setTrigger,
   state,
   tickMixer,
-} from "./mixer-core.js?v=59";
+  STEM_CORNERS,
+} from "./mixer-core.js?v=60";
 import { hideVisualize, showVisualize } from "./visualize.js?v=78";
+import { audioEngine } from "./audio-engine.js?v=2";
+import { gamepadInput } from "./gamepad-input.js?v=1";
 
 const pad = document.querySelector("[data-pad]");
 const cursor = document.querySelector("[data-cursor]");
@@ -46,6 +49,7 @@ const rightDot = document.querySelector('[data-stick-dot="right"]');
 const tabButtons = document.querySelectorAll("[data-tab]");
 const panels = document.querySelectorAll("[data-panel]");
 const vizCanvas = document.querySelector("[data-viz-canvas]");
+const modeButtons = document.querySelectorAll("[data-mode]");
 const fxCards = {
   cross: document.querySelector('[data-fx-card="cross"]'),
   square: document.querySelector('[data-fx-card="square"]'),
@@ -77,7 +81,18 @@ const quads = {
   br: document.querySelector('[data-quad="br"]'),
 };
 
+const VIZ_NAMES = {
+  tl: "Sphere",
+  tr: "Square",
+  bl: "Torus",
+  br: "Cylinder",
+};
+
 const dpadDirs = new Set(["up", "down", "left", "right"]);
+
+/** @type {"max" | "browser"} */
+let inputMode = "max";
+let audioStarting = false;
 
 function fmt(n) {
   return Number.isFinite(n) ? n.toFixed(2) : "—";
@@ -126,6 +141,15 @@ function setFxButton(button, value) {
   if (!controller.fx[button]) return;
   if (Number(value) === 0) return;
   setActiveFx(button);
+}
+
+function updateCornerLabels() {
+  for (const corner of Object.keys(STEM_CORNERS)) {
+    const el = document.querySelector(`[data-corner-name="${corner}"]`);
+    if (!el) continue;
+    el.textContent =
+      inputMode === "browser" ? STEM_CORNERS[corner].label : VIZ_NAMES[corner];
+  }
 }
 
 function renderDiagnostics() {
@@ -208,13 +232,82 @@ function normalizePadAxis(n) {
 }
 
 function applyMaxPad(x, y, source) {
+  if (inputMode === "browser") return;
   setTargetFromInput(normalizePadAxis(x), normalizePadAxis(y), source, true);
   setStatus("live", "Live from Max");
   lastLive = Date.now();
 }
 
+function browserStatusLabel() {
+  if (audioStarting) return "Loading beds…";
+  if (!audioEngine.running) return "Browser audio — click pad to start";
+  if (gamepadInput.connected) return `Browser audio · ${gamepadInput.padId}`;
+  return "Browser audio · mouse + DualSense";
+}
+
+async function ensureBrowserAudio() {
+  if (inputMode !== "browser" || audioStarting) return;
+  if (audioEngine.running) {
+    await audioEngine.resume();
+    await audioEngine.ensurePlaying();
+    return;
+  }
+  audioStarting = true;
+  setStatus("loading", "Loading soundscape beds…");
+  try {
+    await audioEngine.start();
+    setStatus("audio", browserStatusLabel());
+  } catch (err) {
+    console.error(err);
+    setStatus("offline", audioEngine.error || err.message || "Audio failed");
+  } finally {
+    audioStarting = false;
+  }
+}
+
+async function setInputMode(mode) {
+  if (mode !== "max" && mode !== "browser") return;
+  inputMode = mode;
+
+  for (const button of modeButtons) {
+    button.setAttribute("aria-pressed", button.dataset.mode === mode ? "true" : "false");
+  }
+
+  updateCornerLabels();
+
+  if (mode === "browser") {
+    gamepadInput.enable();
+    // Restore web-native FX names (Max may have overwritten them)
+    setFxName("cross", "Saturn 2 (approx)");
+    setFxName("square", "Comb (approx)");
+    setFxName("triangle", "Formant (approx)");
+    setFxName("circle", "Crystallizer (approx)");
+    setStatus(audioEngine.running ? "audio" : "loading", browserStatusLabel());
+    await ensureBrowserAudio();
+    setStatus(audioEngine.running ? "audio" : "offline", browserStatusLabel());
+  } else {
+    gamepadInput.disable();
+    if (audioEngine.running) await audioEngine.stop();
+    setFxName("cross", "Saturn 2");
+    setFxName("square", "kHs Comb Filter");
+    setFxName("triangle", "kHs Formant Filter");
+    setFxName("circle", "Crystallizer");
+    setStatus(socketState === "live" ? "live" : "open", "Connected — waiting for Max");
+  }
+  renderDiagnostics();
+}
+
 function tick(now) {
   try {
+    if (inputMode === "browser") {
+      gamepadInput.poll();
+      if (audioEngine.running) {
+        audioEngine.sync(state, controller);
+        if (socketState !== "audio" || gamepadInput.connected) {
+          setStatus("audio", browserStatusLabel());
+        }
+      }
+    }
     tickMixer(now, lastFrame);
     lastFrame = now;
     renderDiagnostics();
@@ -255,11 +348,18 @@ for (const button of tabButtons) {
   button.addEventListener("click", () => setActiveTab(button.dataset.tab));
 }
 
+for (const button of modeButtons) {
+  button.addEventListener("click", () => {
+    void setInputMode(button.dataset.mode);
+  });
+}
+
 pad.addEventListener("pointerdown", (event) => {
   pad.setPointerCapture(event.pointerId);
   state.dragging = true;
   const point = pointFromEvent(event);
   setTargetFromInput(point.x, point.y, "mouse", true);
+  if (inputMode === "browser") void ensureBrowserAudio();
 });
 
 pad.addEventListener("pointermove", (event) => {
@@ -272,15 +372,28 @@ pad.addEventListener("pointerup", () => {
   state.dragging = false;
 });
 
+// Click FX cards locally in browser mode
+for (const [button, card] of Object.entries(fxCards)) {
+  if (!card) continue;
+  card.style.cursor = "pointer";
+  card.addEventListener("click", () => {
+    if (inputMode !== "browser") return;
+    setActiveFx(button);
+    renderDiagnostics();
+  });
+}
+
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
 
   ws.addEventListener("open", () => {
-    setStatus("open", "Connected — waiting for Max");
+    if (inputMode === "max") setStatus("open", "Connected — waiting for Max");
   });
 
   ws.addEventListener("message", (event) => {
+    if (inputMode === "browser") return;
+
     let msg;
     try {
       msg = JSON.parse(event.data);
@@ -362,7 +475,7 @@ function connect() {
   });
 
   ws.addEventListener("close", () => {
-    setStatus("offline", "Server disconnected — retrying");
+    if (inputMode === "max") setStatus("offline", "Server disconnected — retrying");
     window.setTimeout(connect, 800);
   });
 
@@ -370,13 +483,22 @@ function connect() {
 }
 
 window.setInterval(() => {
-  if (socketState === "live" && Date.now() - lastLive > 1500) {
+  if (inputMode === "max" && socketState === "live" && Date.now() - lastLive > 1500) {
     setStatus("open", "Connected — waiting for Max");
   }
 }, 400);
 
+window.addEventListener("gamepadconnected", () => {
+  if (inputMode === "browser") setStatus("audio", browserStatusLabel());
+});
+
 notify();
+updateCornerLabels();
 renderDiagnostics();
 window.requestAnimationFrame(tick);
 connect();
 setActiveTab(location.hash.replace("#", "") === "visualize" ? "visualize" : "diagnostics");
+
+if (location.hash.replace("#", "") === "browser") {
+  void setInputMode("browser");
+}

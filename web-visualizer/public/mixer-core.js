@@ -58,6 +58,7 @@ export function clamp01(n) {
   return Math.min(1, Math.max(0, n));
 }
 
+/** Bilinear corner weights (UI / viz). */
 export function mix(px, py) {
   const ix = 1 - px;
   const iy = 1 - py;
@@ -68,6 +69,28 @@ export function mix(px, py) {
     br: px * py,
   };
 }
+
+/**
+ * Equal-power mix matching Max `nodes` → `vexpr sqrt($f1)` → `matrix~`.
+ * Keeps perceived loudness steadier while crossfading four stems.
+ */
+export function equalPowerMix(px, py) {
+  const w = mix(px, py);
+  return {
+    tl: Math.sqrt(w.tl),
+    tr: Math.sqrt(w.tr),
+    bl: Math.sqrt(w.bl),
+    br: Math.sqrt(w.br),
+  };
+}
+
+/** Canonical bed → corner map (Vault `nodes` x/y places: TL TR BL BR). */
+export const STEM_CORNERS = {
+  tl: { id: "beach", label: "Beach", file: "Beach-rx.wav" },
+  tr: { id: "forest", label: "Forest", file: "Forest-rx.wav" },
+  bl: { id: "river", label: "River", file: "River-rx.wav" },
+  br: { id: "synth", label: "Meditation Synth", file: "Meditation Synth-rx.wav" },
+};
 
 export function subscribe(fn) {
   listeners.add(fn);

@@ -61,6 +61,7 @@ This repository is the **interactive audio / control / visualization R&D spine**
 | **Content** | Field / designed beds: Beach, Forest, River, Meditation Synth, singing bowls; plus loop and one-shot sample libraries |
 | **Installation / lights** | OSC/UDP to network lighting and local control targets—physical/installation lineage (“Vault”) |
 | **Web bridge** | Max → OSC UDP `127.0.0.1:9000` → Node.js → WebSocket → browser diagnostics + Three.js visualizer |
+| **Browser audio mode** | Optional Max-free path: Gamepad API + on-screen pad → Web Audio (4 Vault beds, equal-power mix, FX approximations) |
 | **Product stack (venture)** | Unreal Engine called out in business docs for the Steam game path; this Max + web stack is the high-fidelity sound and controller interaction lab |
 
 ### Team context
