@@ -86,11 +86,29 @@ export function equalPowerMix(px, py) {
 
 /** Canonical bed → corner map (Vault `nodes` x/y places: TL TR BL BR). */
 export const STEM_CORNERS = {
-  tl: { id: "beach", label: "Beach", file: "Beach-rx.wav" },
-  tr: { id: "forest", label: "Forest", file: "Forest-rx.wav" },
-  bl: { id: "river", label: "River", file: "River-rx.wav" },
-  br: { id: "synth", label: "Meditation Synth", file: "Meditation Synth-rx.wav" },
+  tl: { id: "beach", label: "Beach", file: "Beach-rx.wav", url: "/beds/Beach-rx.wav" },
+  tr: { id: "forest", label: "Forest", file: "Forest-rx.wav", url: "/beds/Forest-rx.wav" },
+  bl: { id: "river", label: "River", file: "River-rx.wav", url: "/beds/River-rx.wav" },
+  br: {
+    id: "synth",
+    label: "Meditation Synth",
+    file: "Meditation Synth-rx.wav",
+    url: "/beds/Meditation%20Synth-rx.wav",
+  },
 };
+
+/** Update a corner's sample assignment (label + playback URL). */
+export function setStemCorner(corner, next) {
+  if (!STEM_CORNERS[corner] || !next) return null;
+  const label = String(next.label || next.name || STEM_CORNERS[corner].label).trim();
+  const url = String(next.url || "").trim();
+  if (!url) return null;
+  const file = String(next.file || next.name || STEM_CORNERS[corner].file);
+  const id = String(next.id || label.toLowerCase().replace(/\s+/g, "-"));
+  STEM_CORNERS[corner] = { id, label, file, url };
+  notify();
+  return STEM_CORNERS[corner];
+}
 
 export function subscribe(fn) {
   listeners.add(fn);

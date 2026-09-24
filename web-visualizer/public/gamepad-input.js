@@ -15,7 +15,7 @@ import {
   setStickClick,
   setTrigger,
   setFxStick,
-} from "./mixer-core.js?v=60";
+} from "./mixer-core.js?v=61";
 
 function lerp(inMin, inMax, outMin, outMax, value) {
   if (inMax === inMin) return outMin;

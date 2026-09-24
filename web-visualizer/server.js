@@ -10,6 +10,7 @@ const HTTP_PORT = Number(process.env.PORT) || 8080;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const THREE_DIR = path.join(__dirname, "node_modules", "three");
 const BEDS_DIR = path.join(PUBLIC_DIR, "beds");
+const SAMPLES_DIR = path.join(__dirname, "..", "samples");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -20,9 +21,21 @@ const MIME = {
   ".ico": "image/x-icon",
   ".map": "application/json; charset=utf-8",
   ".wav": "audio/wav",
+  ".aif": "audio/aiff",
+  ".aiff": "audio/aiff",
   ".mp3": "audio/mpeg",
   ".ogg": "audio/ogg",
+  ".flac": "audio/flac",
+  ".m4a": "audio/mp4",
+  ".wasm": "application/wasm",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
 };
+
+const AUDIO_EXTS = new Set([".wav", ".aif", ".aiff", ".mp3", ".ogg", ".flac", ".m4a"]);
 
 const BED_ALLOW = new Set([
   "Beach-rx.wav",
@@ -31,11 +44,53 @@ const BED_ALLOW = new Set([
   "Meditation Synth-rx.wav",
 ]);
 
+function underRoot(filePath, root) {
+  const resolved = path.normalize(filePath);
+  const rootResolved = path.normalize(root);
+  return resolved === rootResolved || resolved.startsWith(rootResolved + path.sep);
+}
+
+function resolveSampleRel(relPath) {
+  const cleaned = String(relPath || "")
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+  if (cleaned.includes("..")) return null;
+  const filePath = path.normalize(path.join(SAMPLES_DIR, cleaned));
+  if (!underRoot(filePath, SAMPLES_DIR)) return null;
+  return { cleaned, filePath };
+}
+
+function listSamplesDir(relPath) {
+  const resolved = resolveSampleRel(relPath || "");
+  if (!resolved) return null;
+  const { cleaned, filePath } = resolved;
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isDirectory()) return null;
+
+  const entries = fs.readdirSync(filePath, { withFileTypes: true });
+  const dirs = [];
+  const files = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.isDirectory()) {
+      dirs.push(entry.name);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const ext = path.extname(entry.name).toLowerCase();
+    if (!AUDIO_EXTS.has(ext)) continue;
+    files.push(entry.name);
+  }
+  dirs.sort((a, b) => a.localeCompare(b));
+  files.sort((a, b) => a.localeCompare(b));
+  return { path: cleaned, dirs, files };
+}
+
 function resolveFilePath(urlPath) {
   if (urlPath.startsWith("/vendor/three/")) {
     const relative = urlPath.slice("/vendor/three/".length);
     const filePath = path.normalize(path.join(THREE_DIR, relative));
-    if (!filePath.startsWith(THREE_DIR)) return null;
+    if (!underRoot(filePath, THREE_DIR)) return null;
     return filePath;
   }
 
@@ -45,13 +100,20 @@ function resolveFilePath(urlPath) {
       return null;
     }
     const filePath = path.normalize(path.join(BEDS_DIR, name));
-    if (!filePath.startsWith(BEDS_DIR)) return null;
+    if (!underRoot(filePath, BEDS_DIR)) return null;
     return filePath;
+  }
+
+  if (urlPath.startsWith("/samples/")) {
+    const rel = decodeURIComponent(urlPath.slice("/samples/".length));
+    const resolved = resolveSampleRel(rel);
+    if (!resolved) return null;
+    return resolved.filePath;
   }
 
   const relative = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
   const filePath = path.normalize(path.join(PUBLIC_DIR, relative));
-  if (!filePath.startsWith(PUBLIC_DIR)) return null;
+  if (!underRoot(filePath, PUBLIC_DIR)) return null;
   return filePath;
 }
 
@@ -184,8 +246,33 @@ function handleOsc(msg, broadcast) {
   }
 }
 
+function sendJson(res, status, body) {
+  const data = JSON.stringify(body);
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Access-Control-Allow-Origin": "*",
+    "Content-Length": Buffer.byteLength(data),
+  });
+  res.end(data);
+}
+
 const httpServer = http.createServer((req, res) => {
-  const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
+  const rawUrl = req.url || "/";
+  const qIndex = rawUrl.indexOf("?");
+  const urlPath = decodeURIComponent(qIndex >= 0 ? rawUrl.slice(0, qIndex) : rawUrl);
+  const query = qIndex >= 0 ? new URLSearchParams(rawUrl.slice(qIndex + 1)) : new URLSearchParams();
+
+  if (urlPath === "/api/samples") {
+    const listing = listSamplesDir(query.get("path") || "");
+    if (!listing) {
+      sendJson(res, 404, { error: "Not found" });
+      return;
+    }
+    sendJson(res, 200, listing);
+    return;
+  }
+
   const filePath = resolveFilePath(urlPath);
 
   if (!filePath) {
@@ -199,7 +286,7 @@ const httpServer = http.createServer((req, res) => {
       return;
     }
 
-    const contentType = MIME[path.extname(filePath)] || "application/octet-stream";
+    const contentType = MIME[path.extname(filePath).toLowerCase()] || "application/octet-stream";
     const headers = {
       "Content-Type": contentType,
       "Cache-Control": "no-store",
@@ -207,7 +294,6 @@ const httpServer = http.createServer((req, res) => {
       "Access-Control-Allow-Origin": "*",
     };
 
-    // Stream large bed WAVs (and support Range) instead of buffering whole files.
     const range = req.headers.range;
     if (range && /^bytes=/.test(range)) {
       const parts = range.replace(/bytes=/, "").split("-");
@@ -282,5 +368,6 @@ udp.bind(OSC_PORT, "127.0.0.1", () => {
     console.log(`  OSC listen   udp://127.0.0.1:${OSC_PORT}`);
     console.log(`  Web app      http://127.0.0.1:${HTTP_PORT}`);
     console.log(`  Beds         http://127.0.0.1:${HTTP_PORT}/beds/…`);
+    console.log(`  Samples      http://127.0.0.1:${HTTP_PORT}/samples/…`);
   });
 });

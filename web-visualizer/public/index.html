@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape mixer</title>
-    <link rel="stylesheet" href="/styles.css?v=82" />
+    <link rel="stylesheet" href="/styles.css?v=84" />
     <script type="importmap">
       {
         "imports": {
@@ -22,6 +22,7 @@
           <h1>Touchpad mixer</h1>
         </div>
         <div class="top-actions">
+          <button type="button" class="shell-btn" data-samples-btn>Samples</button>
           <div class="mode-toggle" role="group" aria-label="Input mode">
             <button type="button" data-mode="max" aria-pressed="true">Max</button>
             <button type="button" data-mode="browser" aria-pressed="false">Browser audio</button>
@@ -54,19 +55,19 @@
                 <span class="pad-blob" data-corner="br"></span>
               </div>
               <div class="quad nw" data-quad="tl">
-                <span class="name" data-corner-name="tl">Beach</span>
+                <button type="button" class="name stem-slot" data-corner-name="tl" data-stem-slot="tl" title="Choose TL sample">Beach</button>
                 <span class="pct" data-vol="tl">0%</span>
               </div>
               <div class="quad ne" data-quad="tr">
-                <span class="name" data-corner-name="tr">Forest</span>
+                <button type="button" class="name stem-slot" data-corner-name="tr" data-stem-slot="tr" title="Choose TR sample">Forest</button>
                 <span class="pct" data-vol="tr">0%</span>
               </div>
               <div class="quad sw" data-quad="bl">
-                <span class="name" data-corner-name="bl">River</span>
+                <button type="button" class="name stem-slot" data-corner-name="bl" data-stem-slot="bl" title="Choose BL sample">River</button>
                 <span class="pct" data-vol="bl">0%</span>
               </div>
               <div class="quad se" data-quad="br">
-                <span class="name" data-corner-name="br">Meditation Synth</span>
+                <button type="button" class="name stem-slot" data-corner-name="br" data-stem-slot="br" title="Choose BR sample">Meditation Synth</button>
                 <span class="pct" data-vol="br">0%</span>
               </div>
               <div class="crosshair x"></div>
@@ -160,8 +161,8 @@
                 <p class="fx-btn">Shoulders</p>
                 <div class="trig">
                   <div class="click-row">
-                    <span class="click-pill" data-l1>L1</span>
-                    <span class="click-pill" data-r1>R1</span>
+                    <span class="click-pill" data-l1 title="Abyss plunge">L1 abyss</span>
+                    <span class="click-pill" data-r1 title="Glass bloom">R1 bloom</span>
                   </div>
                 </div>
               </article>
@@ -251,6 +252,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=80"></script>
+    <script type="module" src="/app.js?v=85"></script>
   </body>
 </html>

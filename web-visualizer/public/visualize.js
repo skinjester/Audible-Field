@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { controller, mix, state } from "./mixer-core.js?v=59";
+import { controller, mix, state } from "./mixer-core.js?v=61";
 
 const QUADS = [
   { key: "tl", name: "Sphere", terrain: "Sphere", color: 0x5a5058 },
@@ -546,16 +546,17 @@ function syncTerrainUniforms(ctrl, dt) {
   const fx = leftStickParams(ctrl, dt);
   advanceFxPhase(fx, dt);
   const isDrift = effect === "drift";
-  const liveFx = isDrift || fx.drive > 0.002 || pulse > 0.02;
+  const shoulder = (ctrl.l1 ? 0.6 : 0) + (ctrl.r1 ? 0.5 : 0);
+  const liveFx = isDrift || fx.drive > 0.002 || pulse > 0.02 || shoulder > 0;
   gpuShared.uMix.value.set(styleMix.tl, styleMix.tr, styleMix.bl, styleMix.br);
   gpuShared.uFxMode.value = FX_MODE[effect] || 1;
   gpuShared.uLive.value = liveFx ? 1 : 0;
   gpuShared.uStick.value.set(fx.x, fx.y);
   gpuShared.uMag.value = fx.mag;
-  gpuShared.uAmp.value = fx.amp * (1 + pulse * 0.85);
-  gpuShared.uPulse.value = pulse;
-  gpuShared.uRate.value = fx.rate;
-  gpuShared.uLift.value = fx.lift;
+  gpuShared.uAmp.value = fx.amp * (1 + pulse * 0.85) * (1 + (ctrl.l1 ? 0.35 : 0));
+  gpuShared.uPulse.value = Math.min(1.35, pulse + shoulder);
+  gpuShared.uRate.value = fx.rate * (1 + (ctrl.r1 ? 0.55 : 0));
+  gpuShared.uLift.value = fx.lift + (ctrl.l1 ? 0.45 : 0) - (ctrl.r1 ? 0.12 : 0);
   gpuShared.uPhase.value.set(fxPhase.ripple, fxPhase.waveA, fxPhase.waveB, fxPhase.waveC);
   gpuShared.uPhase2.value.set(fxPhase.drift, fxPhase.rings);
   gpuShared.uState.value.set(state.x, state.y);

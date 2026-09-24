@@ -13,13 +13,15 @@ import {
   setShoulder,
   setTarget,
   setTrigger,
+  setStemCorner,
   state,
   tickMixer,
   STEM_CORNERS,
-} from "./mixer-core.js?v=60";
-import { hideVisualize, showVisualize } from "./visualize.js?v=78";
-import { audioEngine } from "./audio-engine.js?v=2";
-import { gamepadInput } from "./gamepad-input.js?v=1";
+} from "./mixer-core.js?v=61";
+import { hideVisualize, showVisualize } from "./visualize.js?v=80";
+import { audioEngine } from "./audio-engine.js?v=6";
+import { gamepadInput } from "./gamepad-input.js?v=2";
+import { openSamplePicker } from "./sample-picker.js?v=1";
 
 const pad = document.querySelector("[data-pad]");
 const cursor = document.querySelector("[data-cursor]");
@@ -50,6 +52,9 @@ const tabButtons = document.querySelectorAll("[data-tab]");
 const panels = document.querySelectorAll("[data-panel]");
 const vizCanvas = document.querySelector("[data-viz-canvas]");
 const modeButtons = document.querySelectorAll("[data-mode]");
+const samplesBtn = document.querySelector("[data-samples-btn]");
+const stemSlots = document.querySelectorAll("[data-stem-slot]");
+const CORNER_TITLES = { tl: "TL", tr: "TR", bl: "BL", br: "BR" };
 const fxCards = {
   cross: document.querySelector('[data-fx-card="cross"]'),
   square: document.querySelector('[data-fx-card="square"]'),
@@ -150,6 +155,99 @@ function updateCornerLabels() {
     el.textContent =
       inputMode === "browser" ? STEM_CORNERS[corner].label : VIZ_NAMES[corner];
   }
+  updateStemSlotState();
+}
+
+function updateStemSlotState() {
+  const browser = inputMode === "browser";
+  for (const slot of stemSlots) {
+    slot.disabled = !browser;
+    slot.classList.toggle("is-interactive", browser);
+    const corner = slot.dataset.stemSlot;
+    slot.title = browser
+      ? `Choose ${CORNER_TITLES[corner] || corner} sample`
+      : "Switch to Browser audio to change samples";
+  }
+}
+
+async function assignCornerSample(corner, file) {
+  const meta = setStemCorner(corner, {
+    label: file.label || file.name,
+    file: file.name,
+    url: file.url,
+    id: file.path,
+  });
+  if (!meta) return;
+  updateCornerLabels();
+  try {
+    if (inputMode !== "browser") {
+      await setInputMode("browser");
+    }
+    await ensureBrowserAudio();
+    await audioEngine.replaceStem(corner, meta);
+    setStatus(
+      "audio",
+      `${CORNER_TITLES[corner] || corner} ← ${meta.label} (move pad toward that corner to hear)`
+    );
+  } catch (err) {
+    console.error(err);
+    setStatus("offline", err?.message || "Sample load failed");
+  }
+}
+
+function openCornerPicker(corner) {
+  if (inputMode !== "browser") {
+    setStatus("loading", "Switch to Browser audio to assign samples");
+    return;
+  }
+  openSamplePicker({
+    title: `${CORNER_TITLES[corner] || corner} stem`,
+    startPath: "pads/ambient",
+    roots: ["loops", "pads", "one-shots"],
+    onSelect: (file) => {
+      void assignCornerSample(corner, file);
+    },
+  });
+}
+
+/** After browsing from the header, ask which quadrant gets the file. */
+function openAssignCornerDialog(file) {
+  const existing = document.querySelector("[data-assign-corner]");
+  existing?.remove();
+
+  const dialog = document.createElement("dialog");
+  dialog.className = "sample-picker assign-corner";
+  dialog.dataset.assignCorner = "";
+  dialog.innerHTML = `
+    <form method="dialog" class="sample-picker-panel">
+      <header class="sample-picker-head">
+        <div>
+          <p class="kicker">Assign sample</p>
+          <h2></h2>
+        </div>
+        <button type="submit" value="cancel" class="sample-picker-close">Cancel</button>
+      </header>
+      <p class="sample-picker-hint">Map this file to one pad quadrant:</p>
+      <div class="assign-corner-grid" data-assign-grid></div>
+    </form>
+  `;
+  dialog.querySelector("h2").textContent = file.label || file.name;
+  const grid = dialog.querySelector("[data-assign-grid]");
+  for (const corner of ["tl", "tr", "bl", "br"]) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "assign-corner-btn";
+    btn.textContent = `${CORNER_TITLES[corner]} · ${STEM_CORNERS[corner]?.label || corner}`;
+    btn.addEventListener("click", () => {
+      dialog.close();
+      dialog.remove();
+      void assignCornerSample(corner, file);
+    });
+    grid.appendChild(btn);
+  }
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.appendChild(dialog);
+  dialog.showModal();
 }
 
 function renderDiagnostics() {
@@ -281,9 +379,13 @@ async function setInputMode(mode) {
     setFxName("cross", "Saturn 2 (approx)");
     setFxName("square", "Comb (approx)");
     setFxName("triangle", "Formant (approx)");
-    setFxName("circle", "Crystallizer (approx)");
+    setFxName("circle", "OWLShimmer (loading…)");
     setStatus(audioEngine.running ? "audio" : "loading", browserStatusLabel());
     await ensureBrowserAudio();
+    setFxName(
+      "circle",
+      audioEngine.circleFxMode === "wam" ? "OWLShimmer (WAM)" : "Crystallizer (approx)"
+    );
     setStatus(audioEngine.running ? "audio" : "offline", browserStatusLabel());
   } else {
     gamepadInput.disable();
@@ -351,6 +453,29 @@ for (const button of tabButtons) {
 for (const button of modeButtons) {
   button.addEventListener("click", () => {
     void setInputMode(button.dataset.mode);
+  });
+}
+
+if (samplesBtn) {
+  samplesBtn.addEventListener("click", () => {
+    openSamplePicker({
+      title: "Choose a sample",
+      startPath: "",
+      onSelect: (file) => {
+        openAssignCornerDialog(file);
+      },
+    });
+  });
+}
+
+for (const slot of stemSlots) {
+  slot.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+  });
+  slot.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openCornerPicker(slot.dataset.stemSlot);
   });
 }
 

@@ -62,6 +62,22 @@ body {
   justify-content: flex-end;
 }
 
+.shell-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.shell-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
 .mode-toggle {
   display: inline-flex;
   border: 1px solid var(--line);
@@ -262,15 +278,7 @@ h1 {
   overflow: hidden;
 }
 
-body.mode-visualize .app {
-  width: 100%;
-  max-width: none;
-  padding: 10px 12px 12px;
-}
-
-body.mode-visualize .top h1 {
-  font-size: 18px;
-}
+/* Visualize uses the same shell chrome as Diagnostics; only the panel fills. */
 
 .pad {
   position: relative;
@@ -344,10 +352,40 @@ body.mode-visualize .top h1 {
 }
 
 .quad .name {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
   font-size: 10px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
+  text-align: left;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.quad .name.stem-slot.is-interactive {
+  cursor: pointer;
+  color: color-mix(in srgb, var(--ink) 72%, var(--muted));
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--line) 80%, transparent);
+  text-underline-offset: 2px;
+}
+
+.quad .name.stem-slot.is-interactive:hover {
+  color: var(--ink);
+  text-decoration-color: var(--live);
+}
+
+.quad .name.stem-slot:disabled {
+  cursor: default;
+  opacity: 1;
 }
 
 .quad .pct {
@@ -1032,4 +1070,173 @@ dd {
     grid-template-columns: 1fr 1fr;
     grid-template-rows: auto auto;
   }
+}
+
+/* —— Sample picker (shell modal) —— */
+.sample-picker {
+  width: min(440px, calc(100vw - 24px));
+  max-height: min(70dvh, 560px);
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+
+.sample-picker::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.sample-picker-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(70dvh, 560px);
+  padding: 14px;
+  margin: 0;
+}
+
+.sample-picker-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sample-picker-head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.sample-picker-close {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.sample-picker-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.sample-picker-crumb {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--live);
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+
+.sample-picker-crumb-sep {
+  color: var(--muted);
+}
+
+.sample-picker-list {
+  flex: 1 1 auto;
+  min-height: 180px;
+  max-height: 360px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.sample-picker-row {
+  appearance: none;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.sample-picker-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.sample-picker-kind {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sample-picker-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sample-picker-row-dir .sample-picker-name {
+  font-weight: 600;
+}
+
+.sample-picker-error {
+  margin: 0;
+  color: #f0a8a8;
+  font-size: 12px;
+}
+
+.sample-picker-empty {
+  margin: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.sample-picker-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.assign-corner-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.assign-corner-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 14px 10px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.assign-corner-btn:hover {
+  border-color: color-mix(in srgb, var(--live) 50%, var(--line));
+  background: rgba(110, 231, 183, 0.08);
 }
