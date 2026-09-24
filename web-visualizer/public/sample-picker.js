@@ -223,12 +223,15 @@ export function closeSamplePicker() {
 
 let dropdownEl = null;
 let dropdownListEl = null;
+let dropdownScrollEl = null;
+let dropdownThumbEl = null;
 let dropdownCache = null;
 let dropdownOnSelect = null;
 let dropdownOutsideHandler = null;
 let dropdownKeyHandler = null;
 /** @type {HTMLElement | null} */
 let dropdownAnchor = null;
+let dropdownThumbDrag = null;
 
 function folderHeaderLabel(folder) {
   if (!folder) return "SAMPLES";
@@ -265,6 +268,94 @@ function closeStemDropdown() {
   }
 }
 
+/** Capture-phase so outside clicks still dismiss even if a control stopPropagates. */
+function bindDropdownDismiss() {
+  if (dropdownOutsideHandler) {
+    document.removeEventListener("pointerdown", dropdownOutsideHandler, true);
+  }
+  if (dropdownKeyHandler) {
+    document.removeEventListener("keydown", dropdownKeyHandler, true);
+  }
+  dropdownOutsideHandler = (event) => {
+    if (!dropdownEl || dropdownEl.hidden) return;
+    const target = event.target;
+    if (target instanceof Node) {
+      if (dropdownEl.contains(target)) return;
+      if (dropdownAnchor && dropdownAnchor.contains(target)) return;
+    }
+    closeStemDropdown();
+  };
+  dropdownKeyHandler = (event) => {
+    if (event.key === "Escape") closeStemDropdown();
+  };
+  document.addEventListener("pointerdown", dropdownOutsideHandler, true);
+  document.addEventListener("keydown", dropdownKeyHandler, true);
+}
+
+function syncDropdownScrollbar() {
+  if (!dropdownListEl || !dropdownScrollEl || !dropdownThumbEl) return;
+  const view = dropdownListEl.clientHeight;
+  const total = dropdownListEl.scrollHeight;
+  const track = dropdownScrollEl.clientHeight;
+  if (total <= view + 1 || track <= 0) {
+    dropdownScrollEl.classList.remove("is-needed");
+    dropdownThumbEl.style.height = "0px";
+    return;
+  }
+  dropdownScrollEl.classList.add("is-needed");
+  const thumbH = Math.max(20, Math.round((view / total) * track));
+  const maxTop = track - thumbH;
+  const maxScroll = total - view;
+  const top =
+    maxScroll <= 0 ? 0 : Math.round((dropdownListEl.scrollTop / maxScroll) * maxTop);
+  dropdownThumbEl.style.height = `${thumbH}px`;
+  dropdownThumbEl.style.transform = `translateY(${top}px)`;
+}
+
+function bindDropdownScrollbar() {
+  if (!dropdownListEl || !dropdownScrollEl || !dropdownThumbEl) return;
+
+  dropdownListEl.addEventListener("scroll", () => {
+    if (dropdownThumbDrag) return;
+    syncDropdownScrollbar();
+  });
+
+  dropdownThumbEl.addEventListener("pointerdown", (event) => {
+    if (event.button != null && event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const track = dropdownScrollEl.clientHeight;
+    const thumbH = dropdownThumbEl.offsetHeight;
+    const maxTop = Math.max(0, track - thumbH);
+    const startY = event.clientY;
+    const match = /translateY\(([-\d.]+)px\)/.exec(dropdownThumbEl.style.transform || "");
+    const startTop = match ? Number(match[1]) : 0;
+    dropdownThumbDrag = { startY, startTop, maxTop, thumbH };
+    dropdownThumbEl.classList.add("is-dragging");
+    dropdownThumbEl.setPointerCapture(event.pointerId);
+  });
+
+  dropdownThumbEl.addEventListener("pointermove", (event) => {
+    if (!dropdownThumbDrag) return;
+    const { startY, startTop, maxTop } = dropdownThumbDrag;
+    const top = Math.min(maxTop, Math.max(0, startTop + (event.clientY - startY)));
+    dropdownThumbEl.style.transform = `translateY(${top}px)`;
+    const view = dropdownListEl.clientHeight;
+    const total = dropdownListEl.scrollHeight;
+    const maxScroll = Math.max(0, total - view);
+    dropdownListEl.scrollTop = maxTop <= 0 ? 0 : (top / maxTop) * maxScroll;
+  });
+
+  const endDrag = () => {
+    if (!dropdownThumbDrag) return;
+    dropdownThumbDrag = null;
+    dropdownThumbEl.classList.remove("is-dragging");
+  };
+  dropdownThumbEl.addEventListener("pointerup", endDrag);
+  dropdownThumbEl.addEventListener("pointercancel", endDrag);
+  dropdownThumbEl.addEventListener("lostpointercapture", endDrag);
+}
+
 function ensureDropdownDom() {
   if (dropdownEl) return;
   dropdownEl = document.createElement("div");
@@ -272,9 +363,18 @@ function ensureDropdownDom() {
   dropdownEl.hidden = true;
   dropdownEl.setAttribute("role", "listbox");
   dropdownEl.setAttribute("aria-hidden", "true");
-  dropdownEl.innerHTML = `<div class="stem-dropdown-list" data-stem-dropdown-list></div>`;
+  dropdownEl.innerHTML = `
+    <div class="stem-dropdown-body">
+      <div class="stem-dropdown-list" data-stem-dropdown-list></div>
+      <div class="stem-dropdown-scroll" data-stem-dropdown-scroll aria-hidden="true">
+        <div class="stem-dropdown-thumb" data-stem-dropdown-thumb></div>
+      </div>
+    </div>`;
   document.body.appendChild(dropdownEl);
   dropdownListEl = dropdownEl.querySelector("[data-stem-dropdown-list]");
+  dropdownScrollEl = dropdownEl.querySelector("[data-stem-dropdown-scroll]");
+  dropdownThumbEl = dropdownEl.querySelector("[data-stem-dropdown-thumb]");
+  bindDropdownScrollbar();
 
   dropdownEl.addEventListener("pointerdown", (event) => {
     event.stopPropagation();
@@ -306,6 +406,7 @@ function positionDropdown(anchor) {
 
   dropdownEl.style.left = `${Math.round(left)}px`;
   dropdownEl.style.top = `${Math.round(top)}px`;
+  syncDropdownScrollbar();
 }
 
 function renderDropdownGroups(groups) {
@@ -317,6 +418,7 @@ function renderDropdownGroups(groups) {
     empty.className = "stem-dropdown-empty";
     empty.textContent = "No samples found";
     dropdownListEl.appendChild(empty);
+    syncDropdownScrollbar();
     return;
   }
 
@@ -350,6 +452,7 @@ function renderDropdownGroups(groups) {
       dropdownListEl.appendChild(btn);
     }
   }
+  syncDropdownScrollbar();
 }
 
 async function loadAllSamples() {
@@ -362,10 +465,23 @@ async function loadAllSamples() {
 
 /**
  * Open a flat sample dropdown anchored to a StemSlot.
+ * Stays open until a sample is chosen, Escape, or the same label is clicked again.
  * @param {{ anchor: HTMLElement, onSelect?: (file: object) => void }} opts
  */
 export async function openStemDropdown(opts = {}) {
   ensureDropdownDom();
+
+  // Toggle closed if the same slot is already open.
+  if (
+    dropdownEl &&
+    !dropdownEl.hidden &&
+    opts.anchor &&
+    dropdownAnchor === opts.anchor
+  ) {
+    closeStemDropdown();
+    return;
+  }
+
   closeStemDropdown();
   closeSamplePicker();
 
@@ -382,104 +498,28 @@ export async function openStemDropdown(opts = {}) {
   loading.textContent = "Loading…";
   dropdownListEl.appendChild(loading);
   positionDropdown(opts.anchor);
+  // Bind dismiss immediately (open is on click; opening pointerdown already finished).
+  // Do not stopPropagation — pad/sticks still receive the same event.
+  bindDropdownDismiss();
 
   try {
     const data = await loadAllSamples();
+    // Closed while loading — don't rebuild or re-bind.
+    if (dropdownEl?.hidden || dropdownAnchor !== opts.anchor) return;
     renderDropdownGroups(data.groups || []);
     positionDropdown(opts.anchor);
-    // #region agent log
-    {
-      const list = dropdownListEl;
-      const item = list?.querySelector(".stem-dropdown-item");
-      const header = list?.querySelector(".stem-dropdown-header");
-      const csItem = item ? getComputedStyle(item) : null;
-      const csList = list ? getComputedStyle(list) : null;
-      const csDrop = dropdownEl ? getComputedStyle(dropdownEl) : null;
-      fetch("http://127.0.0.1:7713/ingest/37fe76df-e741-4e85-9753-370c8a5ff593", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Debug-Session-Id": "6e0f59",
-        },
-        body: JSON.stringify({
-          sessionId: "6e0f59",
-          runId: "post-fix",
-          hypothesisId: "A-B-C-D",
-          location: "sample-picker.js:openStemDropdown",
-          message: "dropdown item/list computed metrics after render",
-          data: {
-            itemCount: list ? list.querySelectorAll(".stem-dropdown-item").length : 0,
-            list: list
-              ? {
-                  clientH: list.clientHeight,
-                  scrollH: list.scrollHeight,
-                  display: csList.display,
-                  flexDir: csList.flexDirection,
-                  overflow: csList.overflow,
-                  mask: csList.maskImage || csList.webkitMaskImage,
-                }
-              : null,
-            dropdown: dropdownEl
-              ? {
-                  maxH: dropdownEl.style.maxHeight,
-                  clientH: dropdownEl.clientHeight,
-                  display: csDrop.display,
-                  overflow: csDrop.overflow,
-                  backdrop: csDrop.backdropFilter,
-                }
-              : null,
-            item: item
-              ? {
-                  text: item.textContent,
-                  offsetH: item.offsetHeight,
-                  scrollH: item.scrollHeight,
-                  clientH: item.clientHeight,
-                  lineHeight: csItem.lineHeight,
-                  fontSize: csItem.fontSize,
-                  overflow: csItem.overflow,
-                  flexShrink: csItem.flexShrink,
-                  mask: csItem.maskImage || csItem.webkitMaskImage,
-                  padding: csItem.padding,
-                  display: csItem.display,
-                  className: item.className,
-                }
-              : null,
-            header: header
-              ? {
-                  offsetH: header.offsetHeight,
-                  lineHeight: getComputedStyle(header).lineHeight,
-                }
-              : null,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-    }
-    // #endregion
   } catch (err) {
+    if (dropdownEl?.hidden || dropdownAnchor !== opts.anchor) return;
     dropdownListEl.replaceChildren();
     const errEl = document.createElement("p");
     errEl.className = "stem-dropdown-empty";
     errEl.textContent = err?.message || "Failed to load samples";
     dropdownListEl.appendChild(errEl);
   }
-
-  dropdownOutsideHandler = (event) => {
-    if (!dropdownEl || dropdownEl.hidden) return;
-    if (dropdownEl.contains(event.target)) return;
-    if (dropdownAnchor && dropdownAnchor.contains(event.target)) return;
-    closeStemDropdown();
-  };
-  dropdownKeyHandler = (event) => {
-    if (event.key === "Escape") closeStemDropdown();
-  };
-  // Next tick so the opening click does not immediately close
-  window.setTimeout(() => {
-    document.addEventListener("pointerdown", dropdownOutsideHandler, true);
-    document.addEventListener("keydown", dropdownKeyHandler, true);
-  }, 0);
 }
 
 export function invalidateSampleCache() {
   dropdownCache = null;
 }
+
+export { closeStemDropdown };

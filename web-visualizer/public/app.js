@@ -21,7 +21,7 @@ import {
 import { hideVisualize, showVisualize } from "./visualize.js?v=80";
 import { audioEngine } from "./audio-engine.js?v=7";
 import { gamepadInput } from "./gamepad-input.js?v=3";
-import { openStemDropdown } from "./sample-picker.js?v=7";
+import { openStemDropdown } from "./sample-picker.js?v=14";
 
 const pad = document.querySelector("[data-pad]");
 const cursor = document.querySelector("[data-cursor]");
