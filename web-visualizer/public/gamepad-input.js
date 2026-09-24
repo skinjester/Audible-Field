@@ -65,6 +65,13 @@ export class GamepadInput {
     };
     this.connected = false;
     this.padId = "";
+    /** UI pointer capture owns these while true (skip gamepad overwrite). */
+    this.uiLock = {
+      leftStick: false,
+      rightStick: false,
+      l1: false,
+      r1: false,
+    };
   }
 
   enable() {
@@ -97,8 +104,8 @@ export class GamepadInput {
     const rx = deadzone(Number(ax[2]) || 0);
     const ry = deadzone(-(Number(ax[3]) || 0));
 
-    applyRawStick(lx, ly);
-    setRightStick(rx, ry);
+    if (!this.uiLock.leftStick) applyRawStick(lx, ly);
+    if (!this.uiLock.rightStick) setRightStick(rx, ry);
 
     const b = pad.buttons || [];
     const pressed = (i) => !!(b[i] && (b[i].pressed || b[i].value > 0.5));
@@ -127,8 +134,8 @@ export class GamepadInput {
       this._prev[dir] = on;
     }
 
-    setShoulder("l1", pressed(4) ? 1 : 0);
-    setShoulder("r1", pressed(5) ? 1 : 0);
+    if (!this.uiLock.l1) setShoulder("l1", pressed(4) ? 1 : 0);
+    if (!this.uiLock.r1) setShoulder("r1", pressed(5) ? 1 : 0);
     setTrigger("lt", value(6));
     setTrigger("rt", value(7));
     setStickClick("ls", pressed(10) ? 1 : 0);

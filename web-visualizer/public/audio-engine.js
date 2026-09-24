@@ -658,10 +658,26 @@ export class EchoScapeAudioEngine {
    * @param {string} corner
    * @param {string} url
    * @param {object} meta
-   * @param {{ resume?: boolean }} [opts]
+   * @param {{ resume?: boolean, initialGain?: number }} [opts]
    */
   async _attachStem(corner, url, meta, opts = {}) {
     if (!this.ctx || !this._sum) throw new Error("Audio engine not started");
+
+    const prev = this.stems[corner];
+    // Silence previous stem immediately so the old bed does not keep playing
+    // while the replacement buffers.
+    if (prev) {
+      try {
+        prev.gain.gain.value = 0;
+      } catch {
+        /* ignore */
+      }
+      try {
+        prev.el.pause();
+      } catch {
+        /* ignore */
+      }
+    }
 
     const el = new Audio();
     el.loop = true;
@@ -672,18 +688,14 @@ export class EchoScapeAudioEngine {
 
     const source = this.ctx.createMediaElementSource(el);
     const gain = this.ctx.createGain();
-    const prev = this.stems[corner];
-    const prevGain = prev?.gain?.gain?.value ?? 0;
-    gain.gain.value = prevGain;
+    const weights = equalPowerMix(mixerState.x, mixerState.y);
+    const initialGain =
+      typeof opts.initialGain === "number" ? opts.initialGain : weights[corner] ?? 0;
+    gain.gain.value = initialGain;
     source.connect(gain);
     gain.connect(this._sum);
 
     if (prev) {
-      try {
-        prev.el.pause();
-      } catch {
-        /* ignore */
-      }
       try {
         prev.source.disconnect();
       } catch {
@@ -694,36 +706,52 @@ export class EchoScapeAudioEngine {
       } catch {
         /* ignore */
       }
-      prev.el.removeAttribute("src");
-      prev.el.load();
+      try {
+        prev.el.removeAttribute("src");
+        prev.el.load();
+      } catch {
+        /* ignore */
+      }
     }
 
     this.stems[corner] = { el, source, gain, meta };
 
-    if (opts.resume && this.running) {
+    if (opts.resume !== false && this.running) {
       try {
+        el.muted = false;
+        el.volume = 1;
         await el.play();
       } catch (err) {
-        console.warn("[EchoScape audio] replaceStem play failed:", err?.message || err);
+        console.warn("[EchoScape audio] stem play failed:", err?.message || err);
+        throw err;
       }
     }
   }
 
   /**
-   * Swap the looping bed for one pad corner.
+   * Swap the looping bed for one pad corner (stops previous audio first).
    * @param {string} corner
    * @param {{ url: string, label?: string, file?: string, id?: string }} sample
    */
   async replaceStem(corner, sample) {
     if (!CORNERS.includes(corner)) throw new Error(`Unknown corner ${corner}`);
     if (!sample?.url) throw new Error("replaceStem requires sample.url");
+
     if (!this.running || !this.ctx) {
-      // Assignment still updates STEM_CORNERS via caller; load on next start.
-      return;
+      await this.start();
+    } else {
+      await this.resume();
     }
+
     const meta = STEM_CORNERS[corner];
-    await this._attachStem(corner, sample.url, meta, { resume: true });
-    console.info("[EchoScape audio] replaced", corner, meta.label);
+    const weights = equalPowerMix(mixerState.x, mixerState.y);
+    await this._attachStem(corner, sample.url, meta, {
+      resume: true,
+      initialGain: weights[corner],
+    });
+    // Re-apply full mix so sibling corners stay correct after the swap.
+    this.sync(mixerState, mixerController);
+    console.info("[EchoScape audio] replaced", corner, meta?.label || sample.url, sample.url);
   }
 
   setActiveFx(button, force = false) {

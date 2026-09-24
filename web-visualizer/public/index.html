@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape mixer</title>
-    <link rel="stylesheet" href="/styles.css?v=84" />
+    <link rel="stylesheet" href="/styles.css?v=101" />
     <script type="importmap">
       {
         "imports": {
@@ -22,14 +22,15 @@
           <h1>Touchpad mixer</h1>
         </div>
         <div class="top-actions">
-          <button type="button" class="shell-btn" data-samples-btn>Samples</button>
           <div class="mode-toggle" role="group" aria-label="Input mode">
             <button type="button" data-mode="max" aria-pressed="true">Max</button>
             <button type="button" data-mode="browser" aria-pressed="false">Browser audio</button>
           </div>
           <div class="status" data-state="offline">
             <span class="dot"></span>
-            <span data-status-label>Waiting for Max</span>
+            <span class="status-label-clip">
+              <span data-status-label>Waiting for Max</span>
+            </span>
           </div>
         </div>
       </header>
@@ -55,19 +56,31 @@
                 <span class="pad-blob" data-corner="br"></span>
               </div>
               <div class="quad nw" data-quad="tl">
-                <button type="button" class="name stem-slot" data-corner-name="tl" data-stem-slot="tl" title="Choose TL sample">Beach</button>
+                <button type="button" class="name stem-slot" data-stem-slot="tl" title="Choose TL sample">
+                  <span class="stem-slot-label" data-corner-name="tl">Beach</span>
+                  <span class="stem-caret" aria-hidden="true"></span>
+                </button>
                 <span class="pct" data-vol="tl">0%</span>
               </div>
               <div class="quad ne" data-quad="tr">
-                <button type="button" class="name stem-slot" data-corner-name="tr" data-stem-slot="tr" title="Choose TR sample">Forest</button>
+                <button type="button" class="name stem-slot" data-stem-slot="tr" title="Choose TR sample">
+                  <span class="stem-slot-label" data-corner-name="tr">Forest</span>
+                  <span class="stem-caret" aria-hidden="true"></span>
+                </button>
                 <span class="pct" data-vol="tr">0%</span>
               </div>
               <div class="quad sw" data-quad="bl">
-                <button type="button" class="name stem-slot" data-corner-name="bl" data-stem-slot="bl" title="Choose BL sample">River</button>
+                <button type="button" class="name stem-slot" data-stem-slot="bl" title="Choose BL sample">
+                  <span class="stem-slot-label" data-corner-name="bl">River</span>
+                  <span class="stem-caret" aria-hidden="true"></span>
+                </button>
                 <span class="pct" data-vol="bl">0%</span>
               </div>
               <div class="quad se" data-quad="br">
-                <button type="button" class="name stem-slot" data-corner-name="br" data-stem-slot="br" title="Choose BR sample">Meditation Synth</button>
+                <button type="button" class="name stem-slot" data-stem-slot="br" title="Choose BR sample">
+                  <span class="stem-slot-label" data-corner-name="br">Meditation Synth</span>
+                  <span class="stem-caret" aria-hidden="true"></span>
+                </button>
                 <span class="pct" data-vol="br">0%</span>
               </div>
               <div class="crosshair x"></div>
@@ -109,7 +122,13 @@
               <article class="ctrl-card ctrl-card-stick">
                 <p class="fx-btn">Left stick</p>
                 <div class="stick-body">
-                  <div class="mini-stick" aria-hidden="true">
+                  <div
+                    class="mini-stick is-interactive"
+                    data-stick="left"
+                    role="slider"
+                    aria-label="Left stick"
+                    title="Drag to move left stick"
+                  >
                     <span class="mini-stick-dot" data-stick-dot="left" data-ls></span>
                   </div>
                   <dl class="stick-axes">
@@ -127,7 +146,13 @@
               <article class="ctrl-card ctrl-card-stick">
                 <p class="fx-btn">Right stick</p>
                 <div class="stick-body">
-                  <div class="mini-stick" aria-hidden="true">
+                  <div
+                    class="mini-stick is-interactive"
+                    data-stick="right"
+                    role="slider"
+                    aria-label="Right stick"
+                    title="Drag to move right stick"
+                  >
                     <span class="mini-stick-dot" data-stick-dot="right" data-rs></span>
                   </div>
                   <dl class="stick-axes">
@@ -161,8 +186,8 @@
                 <p class="fx-btn">Shoulders</p>
                 <div class="trig">
                   <div class="click-row">
-                    <span class="click-pill" data-l1 title="Abyss plunge">L1 abyss</span>
-                    <span class="click-pill" data-r1 title="Glass bloom">R1 bloom</span>
+                    <button type="button" class="click-pill" data-l1 title="Hold for Abyss plunge">L1 abyss</button>
+                    <button type="button" class="click-pill" data-r1 title="Hold for Glass bloom">R1 bloom</button>
                   </div>
                 </div>
               </article>
@@ -252,6 +277,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=85"></script>
+    <script type="module" src="/app.js?v=101"></script>
   </body>
 </html>

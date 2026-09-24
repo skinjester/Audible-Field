@@ -86,6 +86,52 @@ function listSamplesDir(relPath) {
   return { path: cleaned, dirs, files };
 }
 
+/** Recursively collect audio files grouped by relative folder under samples/. */
+function listAllSamplesGrouped() {
+  if (!fs.existsSync(SAMPLES_DIR) || !fs.statSync(SAMPLES_DIR).isDirectory()) {
+    return { groups: [] };
+  }
+
+  const byFolder = new Map();
+
+  function walk(absDir, relDir) {
+    let entries;
+    try {
+      entries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const abs = path.join(absDir, entry.name);
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!underRoot(abs, SAMPLES_DIR)) continue;
+        walk(abs, rel);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!AUDIO_EXTS.has(ext)) continue;
+      const folder = relDir || "";
+      if (!byFolder.has(folder)) byFolder.set(folder, []);
+      byFolder.get(folder).push(entry.name);
+    }
+  }
+
+  walk(SAMPLES_DIR, "");
+
+  const groups = [...byFolder.entries()]
+    .filter(([, files]) => files.length > 0)
+    .map(([folder, files]) => ({
+      folder,
+      files: files.slice().sort((a, b) => a.localeCompare(b)),
+    }))
+    .sort((a, b) => a.folder.localeCompare(b.folder));
+
+  return { groups };
+}
+
 function resolveFilePath(urlPath) {
   if (urlPath.startsWith("/vendor/three/")) {
     const relative = urlPath.slice("/vendor/three/".length);
@@ -262,6 +308,11 @@ const httpServer = http.createServer((req, res) => {
   const qIndex = rawUrl.indexOf("?");
   const urlPath = decodeURIComponent(qIndex >= 0 ? rawUrl.slice(0, qIndex) : rawUrl);
   const query = qIndex >= 0 ? new URLSearchParams(rawUrl.slice(qIndex + 1)) : new URLSearchParams();
+
+  if (urlPath === "/api/samples/all") {
+    sendJson(res, 200, listAllSamplesGrouped());
+    return;
+  }
 
   if (urlPath === "/api/samples") {
     const listing = listSamplesDir(query.get("path") || "");

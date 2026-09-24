@@ -19,9 +19,9 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=61";
 import { hideVisualize, showVisualize } from "./visualize.js?v=80";
-import { audioEngine } from "./audio-engine.js?v=6";
-import { gamepadInput } from "./gamepad-input.js?v=2";
-import { openSamplePicker } from "./sample-picker.js?v=1";
+import { audioEngine } from "./audio-engine.js?v=7";
+import { gamepadInput } from "./gamepad-input.js?v=3";
+import { openStemDropdown } from "./sample-picker.js?v=7";
 
 const pad = document.querySelector("[data-pad]");
 const cursor = document.querySelector("[data-cursor]");
@@ -52,7 +52,6 @@ const tabButtons = document.querySelectorAll("[data-tab]");
 const panels = document.querySelectorAll("[data-panel]");
 const vizCanvas = document.querySelector("[data-viz-canvas]");
 const modeButtons = document.querySelectorAll("[data-mode]");
-const samplesBtn = document.querySelector("[data-samples-btn]");
 const stemSlots = document.querySelectorAll("[data-stem-slot]");
 const CORNER_TITLES = { tl: "TL", tr: "TR", bl: "BL", br: "BR" };
 const fxCards = {
@@ -98,6 +97,8 @@ const dpadDirs = new Set(["up", "down", "left", "right"]);
 /** @type {"max" | "browser"} */
 let inputMode = "max";
 let audioStarting = false;
+/** @type {Promise<void> | null} */
+let audioStartPromise = null;
 
 function fmt(n) {
   return Number.isFinite(n) ? n.toFixed(2) : "—";
@@ -195,59 +196,17 @@ async function assignCornerSample(corner, file) {
   }
 }
 
-function openCornerPicker(corner) {
+function openCornerPicker(corner, anchor) {
   if (inputMode !== "browser") {
     setStatus("loading", "Switch to Browser audio to assign samples");
     return;
   }
-  openSamplePicker({
-    title: `${CORNER_TITLES[corner] || corner} stem`,
-    startPath: "pads/ambient",
-    roots: ["loops", "pads", "one-shots"],
+  void openStemDropdown({
+    anchor,
     onSelect: (file) => {
       void assignCornerSample(corner, file);
     },
   });
-}
-
-/** After browsing from the header, ask which quadrant gets the file. */
-function openAssignCornerDialog(file) {
-  const existing = document.querySelector("[data-assign-corner]");
-  existing?.remove();
-
-  const dialog = document.createElement("dialog");
-  dialog.className = "sample-picker assign-corner";
-  dialog.dataset.assignCorner = "";
-  dialog.innerHTML = `
-    <form method="dialog" class="sample-picker-panel">
-      <header class="sample-picker-head">
-        <div>
-          <p class="kicker">Assign sample</p>
-          <h2></h2>
-        </div>
-        <button type="submit" value="cancel" class="sample-picker-close">Cancel</button>
-      </header>
-      <p class="sample-picker-hint">Map this file to one pad quadrant:</p>
-      <div class="assign-corner-grid" data-assign-grid></div>
-    </form>
-  `;
-  dialog.querySelector("h2").textContent = file.label || file.name;
-  const grid = dialog.querySelector("[data-assign-grid]");
-  for (const corner of ["tl", "tr", "bl", "br"]) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "assign-corner-btn";
-    btn.textContent = `${CORNER_TITLES[corner]} · ${STEM_CORNERS[corner]?.label || corner}`;
-    btn.addEventListener("click", () => {
-      dialog.close();
-      dialog.remove();
-      void assignCornerSample(corner, file);
-    });
-    grid.appendChild(btn);
-  }
-  dialog.addEventListener("close", () => dialog.remove());
-  document.body.appendChild(dialog);
-  dialog.showModal();
 }
 
 function renderDiagnostics() {
@@ -305,6 +264,64 @@ function setStatus(nextState, label) {
   socketState = nextState;
   statusEl.dataset.state = nextState;
   statusLabel.textContent = label;
+  stopStatusMarquee();
+}
+
+function stopStatusMarquee() {
+  if (!statusEl || !statusLabel) return;
+  if (statusMarqueeRaf) {
+    cancelAnimationFrame(statusMarqueeRaf);
+    statusMarqueeRaf = 0;
+  }
+  statusEl.classList.remove("is-marquee");
+  statusEl.style.removeProperty("--marquee-duration");
+  statusLabel.style.transition = "none";
+  statusLabel.style.transform = "translateX(0)";
+  void statusLabel.offsetWidth;
+  statusLabel.style.transition = "";
+}
+
+/** @type {number} */
+let statusMarqueeRaf = 0;
+
+function startStatusMarquee() {
+  if (!statusEl || !statusLabel) return;
+  stopStatusMarquee();
+
+  const clip = statusEl.querySelector(".status-label-clip");
+  if (!clip) return;
+
+  // Measure full text width without the idle ellipsis clamp.
+  statusLabel.style.maxWidth = "none";
+  statusLabel.style.overflow = "visible";
+  statusLabel.style.textOverflow = "clip";
+  const fullWidth = statusLabel.scrollWidth;
+  statusLabel.style.maxWidth = "";
+  statusLabel.style.overflow = "";
+  statusLabel.style.textOverflow = "";
+
+  const overflow = fullWidth - clip.clientWidth;
+  if (overflow <= 2) return;
+
+  const duration = Math.min(0.6, Math.max(0.12, overflow / 900));
+  statusEl.style.setProperty("--marquee-duration", `${duration}s`);
+  statusEl.classList.add("is-marquee");
+  statusLabel.style.transform = "translateX(0)";
+
+  // Double rAF so the browser paints translateX(0) before animating.
+  statusMarqueeRaf = requestAnimationFrame(() => {
+    statusMarqueeRaf = requestAnimationFrame(() => {
+      statusLabel.style.transform = `translateX(-${overflow}px)`;
+      statusMarqueeRaf = 0;
+    });
+  });
+}
+
+if (statusEl) {
+  statusEl.addEventListener("mouseenter", startStatusMarquee);
+  statusEl.addEventListener("mouseleave", stopStatusMarquee);
+  statusEl.addEventListener("focusin", startStatusMarquee);
+  statusEl.addEventListener("focusout", stopStatusMarquee);
 }
 
 function pointFromEvent(event) {
@@ -339,27 +356,37 @@ function applyMaxPad(x, y, source) {
 function browserStatusLabel() {
   if (audioStarting) return "Loading beds…";
   if (!audioEngine.running) return "Browser audio — click pad to start";
-  if (gamepadInput.connected) return `Browser audio · ${gamepadInput.padId}`;
   return "Browser audio · mouse + DualSense";
 }
 
 async function ensureBrowserAudio() {
-  if (inputMode !== "browser" || audioStarting) return;
+  if (inputMode !== "browser") return;
   if (audioEngine.running) {
     await audioEngine.resume();
     await audioEngine.ensurePlaying();
     return;
   }
+  if (audioStartPromise) {
+    await audioStartPromise;
+    return;
+  }
+
   audioStarting = true;
   setStatus("loading", "Loading soundscape beds…");
-  try {
+  audioStartPromise = (async () => {
     await audioEngine.start();
+  })();
+
+  try {
+    await audioStartPromise;
     setStatus("audio", browserStatusLabel());
   } catch (err) {
     console.error(err);
     setStatus("offline", audioEngine.error || err.message || "Audio failed");
+    throw err;
   } finally {
     audioStarting = false;
+    audioStartPromise = null;
   }
 }
 
@@ -405,7 +432,7 @@ function tick(now) {
       gamepadInput.poll();
       if (audioEngine.running) {
         audioEngine.sync(state, controller);
-        if (socketState !== "audio" || gamepadInput.connected) {
+        if (socketState !== "audio") {
           setStatus("audio", browserStatusLabel());
         }
       }
@@ -456,18 +483,6 @@ for (const button of modeButtons) {
   });
 }
 
-if (samplesBtn) {
-  samplesBtn.addEventListener("click", () => {
-    openSamplePicker({
-      title: "Choose a sample",
-      startPath: "",
-      onSelect: (file) => {
-        openAssignCornerDialog(file);
-      },
-    });
-  });
-}
-
 for (const slot of stemSlots) {
   slot.addEventListener("pointerdown", (event) => {
     event.stopPropagation();
@@ -475,9 +490,105 @@ for (const slot of stemSlots) {
   slot.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    openCornerPicker(slot.dataset.stemSlot);
+    openCornerPicker(slot.dataset.stemSlot, slot);
   });
 }
+
+/** Map pointer position inside a mini-stick to −1…1 (up = +Y). */
+function stickAxesFromEvent(stickEl, event) {
+  const rect = stickEl.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const radius = Math.max(1, Math.min(rect.width, rect.height) / 2);
+  let nx = (event.clientX - cx) / radius;
+  let ny = -((event.clientY - cy) / radius);
+  const mag = Math.hypot(nx, ny);
+  if (mag > 1) {
+    nx /= mag;
+    ny /= mag;
+  }
+  return { nx, ny };
+}
+
+function bindUiStick(stickEl) {
+  if (!stickEl) return;
+  const side = stickEl.dataset.stick;
+  const lockKey = side === "right" ? "rightStick" : "leftStick";
+  let dragging = false;
+
+  const apply = (event) => {
+    const { nx, ny } = stickAxesFromEvent(stickEl, event);
+    if (side === "right") setRightStick(nx, ny);
+    else applyRawStick(nx, ny);
+  };
+
+  const release = () => {
+    if (!dragging) return;
+    dragging = false;
+    stickEl.classList.remove("is-dragging");
+    gamepadInput.uiLock[lockKey] = false;
+    if (side === "right") setRightStick(0, 0);
+    else applyRawStick(0, 0);
+  };
+
+  stickEl.addEventListener("pointerdown", (event) => {
+    if (inputMode !== "browser") return;
+    if (event.button != null && event.button !== 0) return;
+    event.preventDefault();
+    dragging = true;
+    stickEl.classList.add("is-dragging");
+    gamepadInput.uiLock[lockKey] = true;
+    stickEl.setPointerCapture(event.pointerId);
+    void ensureBrowserAudio();
+    apply(event);
+  });
+
+  stickEl.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    apply(event);
+  });
+
+  stickEl.addEventListener("pointerup", release);
+  stickEl.addEventListener("pointercancel", release);
+  stickEl.addEventListener("lostpointercapture", release);
+}
+
+function bindUiShoulder(btn, side) {
+  if (!btn) return;
+  const lockKey = side === "r1" ? "r1" : "l1";
+  let holding = false;
+
+  const press = (event) => {
+    if (inputMode !== "browser") return;
+    if (event.button != null && event.button !== 0) return;
+    event.preventDefault();
+    holding = true;
+    gamepadInput.uiLock[lockKey] = true;
+    btn.setPointerCapture(event.pointerId);
+    void ensureBrowserAudio();
+    setShoulder(side, 1);
+  };
+
+  const release = () => {
+    if (!holding) return;
+    holding = false;
+    gamepadInput.uiLock[lockKey] = false;
+    setShoulder(side, 0);
+  };
+
+  btn.addEventListener("pointerdown", press);
+  btn.addEventListener("pointerup", release);
+  btn.addEventListener("pointercancel", release);
+  btn.addEventListener("lostpointercapture", release);
+  // Prevent sticky click focus stealing without releasing mid-hold via click
+  btn.addEventListener("click", (event) => event.preventDefault());
+}
+
+for (const stickEl of document.querySelectorAll("[data-stick]")) {
+  bindUiStick(stickEl);
+}
+bindUiShoulder(l1El, "l1");
+bindUiShoulder(r1El, "r1");
 
 pad.addEventListener("pointerdown", (event) => {
   pad.setPointerCapture(event.pointerId);
@@ -612,10 +723,6 @@ window.setInterval(() => {
     setStatus("open", "Connected — waiting for Max");
   }
 }, 400);
-
-window.addEventListener("gamepadconnected", () => {
-  if (inputMode === "browser") setStatus("audio", browserStatusLabel());
-});
 
 notify();
 updateCornerLabels();

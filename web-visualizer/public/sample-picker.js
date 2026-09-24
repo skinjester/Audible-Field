@@ -218,3 +218,268 @@ export function openSamplePicker(opts = {}) {
 export function closeSamplePicker() {
   if (dialogEl?.open) dialogEl.close();
 }
+
+/* —— Flat stem dropdown (pad quadrant labels) —— */
+
+let dropdownEl = null;
+let dropdownListEl = null;
+let dropdownCache = null;
+let dropdownOnSelect = null;
+let dropdownOutsideHandler = null;
+let dropdownKeyHandler = null;
+/** @type {HTMLElement | null} */
+let dropdownAnchor = null;
+
+function folderHeaderLabel(folder) {
+  if (!folder) return "SAMPLES";
+  return folder
+    .split("/")
+    .filter(Boolean)
+    .join(" / ")
+    .toUpperCase();
+}
+
+function sampleUrl(folder, name) {
+  const rel = folder ? `${folder}/${name}` : name;
+  return `/samples/${rel.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function closeStemDropdown() {
+  if (dropdownOutsideHandler) {
+    document.removeEventListener("pointerdown", dropdownOutsideHandler, true);
+    dropdownOutsideHandler = null;
+  }
+  if (dropdownKeyHandler) {
+    document.removeEventListener("keydown", dropdownKeyHandler, true);
+    dropdownKeyHandler = null;
+  }
+  dropdownOnSelect = null;
+  if (dropdownAnchor) {
+    dropdownAnchor.classList.remove("is-open");
+    dropdownAnchor.setAttribute("aria-expanded", "false");
+    dropdownAnchor = null;
+  }
+  if (dropdownEl) {
+    dropdownEl.hidden = true;
+    dropdownEl.setAttribute("aria-hidden", "true");
+  }
+}
+
+function ensureDropdownDom() {
+  if (dropdownEl) return;
+  dropdownEl = document.createElement("div");
+  dropdownEl.className = "stem-dropdown";
+  dropdownEl.hidden = true;
+  dropdownEl.setAttribute("role", "listbox");
+  dropdownEl.setAttribute("aria-hidden", "true");
+  dropdownEl.innerHTML = `<div class="stem-dropdown-list" data-stem-dropdown-list></div>`;
+  document.body.appendChild(dropdownEl);
+  dropdownListEl = dropdownEl.querySelector("[data-stem-dropdown-list]");
+
+  dropdownEl.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+  });
+}
+
+function positionDropdown(anchor) {
+  if (!dropdownEl || !anchor) return;
+  const rect = anchor.getBoundingClientRect();
+  const pad = 8;
+  const maxW = Math.min(280, window.innerWidth - pad * 2);
+  let left = rect.left;
+  let top = rect.bottom + 4;
+
+  dropdownEl.style.width = `${maxW}px`;
+  dropdownEl.style.maxHeight = `${Math.min(320, window.innerHeight - pad * 2)}px`;
+  dropdownEl.hidden = false;
+  dropdownEl.setAttribute("aria-hidden", "false");
+
+  // Measure after show
+  const dd = dropdownEl.getBoundingClientRect();
+  if (left + dd.width > window.innerWidth - pad) {
+    left = Math.max(pad, window.innerWidth - pad - dd.width);
+  }
+  if (top + dd.height > window.innerHeight - pad) {
+    top = Math.max(pad, rect.top - dd.height - 4);
+  }
+  left = Math.max(pad, left);
+
+  dropdownEl.style.left = `${Math.round(left)}px`;
+  dropdownEl.style.top = `${Math.round(top)}px`;
+}
+
+function renderDropdownGroups(groups) {
+  if (!dropdownListEl) return;
+  dropdownListEl.replaceChildren();
+
+  if (!groups?.length) {
+    const empty = document.createElement("p");
+    empty.className = "stem-dropdown-empty";
+    empty.textContent = "No samples found";
+    dropdownListEl.appendChild(empty);
+    return;
+  }
+
+  for (const group of groups) {
+    const header = document.createElement("div");
+    header.className = "stem-dropdown-header";
+    header.textContent = folderHeaderLabel(group.folder);
+    dropdownListEl.appendChild(header);
+
+    for (const name of group.files || []) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "stem-dropdown-item";
+      btn.setAttribute("role", "option");
+      const label = name.replace(/\.[^.]+$/, "");
+      btn.textContent = label;
+      btn.title = name;
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const file = {
+          name,
+          path: group.folder ? `${group.folder}/${name}` : name,
+          url: sampleUrl(group.folder, name),
+          label,
+        };
+        const cb = dropdownOnSelect;
+        closeStemDropdown();
+        if (typeof cb === "function") cb(file);
+      });
+      dropdownListEl.appendChild(btn);
+    }
+  }
+}
+
+async function loadAllSamples() {
+  if (dropdownCache) return dropdownCache;
+  const res = await fetch("/api/samples/all");
+  if (!res.ok) throw new Error(`Could not load samples (${res.status})`);
+  dropdownCache = await res.json();
+  return dropdownCache;
+}
+
+/**
+ * Open a flat sample dropdown anchored to a StemSlot.
+ * @param {{ anchor: HTMLElement, onSelect?: (file: object) => void }} opts
+ */
+export async function openStemDropdown(opts = {}) {
+  ensureDropdownDom();
+  closeStemDropdown();
+  closeSamplePicker();
+
+  dropdownAnchor = opts.anchor || null;
+  if (dropdownAnchor) {
+    dropdownAnchor.classList.add("is-open");
+    dropdownAnchor.setAttribute("aria-expanded", "true");
+  }
+
+  dropdownOnSelect = typeof opts.onSelect === "function" ? opts.onSelect : null;
+  dropdownListEl.replaceChildren();
+  const loading = document.createElement("p");
+  loading.className = "stem-dropdown-empty";
+  loading.textContent = "Loading…";
+  dropdownListEl.appendChild(loading);
+  positionDropdown(opts.anchor);
+
+  try {
+    const data = await loadAllSamples();
+    renderDropdownGroups(data.groups || []);
+    positionDropdown(opts.anchor);
+    // #region agent log
+    {
+      const list = dropdownListEl;
+      const item = list?.querySelector(".stem-dropdown-item");
+      const header = list?.querySelector(".stem-dropdown-header");
+      const csItem = item ? getComputedStyle(item) : null;
+      const csList = list ? getComputedStyle(list) : null;
+      const csDrop = dropdownEl ? getComputedStyle(dropdownEl) : null;
+      fetch("http://127.0.0.1:7713/ingest/37fe76df-e741-4e85-9753-370c8a5ff593", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Debug-Session-Id": "6e0f59",
+        },
+        body: JSON.stringify({
+          sessionId: "6e0f59",
+          runId: "post-fix",
+          hypothesisId: "A-B-C-D",
+          location: "sample-picker.js:openStemDropdown",
+          message: "dropdown item/list computed metrics after render",
+          data: {
+            itemCount: list ? list.querySelectorAll(".stem-dropdown-item").length : 0,
+            list: list
+              ? {
+                  clientH: list.clientHeight,
+                  scrollH: list.scrollHeight,
+                  display: csList.display,
+                  flexDir: csList.flexDirection,
+                  overflow: csList.overflow,
+                  mask: csList.maskImage || csList.webkitMaskImage,
+                }
+              : null,
+            dropdown: dropdownEl
+              ? {
+                  maxH: dropdownEl.style.maxHeight,
+                  clientH: dropdownEl.clientHeight,
+                  display: csDrop.display,
+                  overflow: csDrop.overflow,
+                  backdrop: csDrop.backdropFilter,
+                }
+              : null,
+            item: item
+              ? {
+                  text: item.textContent,
+                  offsetH: item.offsetHeight,
+                  scrollH: item.scrollHeight,
+                  clientH: item.clientHeight,
+                  lineHeight: csItem.lineHeight,
+                  fontSize: csItem.fontSize,
+                  overflow: csItem.overflow,
+                  flexShrink: csItem.flexShrink,
+                  mask: csItem.maskImage || csItem.webkitMaskImage,
+                  padding: csItem.padding,
+                  display: csItem.display,
+                  className: item.className,
+                }
+              : null,
+            header: header
+              ? {
+                  offsetH: header.offsetHeight,
+                  lineHeight: getComputedStyle(header).lineHeight,
+                }
+              : null,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+    }
+    // #endregion
+  } catch (err) {
+    dropdownListEl.replaceChildren();
+    const errEl = document.createElement("p");
+    errEl.className = "stem-dropdown-empty";
+    errEl.textContent = err?.message || "Failed to load samples";
+    dropdownListEl.appendChild(errEl);
+  }
+
+  dropdownOutsideHandler = (event) => {
+    if (!dropdownEl || dropdownEl.hidden) return;
+    if (dropdownEl.contains(event.target)) return;
+    if (dropdownAnchor && dropdownAnchor.contains(event.target)) return;
+    closeStemDropdown();
+  };
+  dropdownKeyHandler = (event) => {
+    if (event.key === "Escape") closeStemDropdown();
+  };
+  // Next tick so the opening click does not immediately close
+  window.setTimeout(() => {
+    document.addEventListener("pointerdown", dropdownOutsideHandler, true);
+    document.addEventListener("keydown", dropdownKeyHandler, true);
+  }, 0);
+}
+
+export function invalidateSampleCache() {
+  dropdownCache = null;
+}
