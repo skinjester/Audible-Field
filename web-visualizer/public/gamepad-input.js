@@ -2,8 +2,8 @@
  * DualSense (and generic gamepad) → mixer-core, for browser-audio mode
  * without Max / OSC.
  *
- * Touchpad XY is not reliably exposed via the Gamepad API; use the on-screen
- * pad (mouse/touch) for the 2D mix, and the DualSense for sticks / face / D-pad.
+ * Gamepad API: sticks / face / D-pad / shoulders / triggers.
+ * Touchpad XY needs WebHID — see dualsense-hid.js (Connect button in UI).
  */
 
 import {
@@ -15,7 +15,7 @@ import {
   setStickClick,
   setTrigger,
   setFxStick,
-} from "./mixer-core.js?v=61";
+} from "./mixer-core.js?v=65";
 
 function lerp(inMin, inMax, outMin, outMax, value) {
   if (inMax === inMin) return outMin;

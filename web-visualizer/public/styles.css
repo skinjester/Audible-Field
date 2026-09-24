@@ -569,6 +569,51 @@ dd {
   flex: 0 0 auto;
 }
 
+.ds-hid {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.ds-hid-status {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  max-width: 22rem;
+  line-height: 1.35;
+}
+
+.ds-connect {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.ds-connect:hover:not(:disabled) {
+  border-color: rgba(110, 231, 183, 0.45);
+  color: var(--live);
+}
+
+.ds-connect:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ds-connect[data-state="connected"] {
+  border-color: rgba(110, 231, 183, 0.35);
+  color: var(--live);
+  background: rgba(110, 231, 183, 0.12);
+}
+
 .fx h2,
 .ctrl h2 {
   margin: 0;
@@ -892,6 +937,8 @@ dd {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
   max-width: 100%;
   padding: 0;
   border: 0;
@@ -900,6 +947,81 @@ dd {
   font: inherit;
   text-align: left;
   cursor: default;
+}
+
+.fx-plugin-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 0 6px;
+}
+
+.fx-plugin-row .fx-plugin {
+  margin: 0;
+}
+
+.fx-scale {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.fx-card dl > div.fx-axis {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fx-axis-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.fx-scale-btn {
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--card) 80%, #000);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.fx-scale-btn:hover {
+  color: var(--live);
+  border-color: color-mix(in srgb, var(--live) 45%, var(--line));
+}
+
+.fx-scale-input {
+  width: 3.2rem;
+  height: 22px;
+  margin: 0;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--card) 80%, #000);
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.fx-scale-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--live) 55%, var(--line));
 }
 
 .fx-card .fx-plugin .fx-plugin-label {
@@ -1098,7 +1220,9 @@ dd {
 
 @media (max-height: 820px) {
   .fx-card h3,
-  .fx-card .fx-plugin {
+  .fx-card .fx-plugin,
+  .fx-card .fx-plugin-static,
+  .fx-plugin-row {
     margin-bottom: 4px;
   }
 }

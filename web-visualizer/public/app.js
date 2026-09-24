@@ -1,7 +1,7 @@
 import {
   clamp01,
   controller,
-  mix,
+  equalPowerMix,
   notify,
   setActiveFx,
   setFxName as setFxNameCore,
@@ -17,12 +17,19 @@ import {
   state,
   tickMixer,
   STEM_CORNERS,
-} from "./mixer-core.js?v=61";
-import { hideVisualize, showVisualize } from "./visualize.js?v=80";
-import { audioEngine } from "./audio-engine.js?v=10";
-import { gamepadInput } from "./gamepad-input.js?v=3";
+} from "./mixer-core.js?v=65";
+import { hideVisualize, showVisualize } from "./visualize.js?v=82";
+import { audioEngine } from "./audio-engine.js?v=19";
+import { gamepadInput } from "./gamepad-input.js?v=6";
+import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=4";
 import { openStemDropdown } from "./sample-picker.js?v=15";
 import { openFxDropdown } from "./fx-picker.js?v=3";
+import {
+  DEFAULT_STICK_SCALE,
+  STICK_SCALE_STEP,
+  STICK_SCALE_MIN,
+  STICK_SCALE_MAX,
+} from "./wam-catalog.js?v=4";
 
 const pad = document.querySelector("[data-pad]");
 const cursor = document.querySelector("[data-cursor]");
@@ -49,6 +56,8 @@ const l1El = document.querySelector("[data-l1]");
 const r1El = document.querySelector("[data-r1]");
 const leftDot = document.querySelector('[data-stick-dot="left"]');
 const rightDot = document.querySelector('[data-stick-dot="right"]');
+const dsConnectBtn = document.querySelector("[data-ds-connect]");
+const dsStatusEl = document.querySelector("[data-ds-status]");
 const tabButtons = document.querySelectorAll("[data-tab]");
 const panels = document.querySelectorAll("[data-panel]");
 const vizCanvas = document.querySelector("[data-viz-canvas]");
@@ -160,12 +169,151 @@ function syncFxLabelsFromEngine() {
   setFxName("cross", "WAM Off");
   for (const slot of ["square", "triangle", "circle"]) {
     const assigned = audioEngine.fxAssignment?.[slot];
-    if (!assigned) continue;
-    const label =
-      assigned.kind === "wam"
-        ? `${assigned.label} (WAM)`
-        : `${assigned.label} (approx)`;
-    setFxName(slot, label);
+    const scaleWraps = document.querySelectorAll(`[data-fx-scale-wrap="${slot}"]`);
+    const xLabel = document.querySelector(`[data-fx-x-label="${slot}"]`);
+    const yLabel = document.querySelector(`[data-fx-y-label="${slot}"]`);
+    const isWam = assigned?.kind === "wam";
+    for (const wrap of scaleWraps) {
+      wrap.hidden = !isWam;
+    }
+    if (isWam) {
+      for (const axis of ["x", "y"]) {
+        const scaleInput = document.querySelector(
+          `[data-fx-scale="${slot}"][data-fx-scale-axis="${axis}"]`
+        );
+        if (scaleInput && document.activeElement !== scaleInput) {
+          scaleInput.value = String(audioEngine.getFxStickScale(slot, axis));
+        }
+      }
+      const binding = audioEngine.getFxStickParams(slot);
+      const xNames = Array.isArray(binding?.x)
+        ? binding.x.map((p) => p.label || p.id)
+        : [];
+      const yNames = Array.isArray(binding?.y)
+        ? binding.y.map((p) => p.label || p.id)
+        : [];
+      if (xLabel) {
+        xLabel.textContent = xNames.length
+          ? `X · ${xNames.join(" + ")}`
+          : "Stick X";
+      }
+      if (yLabel) {
+        yLabel.textContent = yNames.length
+          ? `Y · ${yNames.join(" + ")}`
+          : "Stick Y";
+      }
+      setFxName(slot, assigned.label);
+    } else if (assigned?.label) {
+      if (xLabel) xLabel.textContent = "Stick X";
+      if (yLabel) yLabel.textContent = "Stick Y";
+      setFxName(slot, assigned.label);
+    }
+  }
+}
+
+function clampStickScale(n) {
+  const v = Math.round((Number(n) || DEFAULT_STICK_SCALE) * 10) / 10;
+  return Math.min(STICK_SCALE_MAX, Math.max(STICK_SCALE_MIN, v));
+}
+
+function setStickScaleUi(slot, axis, value) {
+  if (axis !== "x" && axis !== "y") return;
+  const next = clampStickScale(value);
+  audioEngine.setFxStickScale(slot, axis, next);
+  const input = document.querySelector(
+    `[data-fx-scale="${slot}"][data-fx-scale-axis="${axis}"]`
+  );
+  if (input) input.value = String(next);
+}
+
+/** Hold a button to keep firing `step` until release (or leave / cancel). */
+function bindHoldRepeat(button, step, { delayMs = 350, intervalMs = 60 } = {}) {
+  if (!button) return;
+  let delayId = 0;
+  let intervalId = 0;
+
+  const stop = () => {
+    if (delayId) {
+      clearTimeout(delayId);
+      delayId = 0;
+    }
+    if (intervalId) {
+      clearInterval(intervalId);
+      intervalId = 0;
+    }
+  };
+
+  button.addEventListener("pointerdown", (event) => {
+    if (event.button != null && event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    stop();
+    step();
+    delayId = setTimeout(() => {
+      delayId = 0;
+      intervalId = setInterval(step, intervalMs);
+    }, delayMs);
+    try {
+      button.setPointerCapture(event.pointerId);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  button.addEventListener("pointerup", stop);
+  button.addEventListener("pointercancel", stop);
+  button.addEventListener("lostpointercapture", stop);
+  button.addEventListener("click", (event) => {
+    // Steps are driven by pointerdown / hold; suppress the default click.
+    event.preventDefault();
+    event.stopPropagation();
+  });
+}
+
+function bindStickScaleControls() {
+  for (const slot of ["square", "triangle", "circle"]) {
+    for (const axis of ["x", "y"]) {
+      const wrap = document.querySelector(
+        `[data-fx-scale-wrap="${slot}"][data-fx-scale-axis="${axis}"]`
+      );
+      const input = document.querySelector(
+        `[data-fx-scale="${slot}"][data-fx-scale-axis="${axis}"]`
+      );
+      const dec = document.querySelector(
+        `[data-fx-scale-dec="${slot}"][data-fx-scale-axis="${axis}"]`
+      );
+      const inc = document.querySelector(
+        `[data-fx-scale-inc="${slot}"][data-fx-scale-axis="${axis}"]`
+      );
+      if (wrap) {
+        wrap.addEventListener("click", (event) => event.stopPropagation());
+        wrap.addEventListener("pointerdown", (event) => event.stopPropagation());
+      }
+      if (input) {
+        input.addEventListener("change", () => setStickScaleUi(slot, axis, input.value));
+        input.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            setStickScaleUi(slot, axis, input.value);
+            input.blur();
+          }
+        });
+      }
+      bindHoldRepeat(dec, () => {
+        setStickScaleUi(
+          slot,
+          axis,
+          audioEngine.getFxStickScale(slot, axis) - STICK_SCALE_STEP
+        );
+      });
+      bindHoldRepeat(inc, () => {
+        setStickScaleUi(
+          slot,
+          axis,
+          audioEngine.getFxStickScale(slot, axis) + STICK_SCALE_STEP
+        );
+      });
+    }
   }
 }
 
@@ -179,10 +327,7 @@ async function assignFxPlugin(slot, choice) {
     const assigned = await audioEngine.replaceFx(slot, choice);
     syncFxLabelsFromEngine();
     setActiveFx(slot);
-    const label =
-      assigned?.kind === "wam"
-        ? `${assigned.label} (WAM)`
-        : `${assigned?.label || choice.label} (approx)`;
+    const label = assigned?.label || choice.label;
     setStatus("audio", `${fxButtonLabels[slot] || slot} ← ${label}`);
     renderDiagnostics();
   } catch (err) {
@@ -209,12 +354,10 @@ function openFxPicker(slot, anchor) {
 function activateFaceButton(button) {
   if (!controller.fx[button]) return;
   setActiveFx(button);
+  // X / Cross only switches the wet insert off the WAM faces (slot gains).
+  // Do not tear down WAM assignments or stick scales — press Square/△/○ to hear them again.
   if (button === "cross" && inputMode === "browser" && audioEngine.running) {
-    void audioEngine.disableAllWams().then(() => {
-      syncFxLabelsFromEngine();
-      setStatus("audio", "X · WAM Off");
-      renderDiagnostics();
-    });
+    setStatus("audio", "X · WAM Off");
   }
   renderDiagnostics();
 }
@@ -296,9 +439,10 @@ function renderDiagnostics() {
   if (yEl) yEl.textContent = state.y.toFixed(2);
   setDpadLabel();
 
-  const volumes = mix(state.x, state.y);
-  for (const [key, value] of Object.entries(volumes)) {
-    vols[key].textContent = `${Math.round(value * 100)}%`;
+  // Power share (gain²) so the four % labels still sum ~100 and match hearing.
+  const gains = equalPowerMix(state.x, state.y);
+  for (const [key, gain] of Object.entries(gains)) {
+    vols[key].textContent = `${Math.round(gain * gain * 100)}%`;
   }
 
   if (fxActiveEl) fxActiveEl.textContent = fxLabels[controller.activeFx] || controller.activeFx;
@@ -307,8 +451,15 @@ function renderDiagnostics() {
     card.dataset.on = key === controller.activeFx ? "true" : "";
     const fxXEl = card.querySelector("[data-fx-x]");
     const fxYEl = card.querySelector("[data-fx-y]");
-    if (fxXEl) fxXEl.textContent = fmt(controller.fx[key].x);
-    if (fxYEl) fxYEl.textContent = fmt(controller.fx[key].y);
+    if (audioEngine.fxAssignment?.[key]?.kind === "wam") {
+      const x01 = Math.min(1, Math.max(0, (Number(controller.rawX) || 0) * 0.5 + 0.5));
+      const y01 = Math.min(1, Math.max(0, (Number(controller.rawY) || 0) * 0.5 + 0.5));
+      if (fxXEl) fxXEl.textContent = fmt(x01);
+      if (fxYEl) fxYEl.textContent = fmt(y01);
+    } else {
+      if (fxXEl) fxXEl.textContent = fmt(controller.fx[key].x);
+      if (fxYEl) fxYEl.textContent = fmt(controller.fx[key].y);
+    }
   }
 
   if (stickRawXEl) stickRawXEl.textContent = fmt(controller.rawX);
@@ -432,7 +583,85 @@ function applyMaxPad(x, y, source) {
 function browserStatusLabel() {
   if (audioStarting) return "Loading beds…";
   if (!audioEngine.running) return "Browser audio — click pad to start";
+  if (audioEngine.ctx?.state === "suspended") {
+    return "Browser audio — click pad to unmute";
+  }
+  if (dualsenseHid.connected) {
+    return "Browser audio · DualSense touchpad";
+  }
   return "Browser audio · mouse + DualSense";
+}
+
+function isEmbeddedIdeBrowser() {
+  try {
+    if (window.self !== window.top) return true;
+  } catch {
+    return true;
+  }
+  const ua = navigator.userAgent || "";
+  // Cursor / VS Code Simple Browser ride on Electron and usually lack a HID chooser.
+  if (/Electron/i.test(ua) && !/Edg\//i.test(ua)) return true;
+  if (/Cursor|VSCode|Code\/1\d/i.test(ua)) return true;
+  return false;
+}
+
+function updateDualsenseHidUi() {
+  if (!dsStatusEl || !dsConnectBtn) return;
+
+  const browser = inputMode === "browser";
+  const embedded = isEmbeddedIdeBrowser();
+
+  if (!DualsenseHid.isSupported()) {
+    dsStatusEl.textContent = "Touchpad: Chrome / Edge only (WebHID)";
+    dsConnectBtn.disabled = true;
+    dsConnectBtn.textContent = "Unavailable";
+    dsConnectBtn.dataset.state = "unavailable";
+  } else if (embedded) {
+    dsStatusEl.textContent =
+      "Touchpad: open http://localhost:8080 in Chrome or Edge (Cursor browser can’t use WebHID)";
+    dsConnectBtn.disabled = true;
+    dsConnectBtn.textContent = "Use Chrome / Edge";
+    dsConnectBtn.dataset.state = "unavailable";
+  } else if (!browser) {
+    dsStatusEl.textContent = "Touchpad: switch to Browser audio";
+    dsConnectBtn.disabled = true;
+    dsConnectBtn.textContent = "Connect touchpad";
+    dsConnectBtn.dataset.state = "";
+  } else if (dualsenseHid.connected) {
+    const via =
+      dualsenseHid.connectionType === "bluetooth"
+        ? "BT"
+        : dualsenseHid.connectionType === "usb"
+          ? "USB"
+          : "HID";
+    const reports = dualsenseHid.reportCount;
+    const touch = dualsenseHid.touch.active ? " · finger" : "";
+    const rid =
+      dualsenseHid.lastReportId != null
+        ? ` · r0x${dualsenseHid.lastReportId.toString(16)}`
+        : "";
+    dsStatusEl.textContent = reports
+      ? `Touchpad: ${via}${rid} · ${reports} reports${touch}`
+      : `Touchpad: ${dualsenseHid.padId || "DualSense"} (${via}) — waiting for reports…`;
+    dsConnectBtn.disabled = false;
+    dsConnectBtn.textContent = "Reconnect";
+    dsConnectBtn.dataset.state = "connected";
+  } else {
+    dsStatusEl.textContent = "Touchpad: connect once to grant WebHID";
+    dsConnectBtn.disabled = false;
+    dsConnectBtn.textContent = "Connect touchpad";
+    dsConnectBtn.dataset.state = "";
+  }
+
+  lastDsHidUiKey = `${inputMode}|${dualsenseHid.connected}|${dualsenseHid.connectionType}|${dualsenseHid.padId}|${DualsenseHid.isSupported()}|${embedded}|${dualsenseHid.reportCount > 0}|${dualsenseHid.touch.active}|${dualsenseHid.lastReportId}`;
+}
+
+let lastDsHidUiKey = "";
+
+function syncDualsenseHidUi() {
+  const key = `${inputMode}|${dualsenseHid.connected}|${dualsenseHid.connectionType}|${dualsenseHid.padId}|${DualsenseHid.isSupported()}|${isEmbeddedIdeBrowser()}|${dualsenseHid.reportCount > 0}|${dualsenseHid.touch.active}|${dualsenseHid.lastReportId}`;
+  if (key === lastDsHidUiKey) return;
+  updateDualsenseHidUi();
 }
 
 async function ensureBrowserAudio() {
@@ -479,22 +708,26 @@ async function setInputMode(mode) {
 
   if (mode === "browser") {
     gamepadInput.enable();
+    dualsenseHid.enable();
     setFxName("cross", "WAM Off");
-    setFxName("square", "Comb (approx)");
-    setFxName("triangle", "Formant (approx)");
-    setFxName("circle", "Crystallizer (approx)");
+    setFxName("square", "Comb");
+    setFxName("triangle", "Formant");
+    setFxName("circle", "Crystallizer");
     setStatus(audioEngine.running ? "audio" : "loading", browserStatusLabel());
     await ensureBrowserAudio();
     syncFxLabelsFromEngine();
     setStatus(audioEngine.running ? "audio" : "offline", browserStatusLabel());
+    updateDualsenseHidUi();
   } else {
     gamepadInput.disable();
+    dualsenseHid.disable();
     if (audioEngine.running) await audioEngine.stop();
     setFxName("cross", "WAM Off");
     setFxName("square", "kHs Comb Filter");
     setFxName("triangle", "kHs Formant Filter");
     setFxName("circle", "Crystallizer");
     setStatus(socketState === "live" ? "live" : "open", "Connected — waiting for Max");
+    updateDualsenseHidUi();
   }
   renderDiagnostics();
 }
@@ -503,11 +736,16 @@ function tick(now) {
   try {
     if (inputMode === "browser") {
       gamepadInput.poll();
+      if (dualsenseHid.poll() && sourceEl) {
+        sourceEl.textContent = state.source;
+      }
+      syncDualsenseHidUi();
       if (audioEngine.running) {
         audioEngine.sync(state, controller);
         syncFxLabelsFromEngine();
-        if (socketState !== "audio") {
-          setStatus("audio", browserStatusLabel());
+        const label = browserStatusLabel();
+        if (socketState !== "audio" || statusLabel?.textContent !== label) {
+          setStatus("audio", label);
         }
       }
     }
@@ -663,10 +901,12 @@ for (const stickEl of document.querySelectorAll("[data-stick]")) {
 }
 bindUiShoulder(l1El, "l1");
 bindUiShoulder(r1El, "r1");
+bindStickScaleControls();
 
 pad.addEventListener("pointerdown", (event) => {
   pad.setPointerCapture(event.pointerId);
   state.dragging = true;
+  dualsenseHid.uiLockPad = true;
   const point = pointFromEvent(event);
   setTargetFromInput(point.x, point.y, "mouse", true);
   if (inputMode === "browser") void ensureBrowserAudio();
@@ -680,7 +920,49 @@ pad.addEventListener("pointermove", (event) => {
 
 pad.addEventListener("pointerup", () => {
   state.dragging = false;
+  dualsenseHid.uiLockPad = false;
 });
+
+pad.addEventListener("pointercancel", () => {
+  state.dragging = false;
+  dualsenseHid.uiLockPad = false;
+});
+
+pad.addEventListener("lostpointercapture", () => {
+  state.dragging = false;
+  dualsenseHid.uiLockPad = false;
+});
+
+if (dsConnectBtn) {
+  dsConnectBtn.addEventListener("click", async () => {
+    // requestDevice MUST stay in the same user-gesture turn — do not await
+    // audio startup / mode switch before opening the HID picker.
+    try {
+      const ok = await dualsenseHid.requestDevice();
+      if (inputMode !== "browser") {
+        await setInputMode("browser");
+      } else {
+        dualsenseHid.enable();
+      }
+      updateDualsenseHidUi();
+      if (ok) {
+        setStatus("audio", browserStatusLabel());
+        void ensureBrowserAudio();
+      } else if (dualsenseHid.lastError && dsStatusEl) {
+        dsStatusEl.textContent = `Touchpad: ${dualsenseHid.lastError}`;
+      }
+    } catch (err) {
+      console.error(err);
+      if (dsStatusEl) {
+        dsStatusEl.textContent =
+          err?.message || "Touchpad: permission denied or unavailable";
+      }
+      updateDualsenseHidUi();
+    }
+  });
+}
+
+updateDualsenseHidUi();
 
 // Click FX cards to activate; Square/Triangle/Circle titles open WAM picker
 for (const [button, card] of Object.entries(fxCards)) {

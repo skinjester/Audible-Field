@@ -1,0 +1,1395 @@
+{
+  "burns-audio/reverb/index.js": {
+    "name": "Microverb",
+    "vendor": "Sequencer Party",
+    "params": {
+      "wet": {
+        "label": "wet",
+        "min": 0,
+        "max": 1,
+        "default": 0.3,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "wet",
+        "label": "wet",
+        "min": 0,
+        "max": 1,
+        "def": 0.3
+      }
+    ],
+    "error": null
+  },
+  "burns-audio/distortion/index.js": {
+    "name": "Simple Distortion",
+    "vendor": "Sequencer Party",
+    "params": {
+      "overdrive": {
+        "label": "overdrive",
+        "min": 1,
+        "max": 10,
+        "default": 1,
+        "type": "float"
+      },
+      "flavor": {
+        "label": "flavor",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "type": "float"
+      },
+      "level": {
+        "label": "level",
+        "min": 0,
+        "max": 2,
+        "default": 1,
+        "type": "float"
+      },
+      "offset": {
+        "label": "offset",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "flavor",
+        "label": "flavor",
+        "min": 0,
+        "max": 1,
+        "def": 0
+      },
+      {
+        "id": "level",
+        "label": "level",
+        "min": 0,
+        "max": 2,
+        "def": 1
+      },
+      {
+        "id": "offset",
+        "label": "offset",
+        "min": 0,
+        "max": 1,
+        "def": 0
+      },
+      {
+        "id": "overdrive",
+        "label": "overdrive",
+        "min": 1,
+        "max": 10,
+        "def": 1
+      }
+    ],
+    "error": null
+  },
+  "wimmics/DualPitchShifter/index.js": {
+    "name": "DualPitchShifter",
+    "vendor": "Wimmics",
+    "params": {
+      "/DualPitchShifter/Mix": {
+        "label": "/DualPitchShifter/Mix",
+        "min": 0,
+        "max": 1,
+        "default": 0.5,
+        "type": "float"
+      },
+      "/DualPitchShifter/ShiftL": {
+        "label": "/DualPitchShifter/ShiftL",
+        "min": -12,
+        "max": 12,
+        "default": 0,
+        "type": "float"
+      },
+      "/DualPitchShifter/WindowSize": {
+        "label": "/DualPitchShifter/WindowSize",
+        "min": 20,
+        "max": 1000,
+        "default": 50,
+        "type": "float"
+      },
+      "/DualPitchShifter/bypass": {
+        "label": "/DualPitchShifter/bypass",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 0,
+        "type": "float"
+      },
+      "/DualPitchShifter/ShiftR": {
+        "label": "/DualPitchShifter/ShiftR",
+        "min": -12,
+        "max": 12,
+        "default": 0,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "/DualPitchShifter/Mix",
+        "label": "Mix",
+        "min": 0,
+        "max": 1,
+        "def": 0.5
+      },
+      {
+        "id": "/DualPitchShifter/ShiftL",
+        "label": "ShiftL",
+        "min": -12,
+        "max": 12,
+        "def": 0
+      },
+      {
+        "id": "/DualPitchShifter/ShiftR",
+        "label": "ShiftR",
+        "min": -12,
+        "max": 12,
+        "def": 0
+      },
+      {
+        "id": "/DualPitchShifter/WindowSize",
+        "label": "WindowSize",
+        "min": 20,
+        "max": 1000,
+        "def": 50
+      }
+    ],
+    "error": null
+  },
+  "wimmics/graphicEqualizer/index.js": {
+    "name": "GraphicEqualizer",
+    "vendor": "Wimmics",
+    "params": {
+      "enabled": {
+        "label": "enabled",
+        "min": 0,
+        "max": 1,
+        "default": 1,
+        "type": "float"
+      },
+      "highpass_0_Q": {
+        "label": "highpass_0_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 0.000009999999747378752,
+        "type": "float"
+      },
+      "highpass_0_detune": {
+        "label": "highpass_0_detune",
+        "min": -153600,
+        "max": 153600,
+        "default": 0,
+        "type": "float"
+      },
+      "highpass_0_frequency": {
+        "label": "highpass_0_frequency",
+        "min": 0,
+        "max": 24000,
+        "default": 40,
+        "type": "float"
+      },
+      "highpass_0_gain": {
+        "label": "highpass_0_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "default": 12,
+        "type": "float"
+      },
+      "lowshelf_1_Q": {
+        "label": "lowshelf_1_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 0,
+        "type": "float"
+      },
+      "lowshelf_1_detune": {
+        "label": "lowshelf_1_detune",
+        "min": -153600,
+        "max": 153600,
+        "default": 0,
+        "type": "float"
+      },
+      "lowshelf_1_frequency": {
+        "label": "lowshelf_1_frequency",
+        "min": 0,
+        "max": 24000,
+        "default": 80,
+        "type": "float"
+      },
+      "lowshelf_1_gain": {
+        "label": "lowshelf_1_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "default": 0,
+        "type": "float"
+      },
+      "peaking_2_Q": {
+        "label": "peaking_2_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 1,
+        "type": "float"
+      },
+      "peaking_2_detune": {
+        "label": "peaking_2_detune",
+        "min": -153600,
+        "max": 153600,
+        "default": 0,
+        "type": "float"
+      },
+      "peaking_2_frequency": {
+        "label": "peaking_2_frequency",
+        "min": 0,
+        "max": 24000,
+        "default": 230,
+        "type": "float"
+      },
+      "peaking_2_gain": {
+        "label": "peaking_2_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "default": 0,
+        "type": "float"
+      },
+      "peaking_3_Q": {
+        "label": "peaking_3_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 1,
+        "type": "float"
+      },
+      "peaking_3_detune": {
+        "label": "peaking_3_detune",
+        "min": -153600,
+        "max": 153600,
+        "default": 0,
+        "type": "float"
+      },
+      "peaking_3_frequency": {
+        "label": "peaking_3_frequency",
+        "min": 0,
+        "max": 24000,
+        "default": 2500,
+        "type": "float"
+      },
+      "peaking_3_gain": {
+        "label": "peaking_3_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "default": 0,
+        "type": "float"
+      },
+      "peaking_4_Q": {
+        "label": "peaking_4_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 1,
+        "type": "float"
+      },
+      "peaking_4_detune": {
+        "label": "peaking_4_detune",
+        "min": -153600,
+        "max": 153600,
+        "default": 0,
+        "type": "float"
+      },
+      "peaking_4_frequency": {
+        "label": "peaking_4_frequency",
+        "min": 0,
+        "max": 24000,
+        "default": 5000,
+        "type": "float"
+      },
+      "peaking_4_gain": {
+        "label": "peaking_4_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "default": 0,
+        "type": "float"
+      },
+      "highshelf_5_Q": {
+        "label": "highshelf_5_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 1,
+        "type": "float"
+      },
+      "highshelf_5_detune": {
+        "label": "highshelf_5_detune",
+        "min": -153600,
+        "max": 153600,
+        "default": 0,
+        "type": "float"
+      },
+      "highshelf_5_frequency": {
+        "label": "highshelf_5_frequency",
+        "min": 0,
+        "max": 24000,
+        "default": 10000,
+        "type": "float"
+      },
+      "highshelf_5_gain": {
+        "label": "highshelf_5_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "default": 0,
+        "type": "float"
+      },
+      "lowpass_6_Q": {
+        "label": "lowpass_6_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 0.000009999999747378752,
+        "type": "float"
+      },
+      "lowpass_6_detune": {
+        "label": "lowpass_6_detune",
+        "min": -153600,
+        "max": 153600,
+        "default": 0,
+        "type": "float"
+      },
+      "lowpass_6_frequency": {
+        "label": "lowpass_6_frequency",
+        "min": 0,
+        "max": 24000,
+        "default": 18000,
+        "type": "float"
+      },
+      "lowpass_6_gain": {
+        "label": "lowpass_6_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "default": 12,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "enabled",
+        "label": "enabled",
+        "min": 0,
+        "max": 1,
+        "def": 1
+      },
+      {
+        "id": "highpass_0_detune",
+        "label": "highpass_0_detune",
+        "min": -153600,
+        "max": 153600,
+        "def": 0
+      },
+      {
+        "id": "highpass_0_frequency",
+        "label": "highpass_0_frequency",
+        "min": 0,
+        "max": 24000,
+        "def": 40
+      },
+      {
+        "id": "highpass_0_gain",
+        "label": "highpass_0_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "def": 12
+      },
+      {
+        "id": "highpass_0_Q",
+        "label": "highpass_0_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "def": 0.000009999999747378752
+      },
+      {
+        "id": "highshelf_5_detune",
+        "label": "highshelf_5_detune",
+        "min": -153600,
+        "max": 153600,
+        "def": 0
+      },
+      {
+        "id": "highshelf_5_frequency",
+        "label": "highshelf_5_frequency",
+        "min": 0,
+        "max": 24000,
+        "def": 10000
+      },
+      {
+        "id": "highshelf_5_gain",
+        "label": "highshelf_5_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "def": 0
+      },
+      {
+        "id": "highshelf_5_Q",
+        "label": "highshelf_5_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "def": 1
+      },
+      {
+        "id": "lowpass_6_detune",
+        "label": "lowpass_6_detune",
+        "min": -153600,
+        "max": 153600,
+        "def": 0
+      },
+      {
+        "id": "lowpass_6_frequency",
+        "label": "lowpass_6_frequency",
+        "min": 0,
+        "max": 24000,
+        "def": 18000
+      },
+      {
+        "id": "lowpass_6_gain",
+        "label": "lowpass_6_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "def": 12
+      },
+      {
+        "id": "lowpass_6_Q",
+        "label": "lowpass_6_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "def": 0.000009999999747378752
+      },
+      {
+        "id": "lowshelf_1_detune",
+        "label": "lowshelf_1_detune",
+        "min": -153600,
+        "max": 153600,
+        "def": 0
+      },
+      {
+        "id": "lowshelf_1_frequency",
+        "label": "lowshelf_1_frequency",
+        "min": 0,
+        "max": 24000,
+        "def": 80
+      },
+      {
+        "id": "lowshelf_1_gain",
+        "label": "lowshelf_1_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "def": 0
+      },
+      {
+        "id": "lowshelf_1_Q",
+        "label": "lowshelf_1_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "def": 0
+      },
+      {
+        "id": "peaking_2_detune",
+        "label": "peaking_2_detune",
+        "min": -153600,
+        "max": 153600,
+        "def": 0
+      },
+      {
+        "id": "peaking_2_frequency",
+        "label": "peaking_2_frequency",
+        "min": 0,
+        "max": 24000,
+        "def": 230
+      },
+      {
+        "id": "peaking_2_gain",
+        "label": "peaking_2_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "def": 0
+      },
+      {
+        "id": "peaking_2_Q",
+        "label": "peaking_2_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "def": 1
+      },
+      {
+        "id": "peaking_3_detune",
+        "label": "peaking_3_detune",
+        "min": -153600,
+        "max": 153600,
+        "def": 0
+      },
+      {
+        "id": "peaking_3_frequency",
+        "label": "peaking_3_frequency",
+        "min": 0,
+        "max": 24000,
+        "def": 2500
+      },
+      {
+        "id": "peaking_3_gain",
+        "label": "peaking_3_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "def": 0
+      },
+      {
+        "id": "peaking_3_Q",
+        "label": "peaking_3_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "def": 1
+      },
+      {
+        "id": "peaking_4_detune",
+        "label": "peaking_4_detune",
+        "min": -153600,
+        "max": 153600,
+        "def": 0
+      },
+      {
+        "id": "peaking_4_frequency",
+        "label": "peaking_4_frequency",
+        "min": 0,
+        "max": 24000,
+        "def": 5000
+      },
+      {
+        "id": "peaking_4_gain",
+        "label": "peaking_4_gain",
+        "min": -3.4028234663852886e+38,
+        "max": 1541.273681640625,
+        "def": 0
+      },
+      {
+        "id": "peaking_4_Q",
+        "label": "peaking_4_Q",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "def": 1
+      }
+    ],
+    "error": null
+  },
+  "wimmics/greyhole/index.js": {
+    "name": "Grey Hole",
+    "vendor": "Wimmics",
+    "params": {
+      "/greyhole/diffusion": {
+        "label": "/greyhole/diffusion",
+        "min": 0,
+        "max": 0.9900000095367432,
+        "default": 0.5,
+        "type": "float"
+      },
+      "/greyhole/modDepth": {
+        "label": "/greyhole/modDepth",
+        "min": 0,
+        "max": 1,
+        "default": 0.10000000149011612,
+        "type": "float"
+      },
+      "/greyhole/bypass": {
+        "label": "/greyhole/bypass",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 0,
+        "type": "float"
+      },
+      "/greyhole/damping": {
+        "label": "/greyhole/damping",
+        "min": 0,
+        "max": 0.9900000095367432,
+        "default": 0,
+        "type": "float"
+      },
+      "/greyhole/feedback": {
+        "label": "/greyhole/feedback",
+        "min": 0,
+        "max": 1,
+        "default": 0.8999999761581421,
+        "type": "float"
+      },
+      "/greyhole/modFreq": {
+        "label": "/greyhole/modFreq",
+        "min": 0,
+        "max": 10,
+        "default": 2,
+        "type": "float"
+      },
+      "/greyhole/size": {
+        "label": "/greyhole/size",
+        "min": 0.5,
+        "max": 3,
+        "default": 1,
+        "type": "float"
+      },
+      "/greyhole/delayTime": {
+        "label": "/greyhole/delayTime",
+        "min": 0.0010000000474974513,
+        "max": 1.4500000476837158,
+        "default": 0.20000000298023224,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "/greyhole/damping",
+        "label": "damping",
+        "min": 0,
+        "max": 0.9900000095367432,
+        "def": 0
+      },
+      {
+        "id": "/greyhole/delayTime",
+        "label": "delayTime",
+        "min": 0.0010000000474974513,
+        "max": 1.4500000476837158,
+        "def": 0.20000000298023224
+      },
+      {
+        "id": "/greyhole/diffusion",
+        "label": "diffusion",
+        "min": 0,
+        "max": 0.9900000095367432,
+        "def": 0.5
+      },
+      {
+        "id": "/greyhole/feedback",
+        "label": "feedback",
+        "min": 0,
+        "max": 1,
+        "def": 0.8999999761581421
+      },
+      {
+        "id": "/greyhole/modDepth",
+        "label": "modDepth",
+        "min": 0,
+        "max": 1,
+        "def": 0.10000000149011612
+      },
+      {
+        "id": "/greyhole/modFreq",
+        "label": "modFreq",
+        "min": 0,
+        "max": 10,
+        "def": 2
+      },
+      {
+        "id": "/greyhole/size",
+        "label": "size",
+        "min": 0.5,
+        "max": 3,
+        "def": 1
+      }
+    ],
+    "error": null
+  },
+  "wimmics/OwlDirty/index.js": {
+    "name": "OwlDirty",
+    "vendor": "Wimmics",
+    "params": {
+      "/OwlDirty/bypass": {
+        "label": "/OwlDirty/bypass",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 0,
+        "type": "float"
+      },
+      "/OwlDirty/TONE": {
+        "label": "/OwlDirty/TONE",
+        "min": 900,
+        "max": 8000,
+        "default": 4000,
+        "type": "float"
+      },
+      "/OwlDirty/MIX": {
+        "label": "/OwlDirty/MIX",
+        "min": 0,
+        "max": 1,
+        "default": 0.75,
+        "type": "float"
+      },
+      "/OwlDirty/DECAY": {
+        "label": "/OwlDirty/DECAY",
+        "min": 0.5,
+        "max": 1,
+        "default": 0.699999988079071,
+        "type": "float"
+      },
+      "/OwlDirty/DRIVE": {
+        "label": "/OwlDirty/DRIVE",
+        "min": 0,
+        "max": 0.699999988079071,
+        "default": 0,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "/OwlDirty/DECAY",
+        "label": "DECAY",
+        "min": 0.5,
+        "max": 1,
+        "def": 0.699999988079071
+      },
+      {
+        "id": "/OwlDirty/DRIVE",
+        "label": "DRIVE",
+        "min": 0,
+        "max": 0.699999988079071,
+        "def": 0
+      },
+      {
+        "id": "/OwlDirty/MIX",
+        "label": "MIX",
+        "min": 0,
+        "max": 1,
+        "def": 0.75
+      },
+      {
+        "id": "/OwlDirty/TONE",
+        "label": "TONE",
+        "min": 900,
+        "max": 8000,
+        "def": 4000
+      }
+    ],
+    "error": null
+  },
+  "wimmics/OwlShimmer/index.js": {
+    "name": "OWLShimmer",
+    "vendor": "Wimmics",
+    "params": {
+      "/untitled/TONE": {
+        "label": "/untitled/TONE",
+        "min": 900,
+        "max": 8000,
+        "default": 4000,
+        "type": "float"
+      },
+      "/untitled/DECAY": {
+        "label": "/untitled/DECAY",
+        "min": 0.5,
+        "max": 1,
+        "default": 0.699999988079071,
+        "type": "float"
+      },
+      "/untitled/MIX": {
+        "label": "/untitled/MIX",
+        "min": 0,
+        "max": 1,
+        "default": 0.75,
+        "type": "float"
+      },
+      "/untitled/bypass": {
+        "label": "/untitled/bypass",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 0,
+        "type": "float"
+      },
+      "/untitled/SHIMMER": {
+        "label": "/untitled/SHIMMER",
+        "min": 0,
+        "max": 0.699999988079071,
+        "default": 0.30000001192092896,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "/untitled/DECAY",
+        "label": "DECAY",
+        "min": 0.5,
+        "max": 1,
+        "def": 0.699999988079071
+      },
+      {
+        "id": "/untitled/MIX",
+        "label": "MIX",
+        "min": 0,
+        "max": 1,
+        "def": 0.75
+      },
+      {
+        "id": "/untitled/SHIMMER",
+        "label": "SHIMMER",
+        "min": 0,
+        "max": 0.699999988079071,
+        "def": 0.30000001192092896
+      },
+      {
+        "id": "/untitled/TONE",
+        "label": "TONE",
+        "min": 900,
+        "max": 8000,
+        "def": 4000
+      }
+    ],
+    "error": null
+  },
+  "wimmics/pingpongdelay/dist/index.js": {
+    "name": "PingPongDelay",
+    "vendor": "Wimmics",
+    "params": {
+      "feedback": {
+        "label": "feedback",
+        "min": 0,
+        "max": 1,
+        "default": 0.5,
+        "type": "float"
+      },
+      "time": {
+        "label": "time",
+        "min": 0,
+        "max": 1,
+        "default": 0.5,
+        "type": "float"
+      },
+      "mix": {
+        "label": "mix",
+        "min": 0,
+        "max": 1,
+        "default": 0.5,
+        "type": "float"
+      },
+      "enabled": {
+        "label": "enabled",
+        "min": 0,
+        "max": 1,
+        "default": 1,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "enabled",
+        "label": "enabled",
+        "min": 0,
+        "max": 1,
+        "def": 1
+      },
+      {
+        "id": "feedback",
+        "label": "feedback",
+        "min": 0,
+        "max": 1,
+        "def": 0.5
+      },
+      {
+        "id": "mix",
+        "label": "mix",
+        "min": 0,
+        "max": 1,
+        "def": 0.5
+      },
+      {
+        "id": "time",
+        "label": "time",
+        "min": 0,
+        "max": 1,
+        "def": 0.5
+      }
+    ],
+    "error": null
+  },
+  "wimmics/quadrafuzz/dist/index.js": {
+    "name": "QuadraFuzz",
+    "vendor": "Wimmics",
+    "params": {
+      "lowGain": {
+        "label": "lowGain",
+        "min": 0,
+        "max": 1,
+        "default": 0.6,
+        "type": "float"
+      },
+      "midLowGain": {
+        "label": "midLowGain",
+        "min": 0,
+        "max": 1,
+        "default": 0.8,
+        "type": "float"
+      },
+      "midHighGain": {
+        "label": "midHighGain",
+        "min": 0,
+        "max": 1,
+        "default": 0.5,
+        "type": "float"
+      },
+      "highGain": {
+        "label": "highGain",
+        "min": 0,
+        "max": 1,
+        "default": 0.5,
+        "type": "float"
+      },
+      "enabled": {
+        "label": "enabled",
+        "min": 0,
+        "max": 1,
+        "default": 1,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "enabled",
+        "label": "enabled",
+        "min": 0,
+        "max": 1,
+        "def": 1
+      },
+      {
+        "id": "highGain",
+        "label": "highGain",
+        "min": 0,
+        "max": 1,
+        "def": 0.5
+      },
+      {
+        "id": "lowGain",
+        "label": "lowGain",
+        "min": 0,
+        "max": 1,
+        "def": 0.6
+      },
+      {
+        "id": "midHighGain",
+        "label": "midHighGain",
+        "min": 0,
+        "max": 1,
+        "def": 0.5
+      },
+      {
+        "id": "midLowGain",
+        "label": "midLowGain",
+        "min": 0,
+        "max": 1,
+        "def": 0.8
+      }
+    ],
+    "error": null
+  },
+  "wimmics/stonephaser/index.js": {
+    "name": "StonePhaser",
+    "vendor": "Wimmics",
+    "params": {
+      "/untitled/Bypass": {
+        "label": "/untitled/Bypass",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 0,
+        "type": "float"
+      },
+      "/untitled/Dry/wet mix": {
+        "label": "/untitled/Dry/wet mix",
+        "min": 0,
+        "max": 100,
+        "default": 50,
+        "type": "float"
+      },
+      "/untitled/Feedback depth": {
+        "label": "/untitled/Feedback depth",
+        "min": 0,
+        "max": 99,
+        "default": 75,
+        "type": "float"
+      },
+      "/untitled/Feedback bass cut": {
+        "label": "/untitled/Feedback bass cut",
+        "min": 10,
+        "max": 5000,
+        "default": 500,
+        "type": "float"
+      },
+      "/untitled/Color": {
+        "label": "/untitled/Color",
+        "min": 0,
+        "max": 1,
+        "default": 1,
+        "type": "float"
+      },
+      "/untitled/LFO frequency": {
+        "label": "/untitled/LFO frequency",
+        "min": 0.009999999776482582,
+        "max": 5,
+        "default": 0.20000000298023224,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "/untitled/Color",
+        "label": "Color",
+        "min": 0,
+        "max": 1,
+        "def": 1
+      },
+      {
+        "id": "/untitled/Dry/wet mix",
+        "label": "wet mix",
+        "min": 0,
+        "max": 100,
+        "def": 50
+      },
+      {
+        "id": "/untitled/Feedback bass cut",
+        "label": "Feedback bass cut",
+        "min": 10,
+        "max": 5000,
+        "def": 500
+      },
+      {
+        "id": "/untitled/Feedback depth",
+        "label": "Feedback depth",
+        "min": 0,
+        "max": 99,
+        "def": 75
+      },
+      {
+        "id": "/untitled/LFO frequency",
+        "label": "LFO frequency",
+        "min": 0.009999999776482582,
+        "max": 5,
+        "def": 0.20000000298023224
+      }
+    ],
+    "error": null
+  },
+  "wimmics/sweetWah/index.js": {
+    "name": "SweetWah",
+    "vendor": "Wimmics",
+    "params": {
+      "/Sweet/Low": {
+        "label": "/Sweet/Low",
+        "min": 0,
+        "max": 1,
+        "default": 0.800000011920929,
+        "type": "float"
+      },
+      "/Sweet/Mix": {
+        "label": "/Sweet/Mix",
+        "min": 0,
+        "max": 1,
+        "default": 0.5,
+        "type": "float"
+      },
+      "/Sweet/bypass": {
+        "label": "/Sweet/bypass",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 0,
+        "type": "float"
+      },
+      "/Sweet/High": {
+        "label": "/Sweet/High",
+        "min": 0,
+        "max": 1,
+        "default": 0.800000011920929,
+        "type": "float"
+      },
+      "/Sweet/Frequency": {
+        "label": "/Sweet/Frequency",
+        "min": 0,
+        "max": 12,
+        "default": 4,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "/Sweet/Frequency",
+        "label": "Frequency",
+        "min": 0,
+        "max": 12,
+        "def": 4
+      },
+      {
+        "id": "/Sweet/High",
+        "label": "High",
+        "min": 0,
+        "max": 1,
+        "def": 0.800000011920929
+      },
+      {
+        "id": "/Sweet/Low",
+        "label": "Low",
+        "min": 0,
+        "max": 1,
+        "def": 0.800000011920929
+      },
+      {
+        "id": "/Sweet/Mix",
+        "label": "Mix",
+        "min": 0,
+        "max": 1,
+        "def": 0.5
+      }
+    ],
+    "error": null
+  },
+  "wimmics/temper/index.js": {
+    "name": "Temper",
+    "vendor": "Wimmics",
+    "params": {
+      "/temper/Curve": {
+        "label": "/temper/Curve",
+        "min": 0.10000000149011612,
+        "max": 4,
+        "default": 1,
+        "type": "float"
+      },
+      "/temper/Cutoff": {
+        "label": "/temper/Cutoff",
+        "min": 100,
+        "max": 20000,
+        "default": 20000,
+        "type": "float"
+      },
+      "/temper/Resonance": {
+        "label": "/temper/Resonance",
+        "min": 1,
+        "max": 8,
+        "default": 1,
+        "type": "float"
+      },
+      "/temper/Saturation": {
+        "label": "/temper/Saturation",
+        "min": 0,
+        "max": 1,
+        "default": 1,
+        "type": "float"
+      },
+      "/temper/Level": {
+        "label": "/temper/Level",
+        "min": -24,
+        "max": 24,
+        "default": -3,
+        "type": "float"
+      },
+      "/temper/Drive": {
+        "label": "/temper/Drive",
+        "min": -10,
+        "max": 10,
+        "default": 4,
+        "type": "float"
+      },
+      "/temper/Feedback": {
+        "label": "/temper/Feedback",
+        "min": -60,
+        "max": -24,
+        "default": -60,
+        "type": "float"
+      },
+      "/temper/99_bypass": {
+        "label": "/temper/99_bypass",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 0,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "/temper/Curve",
+        "label": "Curve",
+        "min": 0.10000000149011612,
+        "max": 4,
+        "def": 1
+      },
+      {
+        "id": "/temper/Cutoff",
+        "label": "Cutoff",
+        "min": 100,
+        "max": 20000,
+        "def": 20000
+      },
+      {
+        "id": "/temper/Drive",
+        "label": "Drive",
+        "min": -10,
+        "max": 10,
+        "def": 4
+      },
+      {
+        "id": "/temper/Feedback",
+        "label": "Feedback",
+        "min": -60,
+        "max": -24,
+        "def": -60
+      },
+      {
+        "id": "/temper/Level",
+        "label": "Level",
+        "min": -24,
+        "max": 24,
+        "def": -3
+      },
+      {
+        "id": "/temper/Resonance",
+        "label": "Resonance",
+        "min": 1,
+        "max": 8,
+        "def": 1
+      },
+      {
+        "id": "/temper/Saturation",
+        "label": "Saturation",
+        "min": 0,
+        "max": 1,
+        "def": 1
+      }
+    ],
+    "error": null
+  },
+  "wimmics/ThruZeroFlanger/index.js": {
+    "name": "ThruZeroFlanger",
+    "vendor": "Wimmics",
+    "params": {
+      "/ThruZeroFlanger/Depth": {
+        "label": "/ThruZeroFlanger/Depth",
+        "min": 3,
+        "max": 100,
+        "default": 20,
+        "type": "float"
+      },
+      "/ThruZeroFlanger/Delay": {
+        "label": "/ThruZeroFlanger/Delay",
+        "min": 0.5,
+        "max": 20,
+        "default": 10,
+        "type": "float"
+      },
+      "/ThruZeroFlanger/L-ROffset": {
+        "label": "/ThruZeroFlanger/L-ROffset",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "type": "float"
+      },
+      "/ThruZeroFlanger/bypass": {
+        "label": "/ThruZeroFlanger/bypass",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 0,
+        "type": "float"
+      },
+      "/ThruZeroFlanger/Rate": {
+        "label": "/ThruZeroFlanger/Rate",
+        "min": 0,
+        "max": 1,
+        "default": 0.10000000149011612,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "/ThruZeroFlanger/Delay",
+        "label": "Delay",
+        "min": 0.5,
+        "max": 20,
+        "def": 10
+      },
+      {
+        "id": "/ThruZeroFlanger/Depth",
+        "label": "Depth",
+        "min": 3,
+        "max": 100,
+        "def": 20
+      },
+      {
+        "id": "/ThruZeroFlanger/L-ROffset",
+        "label": "L-ROffset",
+        "min": 0,
+        "max": 1,
+        "def": 0
+      },
+      {
+        "id": "/ThruZeroFlanger/Rate",
+        "label": "Rate",
+        "min": 0,
+        "max": 1,
+        "def": 0.10000000149011612
+      }
+    ],
+    "error": null
+  },
+  "wimmics/WeirdPhaser/index.js": {
+    "name": "WeirdPhaser",
+    "vendor": "Wimmics",
+    "params": {
+      "/weirdPhaser/bypass": {
+        "label": "/weirdPhaser/bypass",
+        "min": -3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38,
+        "default": 0,
+        "type": "float"
+      },
+      "/weirdPhaser/Feedback": {
+        "label": "/weirdPhaser/Feedback",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "type": "float"
+      },
+      "/weirdPhaser/RateScalar": {
+        "label": "/weirdPhaser/RateScalar",
+        "min": 1,
+        "max": 40,
+        "default": 1,
+        "type": "float"
+      },
+      "/weirdPhaser/L-ROffset": {
+        "label": "/weirdPhaser/L-ROffset",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "type": "float"
+      },
+      "/weirdPhaser/Rate": {
+        "label": "/weirdPhaser/Rate",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "type": "float"
+      }
+    },
+    "stickCandidates": [
+      {
+        "id": "/weirdPhaser/Feedback",
+        "label": "Feedback",
+        "min": 0,
+        "max": 1,
+        "def": 0
+      },
+      {
+        "id": "/weirdPhaser/L-ROffset",
+        "label": "L-ROffset",
+        "min": 0,
+        "max": 1,
+        "def": 0
+      },
+      {
+        "id": "/weirdPhaser/Rate",
+        "label": "Rate",
+        "min": 0,
+        "max": 1,
+        "def": 0
+      },
+      {
+        "id": "/weirdPhaser/RateScalar",
+        "label": "RateScalar",
+        "min": 1,
+        "max": 40,
+        "def": 1
+      }
+    ],
+    "error": null
+  }
+}

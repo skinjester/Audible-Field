@@ -2,10 +2,10 @@ export const FOLLOW_TAU = 0.035;
 export const DPAD_MS = 2000;
 
 const dpadTargets = {
-  up: { x: 0, y: 0 },
-  right: { x: 1, y: 0 },
-  down: { x: 0, y: 1 },
-  left: { x: 1, y: 1 },
+  up: { x: 0, y: 0 }, // Q1 upper left
+  right: { x: 1, y: 0 }, // Q2 upper right
+  down: { x: 1, y: 1 }, // Q4 lower right
+  left: { x: 0, y: 1 }, // Q3 lower left
 };
 
 let dpadAnim = null;
@@ -71,21 +71,40 @@ export function mix(px, py) {
 }
 
 /**
- * Equal-power mix matching Max `nodes` → `vexpr sqrt($f1)` → `matrix~`.
- * Keeps perceived loudness steadier while crossfading four stems.
+ * Sharpens bilinear corner weights before equal-power gains.
+ * >1 makes the nearest quadrant dominate sooner (less mid-pad mush).
+ * Matched to the visualizer’s MIX_GAMMA feel.
+ */
+export const MIX_GAMMA = 2.35;
+
+/**
+ * Equal-power mix: bilinear → gamma → renormalize → sqrt.
+ * Keeps perceived loudness steadier while giving clearer quadrant focus.
  */
 export function equalPowerMix(px, py) {
   const w = mix(px, py);
+  const keys = ["tl", "tr", "bl", "br"];
+  let sum = 0;
+  const boosted = { tl: 0, tr: 0, bl: 0, br: 0 };
+  for (const k of keys) {
+    boosted[k] = Math.pow(Math.max(0, w[k]), MIX_GAMMA);
+    sum += boosted[k];
+  }
+  if (sum <= 0) {
+    return { tl: 0.5, tr: 0.5, bl: 0.5, br: 0.5 };
+  }
   return {
-    tl: Math.sqrt(w.tl),
-    tr: Math.sqrt(w.tr),
-    bl: Math.sqrt(w.bl),
-    br: Math.sqrt(w.br),
+    tl: Math.sqrt(boosted.tl / sum),
+    tr: Math.sqrt(boosted.tr / sum),
+    bl: Math.sqrt(boosted.bl / sum),
+    br: Math.sqrt(boosted.br / sum),
   };
 }
 
-/** Canonical bed → corner map (Vault `nodes` x/y places: TL TR BL BR). */
-export const STEM_CORNERS = {
+const STEM_STORAGE_KEY = "echoscape.stemCorners";
+
+/** Built-in beds used when nothing is saved yet. */
+const DEFAULT_STEM_CORNERS = {
   tl: { id: "beach", label: "Beach", file: "Beach-rx.wav", url: "/beds/Beach-rx.wav" },
   tr: { id: "forest", label: "Forest", file: "Forest-rx.wav", url: "/beds/Forest-rx.wav" },
   bl: { id: "river", label: "River", file: "River-rx.wav", url: "/beds/River-rx.wav" },
@@ -97,17 +116,72 @@ export const STEM_CORNERS = {
   },
 };
 
-/** Update a corner's sample assignment (label + playback URL). */
-export function setStemCorner(corner, next) {
-  if (!STEM_CORNERS[corner] || !next) return null;
-  const label = String(next.label || next.name || STEM_CORNERS[corner].label).trim();
+function cloneStem(meta) {
+  return {
+    id: String(meta.id || ""),
+    label: String(meta.label || ""),
+    file: String(meta.file || ""),
+    url: String(meta.url || ""),
+  };
+}
+
+function loadSavedStemCorners() {
+  try {
+    const raw = localStorage.getItem(STEM_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function persistStemCorners() {
+  try {
+    const payload = {};
+    for (const corner of Object.keys(DEFAULT_STEM_CORNERS)) {
+      payload[corner] = cloneStem(STEM_CORNERS[corner]);
+    }
+    localStorage.setItem(STEM_STORAGE_KEY, JSON.stringify(payload));
+  } catch (err) {
+    console.warn("[EchoScape] could not save stem corners:", err);
+  }
+}
+
+function applyStemCorner(corner, next) {
+  if (!DEFAULT_STEM_CORNERS[corner] || !next) return null;
+  const fallback = STEM_CORNERS[corner] || DEFAULT_STEM_CORNERS[corner];
+  const label = String(next.label || next.name || fallback.label).trim();
   const url = String(next.url || "").trim();
   if (!url) return null;
-  const file = String(next.file || next.name || STEM_CORNERS[corner].file);
+  const file = String(next.file || next.name || fallback.file);
   const id = String(next.id || label.toLowerCase().replace(/\s+/g, "-"));
   STEM_CORNERS[corner] = { id, label, file, url };
-  notify();
   return STEM_CORNERS[corner];
+}
+
+/** Canonical bed → corner map (Vault `nodes` x/y places: TL TR BL BR). */
+export const STEM_CORNERS = Object.fromEntries(
+  Object.entries(DEFAULT_STEM_CORNERS).map(([corner, meta]) => [corner, cloneStem(meta)])
+);
+
+{
+  const saved = loadSavedStemCorners();
+  if (saved) {
+    for (const corner of Object.keys(DEFAULT_STEM_CORNERS)) {
+      if (saved[corner]) applyStemCorner(corner, saved[corner]);
+    }
+  }
+}
+
+/** Update a corner's sample assignment (label + playback URL). */
+export function setStemCorner(corner, next) {
+  const meta = applyStemCorner(corner, next);
+  if (!meta) return null;
+  persistStemCorners();
+  notify();
+  return meta;
 }
 
 export function subscribe(fn) {
@@ -129,7 +203,15 @@ export function notify() {
 export function setTarget(nx, ny, source, snap) {
   if (!Number.isFinite(nx) || !Number.isFinite(ny)) return;
   const fromMax = typeof source === "string" && source.startsWith("Max");
-  if (dpadAnim && source !== "D-pad" && source !== "mouse" && !fromMax) return;
+  if (
+    dpadAnim &&
+    source !== "D-pad" &&
+    source !== "mouse" &&
+    source !== "touchpad" &&
+    !fromMax
+  ) {
+    return;
+  }
   if (source !== "D-pad") dpadAnim = null;
   state.targetX = clamp01(nx);
   state.targetY = clamp01(ny);

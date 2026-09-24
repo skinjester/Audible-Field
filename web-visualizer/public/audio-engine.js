@@ -12,16 +12,79 @@
  *   R1 — Glass bloom: reverse IR convolution + upward highpass shimmer
  */
 
-import { equalPowerMix, STEM_CORNERS, state as mixerState, controller as mixerController } from "./mixer-core.js?v=61";
-import { loadWam } from "./wam-host.js?v=3";
-import { NATIVE_FX, stickMapForPath } from "./wam-catalog.js?v=3";
+import {
+  equalPowerMix,
+  STEM_CORNERS,
+  state as mixerState,
+  controller as mixerController,
+  setActiveFx as setMixerActiveFx,
+} from "./mixer-core.js?v=65";
+import {
+  loadWam,
+  resolveStickBinding,
+  applyWamDefaults,
+  applyStickToWamParams,
+} from "./wam-host.js?v=6";
+import {
+  NATIVE_FX,
+  DEFAULT_STICK_SCALE,
+  STICK_SCALE_MIN,
+  STICK_SCALE_MAX,
+} from "./wam-catalog.js?v=4";
 
 const CORNERS = ["tl", "tr", "bl", "br"];
 const FX_IDS = ["cross", "square", "triangle", "circle"];
+const FX_PICK_SLOTS = ["square", "triangle", "circle"];
+const FX_STORAGE_KEY = "echoscape.fxPrefs";
+const STICK_AXES = ["x", "y"];
 const RAMP = 0.02;
 
 function clamp01(n) {
   return Math.min(1, Math.max(0, n));
+}
+
+function defaultAxisScales() {
+  return { x: DEFAULT_STICK_SCALE, y: DEFAULT_STICK_SCALE };
+}
+
+function clampAxisScale(n) {
+  const v = Math.round((Number(n) || DEFAULT_STICK_SCALE) * 10) / 10;
+  return Math.min(STICK_SCALE_MAX, Math.max(STICK_SCALE_MIN, v));
+}
+
+/** Normalize legacy number or `{ x, y }` into per-axis scales. */
+function normalizeAxisScales(raw) {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    const v = clampAxisScale(raw);
+    return { x: v, y: v };
+  }
+  if (raw && typeof raw === "object") {
+    return {
+      x: clampAxisScale(raw.x),
+      y: clampAxisScale(raw.y),
+    };
+  }
+  return defaultAxisScales();
+}
+
+function loadFxPrefs() {
+  try {
+    const raw = localStorage.getItem(FX_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveFxPrefs(payload) {
+  try {
+    localStorage.setItem(FX_STORAGE_KEY, JSON.stringify(payload));
+  } catch (err) {
+    console.warn("[EchoScape] could not save FX prefs:", err);
+  }
 }
 
 function makeDistortionCurve(amount) {
@@ -108,6 +171,14 @@ export class EchoScapeAudioEngine {
     this._fxWam = {};
     /** @type {Record<string, GainNode | null>} */
     this._fxInsertIn = {};
+    /** @type {Record<string, object | null>} */
+    this._fxStickParams = {};
+    /** @type {Record<string, { x: number, y: number }>} */
+    this.fxStickScale = {
+      square: defaultAxisScales(),
+      triangle: defaultAxisScales(),
+      circle: defaultAxisScales(),
+    };
   }
 
   async start() {
@@ -125,7 +196,8 @@ export class EchoScapeAudioEngine {
     }
 
     this.ctx = new AC();
-    await this.ctx.resume();
+    // Outside a user gesture, some Chromium builds never resolve resume().
+    await this._safeResume(300);
 
     this._sum = this.ctx.createGain();
     this._sum.gain.value = 1;
@@ -182,25 +254,35 @@ export class EchoScapeAudioEngine {
     this._shoulderOut.connect(this._r1Send);
     this._r1Wet.connect(this._master);
 
-    // Load beds. Face FX stay native until a Square/Triangle/Circle WAM is chosen.
-    // Cross (X) is the WAM bypass and is the default active face.
+    // Beds first so sound can start even if WAM restore is slow/hangs.
     await this._loadStems();
-    this.circleFxMode = "native";
-
     this.ready = true;
     this.running = true;
-    this.setActiveFx(this.activeFx, true);
+    this.setActiveFx(mixerController.activeFx || this.activeFx, true);
     this.sync(mixerState, mixerController);
     await this._playAll();
+    await this._safeResume(300);
 
-    if (this.ctx.state !== "running") {
-      await this.ctx.resume();
+    // Restore WAMs after audible beds are up (best-effort, time-boxed).
+    try {
+      await Promise.race([
+        this._restoreFxPrefs(),
+        new Promise((resolve) => setTimeout(resolve, 12000)),
+      ]);
+    } catch (err) {
+      console.warn("[EchoScape audio] FX pref restore failed:", err?.message || err);
     }
+    this.circleFxMode = this._fxWam?.circle ? "wam" : "native";
+    this.setActiveFx(mixerController.activeFx || this.activeFx, true);
+    this.sync(mixerState, mixerController);
 
     console.info("[EchoScape audio] started", {
       ctx: this.ctx.state,
       sampleRate: this.ctx.sampleRate,
       circleFx: this.circleFxMode,
+      fx: Object.fromEntries(
+        FX_PICK_SLOTS.map((id) => [id, this.fxAssignment?.[id]?.label || "native"])
+      ),
       stems: CORNERS.map((c) => ({
         corner: c,
         paused: this.stems[c]?.el.paused,
@@ -212,10 +294,21 @@ export class EchoScapeAudioEngine {
     return this;
   }
 
-  async resume() {
-    if (this.ctx && this.ctx.state !== "running") {
-      await this.ctx.resume();
+  /** Resume without hanging when autoplay policy blocks the promise. */
+  async _safeResume(timeoutMs = 300) {
+    if (!this.ctx || this.ctx.state === "running") return;
+    try {
+      await Promise.race([
+        this.ctx.resume(),
+        new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+      ]);
+    } catch {
+      /* ignore — pad click will retry */
     }
+  }
+
+  async resume() {
+    await this._safeResume(1000);
   }
 
   async ensurePlaying() {
@@ -277,6 +370,7 @@ export class EchoScapeAudioEngine {
     this.fxAssignment = {};
     this._fxWam = {};
     this._fxInsertIn = {};
+    this._fxStickParams = {};
     this.ready = false;
     this.running = false;
     this._l1Held = false;
@@ -702,7 +796,9 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * Tear down every loaded WAM and restore native inserts (X / Cross bypass).
+   * Tear down every loaded WAM and restore native inserts.
+   * Prefer pressing X / Cross (setActiveFx) to mute WAMs without wiping
+   * assignments or stick scales — that only routes wet away from WAM slots.
    * @returns {Promise<string[]>} slots that previously had a WAM
    */
   async disableAllWams() {
@@ -717,13 +813,13 @@ export class EchoScapeAudioEngine {
           kind: "native",
           label: NATIVE_FX[id].label,
         },
-        { exclusive: false }
+        { activate: false }
       );
       cleared.push(id);
     }
     this.circleFxMode = "native";
     if (cleared.length) {
-      console.info("[EchoScape audio] WAMs disabled (X bypass):", cleared.join(", "));
+      console.info("[EchoScape audio] WAMs unloaded:", cleared.join(", "));
     }
     return cleared;
   }
@@ -742,16 +838,111 @@ export class EchoScapeAudioEngine {
     } else {
       await this.resume();
     }
-    return this._assignFxSlot(button, choice, { exclusive: true });
+    const assigned = await this._assignFxSlot(button, choice);
+    this._persistFxPrefs();
+    return assigned;
+  }
+
+  /**
+   * Persist current face FX assignments + stick scales as the next-session defaults.
+   * Switching to X / Cross does not call this — muting leaves prefs intact.
+   */
+  _persistFxPrefs() {
+    const assignments = {};
+    const scales = {};
+    for (const slot of FX_PICK_SLOTS) {
+      const assigned = this.fxAssignment?.[slot];
+      if (assigned?.kind === "wam" && assigned.path) {
+        assignments[slot] = {
+          id: String(assigned.id || ""),
+          kind: "wam",
+          label: String(assigned.label || assigned.path),
+          path: String(assigned.path),
+        };
+      } else {
+        const native = NATIVE_FX[slot];
+        assignments[slot] = {
+          id: native.id,
+          kind: "native",
+          label: native.label,
+        };
+      }
+      scales[slot] = normalizeAxisScales(this.fxStickScale?.[slot]);
+    }
+    const face = FX_IDS.includes(this.activeFx)
+      ? this.activeFx
+      : mixerController.activeFx || "cross";
+    saveFxPrefs({
+      assignments,
+      scales,
+      activeFx: face,
+    });
+  }
+
+  /**
+   * Apply saved WAM / scale prefs after native FX graph is built.
+   * Each face keeps its own assignment; only the active face is audible.
+   */
+  async _restoreFxPrefs() {
+    const prefs = loadFxPrefs();
+    if (!prefs) return;
+
+    for (const slot of FX_PICK_SLOTS) {
+      if (prefs.scales?.[slot] != null) {
+        this.fxStickScale[slot] = normalizeAxisScales(prefs.scales[slot]);
+      }
+    }
+
+    const assignments = prefs.assignments || {};
+    const restored = [];
+    for (const slot of FX_PICK_SLOTS) {
+      const choice = assignments[slot];
+      if (choice?.kind !== "wam" || !choice.path) continue;
+      try {
+        await this._assignFxSlot(
+          slot,
+          {
+            id: String(choice.id || choice.path),
+            kind: "wam",
+            label: String(choice.label || choice.path),
+            path: String(choice.path),
+          },
+          { activate: false }
+        );
+        restored.push(slot);
+      } catch (err) {
+        console.warn(
+          `[EchoScape audio] could not restore saved WAM for ${slot}:`,
+          err?.message || err
+        );
+      }
+    }
+
+    if (!restored.length) return;
+
+    const preferred = prefs.activeFx;
+    const face = FX_PICK_SLOTS.includes(preferred)
+      ? preferred
+      : preferred === "cross"
+        ? "cross"
+        : restored[0];
+    setMixerActiveFx(face);
+    this.setActiveFx(face, true);
+    console.info("[EchoScape audio] restored FX prefs", {
+      restored,
+      face,
+      scales: Object.fromEntries(
+        restored.map((slot) => [slot, this.fxStickScale[slot]])
+      ),
+    });
   }
 
   /**
    * @param {string} button
    * @param {{ id: string, kind: 'native'|'wam', label: string, path?: string }} choice
-   * @param {{ exclusive?: boolean }} [opts]
+   * @param {{ activate?: boolean }} [opts] activate — select this face after assign (default true for WAM)
    */
   async _assignFxSlot(button, choice, opts = {}) {
-    const exclusive = opts.exclusive !== false;
     if (!FX_IDS.includes(button)) throw new Error(`Unknown FX slot ${button}`);
     if (!choice?.kind) throw new Error("replaceFx requires choice.kind");
     if (button === "cross" && choice.kind === "wam") {
@@ -761,22 +952,6 @@ export class EchoScapeAudioEngine {
     const slot = this.fx[button];
     const insertIn = this._fxInsertIn[button];
     if (!slot || !insertIn || !this.ctx) throw new Error(`FX slot ${button} not built`);
-
-    // Mutual exclusivity: only one WAM in the graph at a time.
-    if (choice.kind === "wam" && exclusive) {
-      for (const id of FX_IDS) {
-        if (id === button || !this._fxWam?.[id]) continue;
-        await this._assignFxSlot(
-          id,
-          {
-            id: NATIVE_FX[id].id,
-            kind: "native",
-            label: NATIVE_FX[id].label,
-          },
-          { exclusive: false }
-        );
-      }
-    }
 
     // Tear down current insert (WAM or native chain).
     await this._destroySlotWam(button);
@@ -801,9 +976,25 @@ export class EchoScapeAudioEngine {
         insertIn.connect(wamNode);
         wamNode.connect(slot.out);
         this._fxWam[button] = instance;
-        const applyStick = stickMapForPath(path);
-        slot.apply = (x, y) => applyStick(wamNode, x, y);
-        applyStick(wamNode, 0.5, 0.5);
+        const binding = resolveStickBinding(path);
+        if (!binding) {
+          console.warn(
+            `[EchoScape audio] no stick map for ${path} — edit public/wam-stick-maps.js`
+          );
+        }
+        this._fxStickParams[button] = binding;
+        applyWamDefaults(wamNode, binding);
+        this.fxStickScale[button] = normalizeAxisScales(this.fxStickScale[button]);
+        slot.apply = (x01, y01) => {
+          applyStickToWamParams(
+            wamNode,
+            this._fxStickParams[button],
+            x01,
+            y01,
+            this.fxStickScale[button] || defaultAxisScales()
+          );
+        };
+        slot.apply(0.5, 0.5);
         this.fxAssignment[button] = {
           id: choice.id,
           label: choice.label || path,
@@ -811,8 +1002,21 @@ export class EchoScapeAudioEngine {
           path,
         };
         if (button === "circle") this.circleFxMode = "wam";
-        console.info(`[EchoScape audio] ${button} FX → ${choice.label || path} (WAM)`);
-        this.setActiveFx(button, true);
+        console.info(
+          `[EchoScape audio] ${button} FX → ${choice.label || path} (WAM)`,
+          binding
+            ? {
+                x: binding.x.map((p) => p.label || p.id),
+                y: binding.y.map((p) => p.label || p.id),
+              }
+            : "(no map)"
+        );
+        const shouldActivate = opts.activate !== false;
+        if (shouldActivate) {
+          this.setActiveFx(button, true);
+          // Keep pad/UI controller on this face so sync() does not mute the WAM.
+          setMixerActiveFx(button);
+        }
         this.sync(mixerState, mixerController);
         return this.fxAssignment[button];
       } catch (err) {
@@ -829,6 +1033,7 @@ export class EchoScapeAudioEngine {
     }
 
     // Native
+    this._fxStickParams[button] = null;
     const native = slot.rebuildNative?.() || this._wireFallbackNative(button, insertIn, slot.out);
     slot.apply = native.apply;
     slot.teardownNative = native.teardown;
@@ -842,6 +1047,48 @@ export class EchoScapeAudioEngine {
     this.setActiveFx(this.activeFx, true);
     this.sync(mixerState, mixerController);
     return this.fxAssignment[button];
+  }
+
+  /**
+   * Stick depth into each axis's param min→max range (1 = full range).
+   * @param {string} button
+   * @param {'x'|'y'} axis
+   * @param {number} scale
+   * @param {{ persist?: boolean }} [opts]
+   */
+  setFxStickScale(button, axis, scale, opts = {}) {
+    if (!FX_PICK_SLOTS.includes(button)) return;
+    if (!STICK_AXES.includes(axis)) return;
+    const n = Number(scale);
+    if (!Number.isFinite(n)) return;
+    const current = normalizeAxisScales(this.fxStickScale[button]);
+    current[axis] = clampAxisScale(n);
+    this.fxStickScale[button] = current;
+    if (this.fxAssignment?.[button]?.kind === "wam" && this.fx[button]?.apply) {
+      const x01 = Math.min(1, Math.max(0, (Number(mixerController.rawX) || 0) * 0.5 + 0.5));
+      const y01 = Math.min(1, Math.max(0, (Number(mixerController.rawY) || 0) * 0.5 + 0.5));
+      try {
+        this.fx[button].apply(x01, y01);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (opts.persist !== false) this._persistFxPrefs();
+  }
+
+  /**
+   * @param {string} button
+   * @param {'x'|'y'} [axis]
+   * @returns {number | { x: number, y: number }}
+   */
+  getFxStickScale(button, axis) {
+    const scales = normalizeAxisScales(this.fxStickScale?.[button]);
+    if (axis === "x" || axis === "y") return scales[axis];
+    return scales;
+  }
+
+  getFxStickParams(button) {
+    return this._fxStickParams?.[button] || null;
   }
 
   _wireFallbackNative(button, insertIn, out) {
@@ -971,7 +1218,6 @@ export class EchoScapeAudioEngine {
     if (!force && !this.running) return;
     if (!this.ctx || !this.fx[button]) return;
 
-    const switchingToCross = button === "cross" && this.activeFx !== "cross";
     this.activeFx = button;
     const t = this.ctx.currentTime;
     for (const id of FX_IDS) {
@@ -981,11 +1227,8 @@ export class EchoScapeAudioEngine {
     }
     this._wet.gain.setTargetAtTime(0.45, t, RAMP);
     this._dry.gain.setTargetAtTime(0.85, t, RAMP);
-
-    // X always bypasses WAMs — tear them down when Cross becomes active.
-    if (switchingToCross) {
-      void this.disableAllWams();
-    }
+    // Slot gains mute inactive faces (including WAMs). Do not destroy WAM
+    // instances here — X / Cross only turns FX off until that face is selected again.
   }
 
   /**
@@ -1013,7 +1256,14 @@ export class EchoScapeAudioEngine {
     const slot = controller.fx[controller.activeFx];
     const fx = this.fx[controller.activeFx];
     if (slot && fx?.apply) {
-      fx.apply(Number(slot.x) || 0, Number(slot.y) || 0);
+      if (this._fxWam?.[controller.activeFx]) {
+        // Normalize left stick −1…1 → 0…1 for WAM min/max mapping
+        const x01 = Math.min(1, Math.max(0, (Number(controller.rawX) || 0) * 0.5 + 0.5));
+        const y01 = Math.min(1, Math.max(0, (Number(controller.rawY) || 0) * 0.5 + 0.5));
+        fx.apply(x01, y01);
+      } else {
+        fx.apply(Number(slot.x) || 0, Number(slot.y) || 0);
+      }
     }
 
     const pan = clamp01((Number(controller.rightX) || 0) * 0.5 + 0.5) * 2 - 1;

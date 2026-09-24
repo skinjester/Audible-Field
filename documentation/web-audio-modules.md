@@ -191,19 +191,29 @@ Browse / audition: https://wamlist.com/
 
 Soundfont Player, DRM-16, Spectrum Modal, Synth-101, Audio Track, sequencers, MIDI I/O, hardware editors, Envelope Follower, Randomizer, Step Sequencer, ButterChurn, ISF, ThreeJS, Video Input — **out of scope** for the wet-bus PoC unless the product adds instrument tracks.
 
-## OWLShimmer (Circle) — param map
+## Stick → WAM parameter maps
 
-Faust addresses (try both prefixes):
+Hand-editable lookup: `web-visualizer/public/wam-stick-maps.js`.
 
-| Param | Addresses | Range | Stick |
+Each vendored WAM has an entry with:
+
+- `params` — id, label, min, max, default
+- `x` / `y` — param ids driven by stick axes (normalized 0–1 → min–max × scale stepper)
+- `forceOff` — params forced to 0 while active (bypass)
+
+Change bindings by editing the `x` / `y` arrays. Probe live metadata with `node scripts/probe-wam-params.mjs` (writes `scripts/wam-params-probe.json`).
+
+## OWLShimmer (Circle) — default map
+
+| Param | Address | Range | Default stick |
 | --- | --- | --- | --- |
-| SHIMMER | `/untitled/SHIMMER`, `/OwlShimmer/SHIMMER` | 0–0.7 | ↑ when stick X decreases (1−x) |
-| TONE | `/untitled/TONE`, `/OwlShimmer/TONE` | 900–8000 | ↑ with X |
-| DECAY | `/untitled/DECAY`, `/OwlShimmer/DECAY` | 0.5–1 | ↑ with Y |
-| MIX | `/untitled/MIX`, `/OwlShimmer/MIX` | 0–1 | ↑ with Y |
-| bypass | `/untitled/bypass`, `/OwlShimmer/bypass` | 0/1 | Forced 0 when active |
+| SHIMMER | `/untitled/SHIMMER` | 0–0.7 | X |
+| TONE | `/untitled/TONE` | 900–8000 | X |
+| DECAY | `/untitled/DECAY` | 0.5–1 | Y |
+| MIX | `/untitled/MIX` | 0–1 | Y |
+| bypass | `/untitled/bypass` | 0/1 | Forced 0 |
 
-Implemented in `_applyOwlShimmer` in `audio-engine.js`. Native crystallizer remains the fallback if WAM load fails (`circleFxMode`: `wam` | `native`).
+Native crystallizer remains the fallback if WAM load fails (`circleFxMode`: `wam` | `native`).
 
 ## Planning decisions
 

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape mixer</title>
-    <link rel="stylesheet" href="/styles.css?v=105" />
+    <link rel="stylesheet" href="/styles.css?v=109" />
     <script type="importmap">
       {
         "imports": {
@@ -115,7 +115,13 @@
             <header class="fx-head">
               <div>
                 <p class="kicker">DualSense</p>
-                <h2>Sticks, triggers, clicks</h2>
+                <h2>Sticks, triggers, touchpad</h2>
+              </div>
+              <div class="ds-hid">
+                <span class="ds-hid-status" data-ds-status>Touchpad: —</span>
+                <button type="button" class="ds-connect" data-ds-connect>
+                  Connect touchpad
+                </button>
               </div>
             </header>
             <div class="ctrl-grid">
@@ -205,7 +211,7 @@
           <div class="fx-grid">
             <article class="fx-card" data-fx-card="cross" data-on="true">
               <p class="fx-btn">X</p>
-              <p class="fx-plugin-static" data-fx-name="cross" title="Press X to bypass WAMs">WAM Off</p>
+              <p class="fx-plugin-static" data-fx-name="cross" title="Press X to mute WAMs (keeps assignments)">WAM Off</p>
               <dl>
                 <div>
                   <dt>Param 112</dt>
@@ -219,52 +225,100 @@
             </article>
             <article class="fx-card" data-fx-card="square">
               <p class="fx-btn">Square</p>
-              <button type="button" class="fx-plugin" data-fx-plugin="square" aria-haspopup="listbox" aria-expanded="false" title="Choose Square FX">
-                <span class="fx-plugin-label" data-fx-name="square">kHs Comb Filter</span>
-                <span class="stem-caret" aria-hidden="true"></span>
-              </button>
+              <div class="fx-plugin-row">
+                <button type="button" class="fx-plugin" data-fx-plugin="square" aria-haspopup="listbox" aria-expanded="false" title="Choose Square WAM">
+                  <span class="fx-plugin-label" data-fx-name="square">kHs Comb Filter</span>
+                  <span class="stem-caret" aria-hidden="true"></span>
+                </button>
+              </div>
               <dl>
-                <div>
-                  <dt>Stick X</dt>
-                  <dd data-fx-x>0.00</dd>
+                <div class="fx-axis">
+                  <dt data-fx-x-label="square">Stick X</dt>
+                  <dd class="fx-axis-value">
+                    <span data-fx-x>0.00</span>
+                    <div class="fx-scale" data-fx-scale-wrap="square" data-fx-scale-axis="x" hidden title="Stick X → param depth (1 = full min–max)">
+                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="square" data-fx-scale-axis="x" aria-label="Decrease Stick X scale">−</button>
+                      <input type="number" class="fx-scale-input" data-fx-scale="square" data-fx-scale-axis="x" value="1" min="0.1" max="5" step="0.1" inputmode="decimal" aria-label="Stick X scale" />
+                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="square" data-fx-scale-axis="x" aria-label="Increase Stick X scale">+</button>
+                    </div>
+                  </dd>
                 </div>
-                <div>
-                  <dt>Stick Y</dt>
-                  <dd data-fx-y>0.00</dd>
+                <div class="fx-axis">
+                  <dt data-fx-y-label="square">Stick Y</dt>
+                  <dd class="fx-axis-value">
+                    <span data-fx-y>0.00</span>
+                    <div class="fx-scale" data-fx-scale-wrap="square" data-fx-scale-axis="y" hidden title="Stick Y → param depth (1 = full min–max)">
+                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="square" data-fx-scale-axis="y" aria-label="Decrease Stick Y scale">−</button>
+                      <input type="number" class="fx-scale-input" data-fx-scale="square" data-fx-scale-axis="y" value="1" min="0.1" max="5" step="0.1" inputmode="decimal" aria-label="Stick Y scale" />
+                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="square" data-fx-scale-axis="y" aria-label="Increase Stick Y scale">+</button>
+                    </div>
+                  </dd>
                 </div>
               </dl>
             </article>
             <article class="fx-card" data-fx-card="triangle">
               <p class="fx-btn">Triangle</p>
-              <button type="button" class="fx-plugin" data-fx-plugin="triangle" aria-haspopup="listbox" aria-expanded="false" title="Choose Triangle FX">
-                <span class="fx-plugin-label" data-fx-name="triangle">kHs Formant Filter</span>
-                <span class="stem-caret" aria-hidden="true"></span>
-              </button>
+              <div class="fx-plugin-row">
+                <button type="button" class="fx-plugin" data-fx-plugin="triangle" aria-haspopup="listbox" aria-expanded="false" title="Choose Triangle WAM">
+                  <span class="fx-plugin-label" data-fx-name="triangle">kHs Formant Filter</span>
+                  <span class="stem-caret" aria-hidden="true"></span>
+                </button>
+              </div>
               <dl>
-                <div>
-                  <dt>Param 2</dt>
-                  <dd data-fx-x>0.00</dd>
+                <div class="fx-axis">
+                  <dt data-fx-x-label="triangle">Param 2</dt>
+                  <dd class="fx-axis-value">
+                    <span data-fx-x>0.00</span>
+                    <div class="fx-scale" data-fx-scale-wrap="triangle" data-fx-scale-axis="x" hidden title="Stick X → param depth (1 = full min–max)">
+                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="triangle" data-fx-scale-axis="x" aria-label="Decrease Stick X scale">−</button>
+                      <input type="number" class="fx-scale-input" data-fx-scale="triangle" data-fx-scale-axis="x" value="1" min="0.1" max="5" step="0.1" inputmode="decimal" aria-label="Stick X scale" />
+                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="triangle" data-fx-scale-axis="x" aria-label="Increase Stick X scale">+</button>
+                    </div>
+                  </dd>
                 </div>
-                <div>
-                  <dt>Param 3</dt>
-                  <dd data-fx-y>0.00</dd>
+                <div class="fx-axis">
+                  <dt data-fx-y-label="triangle">Param 3</dt>
+                  <dd class="fx-axis-value">
+                    <span data-fx-y>0.00</span>
+                    <div class="fx-scale" data-fx-scale-wrap="triangle" data-fx-scale-axis="y" hidden title="Stick Y → param depth (1 = full min–max)">
+                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="triangle" data-fx-scale-axis="y" aria-label="Decrease Stick Y scale">−</button>
+                      <input type="number" class="fx-scale-input" data-fx-scale="triangle" data-fx-scale-axis="y" value="1" min="0.1" max="5" step="0.1" inputmode="decimal" aria-label="Stick Y scale" />
+                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="triangle" data-fx-scale-axis="y" aria-label="Increase Stick Y scale">+</button>
+                    </div>
+                  </dd>
                 </div>
               </dl>
             </article>
             <article class="fx-card" data-fx-card="circle">
               <p class="fx-btn">Circle</p>
-              <button type="button" class="fx-plugin" data-fx-plugin="circle" aria-haspopup="listbox" aria-expanded="false" title="Choose Circle FX">
-                <span class="fx-plugin-label" data-fx-name="circle">Crystallizer</span>
-                <span class="stem-caret" aria-hidden="true"></span>
-              </button>
+              <div class="fx-plugin-row">
+                <button type="button" class="fx-plugin" data-fx-plugin="circle" aria-haspopup="listbox" aria-expanded="false" title="Choose Circle WAM">
+                  <span class="fx-plugin-label" data-fx-name="circle">Crystallizer</span>
+                  <span class="stem-caret" aria-hidden="true"></span>
+                </button>
+              </div>
               <dl>
-                <div>
-                  <dt>Param 17</dt>
-                  <dd data-fx-x>0.00</dd>
+                <div class="fx-axis">
+                  <dt data-fx-x-label="circle">Param 17</dt>
+                  <dd class="fx-axis-value">
+                    <span data-fx-x>0.00</span>
+                    <div class="fx-scale" data-fx-scale-wrap="circle" data-fx-scale-axis="x" hidden title="Stick X → param depth (1 = full min–max)">
+                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="circle" data-fx-scale-axis="x" aria-label="Decrease Stick X scale">−</button>
+                      <input type="number" class="fx-scale-input" data-fx-scale="circle" data-fx-scale-axis="x" value="1" min="0.1" max="5" step="0.1" inputmode="decimal" aria-label="Stick X scale" />
+                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="circle" data-fx-scale-axis="x" aria-label="Increase Stick X scale">+</button>
+                    </div>
+                  </dd>
                 </div>
-                <div>
-                  <dt>Param 4</dt>
-                  <dd data-fx-y>0.00</dd>
+                <div class="fx-axis">
+                  <dt data-fx-y-label="circle">Param 4</dt>
+                  <dd class="fx-axis-value">
+                    <span data-fx-y>0.00</span>
+                    <div class="fx-scale" data-fx-scale-wrap="circle" data-fx-scale-axis="y" hidden title="Stick Y → param depth (1 = full min–max)">
+                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="circle" data-fx-scale-axis="y" aria-label="Decrease Stick Y scale">−</button>
+                      <input type="number" class="fx-scale-input" data-fx-scale="circle" data-fx-scale-axis="y" value="1" min="0.1" max="5" step="0.1" inputmode="decimal" aria-label="Stick Y scale" />
+                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="circle" data-fx-scale-axis="y" aria-label="Increase Stick Y scale">+</button>
+                    </div>
+                  </dd>
                 </div>
               </dl>
             </article>
@@ -286,6 +340,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=113"></script>
+    <script type="module" src="/app.js?v=126"></script>
   </body>
 </html>
