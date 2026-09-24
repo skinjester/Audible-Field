@@ -57,6 +57,7 @@ const r1El = document.querySelector("[data-r1]");
 const leftDot = document.querySelector('[data-stick-dot="left"]');
 const rightDot = document.querySelector('[data-stick-dot="right"]');
 const dsConnectBtn = document.querySelector("[data-ds-connect]");
+const dsConnectLabel = document.querySelector("[data-ds-connect-label]");
 const dsStatusEl = document.querySelector("[data-ds-status]");
 const tabButtons = document.querySelectorAll("[data-tab]");
 const panels = document.querySelectorAll("[data-panel]");
@@ -605,6 +606,14 @@ function isEmbeddedIdeBrowser() {
   return false;
 }
 
+/** True after a successful HID session so disconnect can offer Reconnect. */
+let dsHadSession = false;
+
+function setDsConnectLabel(text) {
+  if (dsConnectLabel) dsConnectLabel.textContent = text;
+  else if (dsConnectBtn) dsConnectBtn.textContent = text;
+}
+
 function updateDualsenseHidUi() {
   if (!dsStatusEl || !dsConnectBtn) return;
 
@@ -614,20 +623,21 @@ function updateDualsenseHidUi() {
   if (!DualsenseHid.isSupported()) {
     dsStatusEl.textContent = "Touchpad: Chrome / Edge only (WebHID)";
     dsConnectBtn.disabled = true;
-    dsConnectBtn.textContent = "Unavailable";
+    setDsConnectLabel("Unavailable");
     dsConnectBtn.dataset.state = "unavailable";
   } else if (embedded) {
     dsStatusEl.textContent =
       "Touchpad: open http://localhost:8080 in Chrome or Edge (Cursor browser can’t use WebHID)";
     dsConnectBtn.disabled = true;
-    dsConnectBtn.textContent = "Use Chrome / Edge";
+    setDsConnectLabel("Use Chrome / Edge");
     dsConnectBtn.dataset.state = "unavailable";
   } else if (!browser) {
     dsStatusEl.textContent = "Touchpad: switch to Browser audio";
     dsConnectBtn.disabled = true;
-    dsConnectBtn.textContent = "Connect touchpad";
+    setDsConnectLabel(dsHadSession ? "Reconnect" : "Connect touchpad");
     dsConnectBtn.dataset.state = "";
   } else if (dualsenseHid.connected) {
+    dsHadSession = true;
     const via =
       dualsenseHid.connectionType === "bluetooth"
         ? "BT"
@@ -643,23 +653,26 @@ function updateDualsenseHidUi() {
     dsStatusEl.textContent = reports
       ? `Touchpad: ${via}${rid} · ${reports} reports${touch}`
       : `Touchpad: ${dualsenseHid.padId || "DualSense"} (${via}) — waiting for reports…`;
-    dsConnectBtn.disabled = false;
-    dsConnectBtn.textContent = "Reconnect";
+    // Live link — no reconnect until HID drops.
+    dsConnectBtn.disabled = true;
+    setDsConnectLabel("Connected");
     dsConnectBtn.dataset.state = "connected";
   } else {
-    dsStatusEl.textContent = "Touchpad: connect once to grant WebHID";
+    dsStatusEl.textContent = dsHadSession
+      ? "Touchpad: disconnected — tap Reconnect"
+      : "Touchpad: connect once to grant WebHID";
     dsConnectBtn.disabled = false;
-    dsConnectBtn.textContent = "Connect touchpad";
+    setDsConnectLabel(dsHadSession ? "Reconnect" : "Connect touchpad");
     dsConnectBtn.dataset.state = "";
   }
 
-  lastDsHidUiKey = `${inputMode}|${dualsenseHid.connected}|${dualsenseHid.connectionType}|${dualsenseHid.padId}|${DualsenseHid.isSupported()}|${embedded}|${dualsenseHid.reportCount > 0}|${dualsenseHid.touch.active}|${dualsenseHid.lastReportId}`;
+  lastDsHidUiKey = `${inputMode}|${dualsenseHid.connected}|${dualsenseHid.connectionType}|${dualsenseHid.padId}|${DualsenseHid.isSupported()}|${embedded}|${dualsenseHid.reportCount > 0}|${dualsenseHid.touch.active}|${dualsenseHid.lastReportId}|${dsHadSession}`;
 }
 
 let lastDsHidUiKey = "";
 
 function syncDualsenseHidUi() {
-  const key = `${inputMode}|${dualsenseHid.connected}|${dualsenseHid.connectionType}|${dualsenseHid.padId}|${DualsenseHid.isSupported()}|${isEmbeddedIdeBrowser()}|${dualsenseHid.reportCount > 0}|${dualsenseHid.touch.active}|${dualsenseHid.lastReportId}`;
+  const key = `${inputMode}|${dualsenseHid.connected}|${dualsenseHid.connectionType}|${dualsenseHid.padId}|${DualsenseHid.isSupported()}|${isEmbeddedIdeBrowser()}|${dualsenseHid.reportCount > 0}|${dualsenseHid.touch.active}|${dualsenseHid.lastReportId}|${dsHadSession}`;
   if (key === lastDsHidUiKey) return;
   updateDualsenseHidUi();
 }

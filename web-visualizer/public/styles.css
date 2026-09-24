@@ -588,6 +588,9 @@ dd {
 
 .ds-connect {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
@@ -596,6 +599,12 @@ dd {
   padding: 6px 12px;
   cursor: pointer;
   border-radius: 6px;
+}
+
+.ds-connect .dot {
+  display: none;
+  width: 7px;
+  height: 7px;
 }
 
 .ds-connect:hover:not(:disabled) {
@@ -612,6 +621,17 @@ dd {
   border-color: rgba(110, 231, 183, 0.35);
   color: var(--live);
   background: rgba(110, 231, 183, 0.12);
+}
+
+.ds-connect[data-state="connected"] .dot {
+  display: block;
+  background: var(--live);
+  box-shadow: 0 0 10px var(--live);
+}
+
+.ds-connect[data-state="connected"]:disabled {
+  opacity: 0.85;
+  cursor: default;
 }
 
 .fx h2,

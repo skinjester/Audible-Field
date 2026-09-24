@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape mixer</title>
-    <link rel="stylesheet" href="/styles.css?v=109" />
+    <link rel="stylesheet" href="/styles.css?v=111" />
     <script type="importmap">
       {
         "imports": {
@@ -120,7 +120,8 @@
               <div class="ds-hid">
                 <span class="ds-hid-status" data-ds-status>Touchpad: —</span>
                 <button type="button" class="ds-connect" data-ds-connect>
-                  Connect touchpad
+                  <span class="dot" aria-hidden="true"></span>
+                  <span data-ds-connect-label>Connect touchpad</span>
                 </button>
               </div>
             </header>
@@ -340,6 +341,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=126"></script>
+    <script type="module" src="/app.js?v=128"></script>
   </body>
 </html>
