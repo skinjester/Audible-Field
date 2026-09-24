@@ -872,13 +872,74 @@ dd {
   color: var(--muted);
 }
 
-.fx-card h3 {
+.fx-card h3,
+.fx-card .fx-plugin,
+.fx-card .fx-plugin-static {
   margin: 0 0 6px;
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.fx-card .fx-plugin-static {
+  color: inherit;
+}
+
+.fx-card .fx-plugin {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.fx-card .fx-plugin .fx-plugin-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fx-card .fx-plugin .stem-caret {
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  opacity: 0.55;
+  translate: 0 1px;
+}
+
+.fx-card .fx-plugin.is-interactive {
+  cursor: pointer;
+}
+
+.fx-card .fx-plugin.is-interactive:hover,
+.fx-card .fx-plugin.is-interactive.is-open {
+  color: var(--live);
+}
+
+.fx-card .fx-plugin.is-interactive:hover .stem-caret,
+.fx-card .fx-plugin.is-interactive.is-open .stem-caret {
+  opacity: 1;
+}
+
+.fx-card .fx-plugin:disabled {
+  cursor: default;
+}
+
+.fx-card .fx-plugin:disabled .stem-caret {
+  display: none;
 }
 
 .fx-card dl {
@@ -1036,7 +1097,8 @@ dd {
 }
 
 @media (max-height: 820px) {
-  .fx-card h3 {
+  .fx-card h3,
+  .fx-card .fx-plugin {
     margin-bottom: 4px;
   }
 }

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape mixer</title>
-    <link rel="stylesheet" href="/styles.css?v=103" />
+    <link rel="stylesheet" href="/styles.css?v=105" />
     <script type="importmap">
       {
         "imports": {
@@ -23,8 +23,8 @@
         </div>
         <div class="top-actions">
           <div class="mode-toggle" role="group" aria-label="Input mode">
-            <button type="button" data-mode="max" aria-pressed="true">Max</button>
-            <button type="button" data-mode="browser" aria-pressed="false">Browser audio</button>
+            <button type="button" data-mode="max" aria-pressed="false">Max</button>
+            <button type="button" data-mode="browser" aria-pressed="true">Browser audio</button>
           </div>
           <div class="status" data-state="offline">
             <span class="dot"></span>
@@ -200,12 +200,12 @@
               <p class="kicker">Face buttons</p>
               <h2>Active plugin</h2>
             </div>
-            <p class="fx-active" data-fx-active>X · Saturn 2</p>
+            <p class="fx-active" data-fx-active>X · WAM Off</p>
           </header>
           <div class="fx-grid">
             <article class="fx-card" data-fx-card="cross" data-on="true">
               <p class="fx-btn">X</p>
-              <h3>Saturn 2</h3>
+              <p class="fx-plugin-static" data-fx-name="cross" title="Press X to bypass WAMs">WAM Off</p>
               <dl>
                 <div>
                   <dt>Param 112</dt>
@@ -219,7 +219,10 @@
             </article>
             <article class="fx-card" data-fx-card="square">
               <p class="fx-btn">Square</p>
-              <h3>kHs Comb Filter</h3>
+              <button type="button" class="fx-plugin" data-fx-plugin="square" aria-haspopup="listbox" aria-expanded="false" title="Choose Square FX">
+                <span class="fx-plugin-label" data-fx-name="square">kHs Comb Filter</span>
+                <span class="stem-caret" aria-hidden="true"></span>
+              </button>
               <dl>
                 <div>
                   <dt>Stick X</dt>
@@ -233,7 +236,10 @@
             </article>
             <article class="fx-card" data-fx-card="triangle">
               <p class="fx-btn">Triangle</p>
-              <h3>kHs Formant Filter</h3>
+              <button type="button" class="fx-plugin" data-fx-plugin="triangle" aria-haspopup="listbox" aria-expanded="false" title="Choose Triangle FX">
+                <span class="fx-plugin-label" data-fx-name="triangle">kHs Formant Filter</span>
+                <span class="stem-caret" aria-hidden="true"></span>
+              </button>
               <dl>
                 <div>
                   <dt>Param 2</dt>
@@ -247,7 +253,10 @@
             </article>
             <article class="fx-card" data-fx-card="circle">
               <p class="fx-btn">Circle</p>
-              <h3>Crystallizer</h3>
+              <button type="button" class="fx-plugin" data-fx-plugin="circle" aria-haspopup="listbox" aria-expanded="false" title="Choose Circle FX">
+                <span class="fx-plugin-label" data-fx-name="circle">Crystallizer</span>
+                <span class="stem-caret" aria-hidden="true"></span>
+              </button>
               <dl>
                 <div>
                   <dt>Param 17</dt>
@@ -277,6 +286,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=108"></script>
+    <script type="module" src="/app.js?v=113"></script>
   </body>
 </html>

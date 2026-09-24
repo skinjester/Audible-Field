@@ -19,9 +19,10 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=61";
 import { hideVisualize, showVisualize } from "./visualize.js?v=80";
-import { audioEngine } from "./audio-engine.js?v=7";
+import { audioEngine } from "./audio-engine.js?v=10";
 import { gamepadInput } from "./gamepad-input.js?v=3";
-import { openStemDropdown } from "./sample-picker.js?v=14";
+import { openStemDropdown } from "./sample-picker.js?v=15";
+import { openFxDropdown } from "./fx-picker.js?v=3";
 
 const pad = document.querySelector("[data-pad]");
 const cursor = document.querySelector("[data-cursor]");
@@ -53,6 +54,7 @@ const panels = document.querySelectorAll("[data-panel]");
 const vizCanvas = document.querySelector("[data-viz-canvas]");
 const modeButtons = document.querySelectorAll("[data-mode]");
 const stemSlots = document.querySelectorAll("[data-stem-slot]");
+const fxPluginBtns = document.querySelectorAll("[data-fx-plugin]");
 const CORNER_TITLES = { tl: "TL", tr: "TR", bl: "BL", br: "BR" };
 const fxCards = {
   cross: document.querySelector('[data-fx-card="cross"]'),
@@ -67,7 +69,7 @@ const fxButtonLabels = {
   circle: "Circle",
 };
 const fxLabels = {
-  cross: "X · Saturn 2",
+  cross: "X · WAM Off",
   square: "Square · kHs Comb Filter",
   triangle: "Triangle · kHs Formant Filter",
   circle: "Circle · Crystallizer",
@@ -95,7 +97,7 @@ const VIZ_NAMES = {
 const dpadDirs = new Set(["up", "down", "left", "right"]);
 
 /** @type {"max" | "browser"} */
-let inputMode = "max";
+let inputMode = "browser";
 let audioStarting = false;
 /** @type {Promise<void> | null} */
 let audioStartPromise = null;
@@ -137,16 +139,90 @@ function setFxName(button, name) {
   if (!controller.fx[button] || !name) return;
   setFxNameCore(button, name);
   fxLabels[button] = `${fxButtonLabels[button]} · ${name}`;
-  const card = fxCards[button];
-  if (!card) return;
-  const title = card.querySelector("h3");
-  if (title) title.textContent = name;
+  const label = document.querySelector(`[data-fx-name="${button}"]`);
+  if (label) label.textContent = name;
+}
+
+function updateFxPluginState() {
+  const browser = inputMode === "browser";
+  for (const btn of fxPluginBtns) {
+    btn.disabled = !browser;
+    btn.classList.toggle("is-interactive", browser);
+    const slot = btn.dataset.fxPlugin;
+    btn.title = browser
+      ? `Choose ${fxButtonLabels[slot] || slot} FX / WAM`
+      : "Switch to Browser audio to change FX";
+  }
+}
+
+function syncFxLabelsFromEngine() {
+  if (!audioEngine.running) return;
+  setFxName("cross", "WAM Off");
+  for (const slot of ["square", "triangle", "circle"]) {
+    const assigned = audioEngine.fxAssignment?.[slot];
+    if (!assigned) continue;
+    const label =
+      assigned.kind === "wam"
+        ? `${assigned.label} (WAM)`
+        : `${assigned.label} (approx)`;
+    setFxName(slot, label);
+  }
+}
+
+async function assignFxPlugin(slot, choice) {
+  if (slot === "cross") return;
+  try {
+    if (inputMode !== "browser") {
+      await setInputMode("browser");
+    }
+    await ensureBrowserAudio();
+    const assigned = await audioEngine.replaceFx(slot, choice);
+    syncFxLabelsFromEngine();
+    setActiveFx(slot);
+    const label =
+      assigned?.kind === "wam"
+        ? `${assigned.label} (WAM)`
+        : `${assigned?.label || choice.label} (approx)`;
+    setStatus("audio", `${fxButtonLabels[slot] || slot} ← ${label}`);
+    renderDiagnostics();
+  } catch (err) {
+    console.error(err);
+    setStatus("offline", err?.message || "FX load failed");
+  }
+}
+
+function openFxPicker(slot, anchor) {
+  if (slot === "cross") return;
+  if (inputMode !== "browser") {
+    setStatus("loading", "Switch to Browser audio to assign FX");
+    return;
+  }
+  void openFxDropdown({
+    anchor,
+    slot,
+    onSelect: (choice) => {
+      void assignFxPlugin(slot, choice);
+    },
+  });
+}
+
+function activateFaceButton(button) {
+  if (!controller.fx[button]) return;
+  setActiveFx(button);
+  if (button === "cross" && inputMode === "browser" && audioEngine.running) {
+    void audioEngine.disableAllWams().then(() => {
+      syncFxLabelsFromEngine();
+      setStatus("audio", "X · WAM Off");
+      renderDiagnostics();
+    });
+  }
+  renderDiagnostics();
 }
 
 function setFxButton(button, value) {
   if (!controller.fx[button]) return;
   if (Number(value) === 0) return;
-  setActiveFx(button);
+  activateFaceButton(button);
 }
 
 function updateCornerLabels() {
@@ -399,25 +475,22 @@ async function setInputMode(mode) {
   }
 
   updateCornerLabels();
+  updateFxPluginState();
 
   if (mode === "browser") {
     gamepadInput.enable();
-    // Restore web-native FX names (Max may have overwritten them)
-    setFxName("cross", "Saturn 2 (approx)");
+    setFxName("cross", "WAM Off");
     setFxName("square", "Comb (approx)");
     setFxName("triangle", "Formant (approx)");
-    setFxName("circle", "OWLShimmer (loading…)");
+    setFxName("circle", "Crystallizer (approx)");
     setStatus(audioEngine.running ? "audio" : "loading", browserStatusLabel());
     await ensureBrowserAudio();
-    setFxName(
-      "circle",
-      audioEngine.circleFxMode === "wam" ? "OWLShimmer (WAM)" : "Crystallizer (approx)"
-    );
+    syncFxLabelsFromEngine();
     setStatus(audioEngine.running ? "audio" : "offline", browserStatusLabel());
   } else {
     gamepadInput.disable();
     if (audioEngine.running) await audioEngine.stop();
-    setFxName("cross", "Saturn 2");
+    setFxName("cross", "WAM Off");
     setFxName("square", "kHs Comb Filter");
     setFxName("triangle", "kHs Formant Filter");
     setFxName("circle", "Crystallizer");
@@ -432,6 +505,7 @@ function tick(now) {
       gamepadInput.poll();
       if (audioEngine.running) {
         audioEngine.sync(state, controller);
+        syncFxLabelsFromEngine();
         if (socketState !== "audio") {
           setStatus("audio", browserStatusLabel());
         }
@@ -608,14 +682,24 @@ pad.addEventListener("pointerup", () => {
   state.dragging = false;
 });
 
-// Click FX cards locally in browser mode
+// Click FX cards to activate; Square/Triangle/Circle titles open WAM picker
 for (const [button, card] of Object.entries(fxCards)) {
   if (!card) continue;
   card.style.cursor = "pointer";
   card.addEventListener("click", () => {
     if (inputMode !== "browser") return;
-    setActiveFx(button);
-    renderDiagnostics();
+    activateFaceButton(button);
+  });
+}
+
+for (const btn of fxPluginBtns) {
+  btn.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+  });
+  btn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openFxPicker(btn.dataset.fxPlugin, btn);
   });
 }
 
@@ -731,6 +815,8 @@ window.requestAnimationFrame(tick);
 connect();
 setActiveTab(location.hash.replace("#", "") === "visualize" ? "visualize" : "diagnostics");
 
-if (location.hash.replace("#", "") === "browser") {
+if (location.hash.replace("#", "") === "max") {
+  void setInputMode("max");
+} else {
   void setInputMode("browser");
 }

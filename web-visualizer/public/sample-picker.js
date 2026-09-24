@@ -470,6 +470,8 @@ async function loadAllSamples() {
  */
 export async function openStemDropdown(opts = {}) {
   ensureDropdownDom();
+  const { closeFxDropdown } = await import("./fx-picker.js?v=3");
+  closeFxDropdown();
 
   // Toggle closed if the same slot is already open.
   if (

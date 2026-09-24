@@ -11,6 +11,7 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const THREE_DIR = path.join(__dirname, "node_modules", "three");
 const BEDS_DIR = path.join(PUBLIC_DIR, "beds");
 const SAMPLES_DIR = path.join(__dirname, "..", "samples");
+const WAMS_DIR = path.join(PUBLIC_DIR, "wams");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -130,6 +131,61 @@ function listAllSamplesGrouped() {
     .sort((a, b) => a.folder.localeCompare(b.folder));
 
   return { groups };
+}
+
+/** Discover vendored WAM2 plugins (descriptor.json under public/wams, skip utils). */
+function listWams() {
+  const plugins = [];
+  if (!fs.existsSync(WAMS_DIR) || !fs.statSync(WAMS_DIR).isDirectory()) {
+    return { plugins };
+  }
+
+  function walk(absDir, relDir) {
+    let entries;
+    try {
+      entries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const abs = path.join(absDir, entry.name);
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (entry.name === "utils" || entry.name === "node_modules") continue;
+        if (!underRoot(abs, WAMS_DIR)) continue;
+        walk(abs, rel);
+        continue;
+      }
+      if (!entry.isFile() || entry.name !== "descriptor.json") continue;
+      if (!underRoot(abs, WAMS_DIR)) continue;
+      let desc;
+      try {
+        desc = JSON.parse(fs.readFileSync(abs, "utf8"));
+      } catch {
+        continue;
+      }
+      const folder = relDir || "";
+      const indexJs = path.join(absDir, "index.js");
+      if (!fs.existsSync(indexJs)) continue;
+      const pluginPath = folder ? `${folder}/index.js` : "index.js";
+      plugins.push({
+        id: `wam:${folder || desc.identifier || desc.name}`,
+        name: desc.name || path.basename(folder) || "WAM",
+        vendor: desc.vendor || folder.split("/")[0] || "Unknown",
+        path: pluginPath.replace(/\\/g, "/"),
+        folder: folder.replace(/\\/g, "/"),
+        keywords: Array.isArray(desc.keywords) ? desc.keywords : [],
+      });
+    }
+  }
+
+  walk(WAMS_DIR, "");
+  plugins.sort((a, b) => {
+    const v = String(a.vendor).localeCompare(String(b.vendor));
+    return v !== 0 ? v : String(a.name).localeCompare(String(b.name));
+  });
+  return { plugins };
 }
 
 function resolveFilePath(urlPath) {
@@ -311,6 +367,11 @@ const httpServer = http.createServer((req, res) => {
 
   if (urlPath === "/api/samples/all") {
     sendJson(res, 200, listAllSamplesGrouped());
+    return;
+  }
+
+  if (urlPath === "/api/wams") {
+    sendJson(res, 200, listWams());
     return;
   }
 

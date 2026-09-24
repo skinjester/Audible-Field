@@ -4,8 +4,8 @@
  *   → tone (LT) → shoulder FX (L1/R1) → pan → master (+ RT hall / R1 bloom)
  *
  * Commercial VSTs are approximated with Web Audio nodes so design can iterate
- * without Max. Circle upgrades to OWLShimmer (WAM) when the CDN load succeeds;
- * otherwise the native crystallizer fallback stays in place.
+ * without Max. Face-button slots can load vendored WAMs (e.g. OWLShimmer) via
+ * the FX picker; native approximations remain the fallback.
  *
  * Shoulder character (momentary, distinct from LT/RT):
  *   L1 — Abyss plunge: resonant lowpass + peak scream + grit
@@ -13,12 +13,8 @@
  */
 
 import { equalPowerMix, STEM_CORNERS, state as mixerState, controller as mixerController } from "./mixer-core.js?v=61";
-import {
-  loadWam,
-  OWL_SHIMMER_PATH,
-  OWL_SHIMMER_PARAMS,
-  setWamParam,
-} from "./wam-host.js?v=2";
+import { loadWam } from "./wam-host.js?v=3";
+import { NATIVE_FX, stickMapForPath } from "./wam-catalog.js?v=3";
 
 const CORNERS = ["tl", "tr", "bl", "br"];
 const FX_IDS = ["cross", "square", "triangle", "circle"];
@@ -106,8 +102,12 @@ export class EchoScapeAudioEngine {
     this._r1Held = false;
     /** @type {'pending' | 'wam' | 'native'} */
     this.circleFxMode = "pending";
-    this._circleIn = null;
-    this._circleWam = null;
+    /** @type {Record<string, { id: string, label: string, kind: string, path?: string }>} */
+    this.fxAssignment = {};
+    /** @type {Record<string, object | null>} */
+    this._fxWam = {};
+    /** @type {Record<string, GainNode | null>} */
+    this._fxInsertIn = {};
   }
 
   async start() {
@@ -182,12 +182,10 @@ export class EchoScapeAudioEngine {
     this._shoulderOut.connect(this._r1Send);
     this._r1Wet.connect(this._master);
 
-    // Load beds and OWLShimmer in parallel — WAM failure keeps native Circle.
-    const [, circleMode] = await Promise.all([
-      this._loadStems(),
-      this._tryUpgradeCircleWam(),
-    ]);
-    this.circleFxMode = circleMode;
+    // Load beds. Face FX stay native until a Square/Triangle/Circle WAM is chosen.
+    // Cross (X) is the WAM bypass and is the default active face.
+    await this._loadStems();
+    this.circleFxMode = "native";
 
     this.ready = true;
     this.running = true;
@@ -263,18 +261,10 @@ export class EchoScapeAudioEngine {
         /* ignore */
       }
     }
-    if (this._circleWam) {
-      try {
-        this._circleWam.audioNode?.disconnect();
-      } catch {
-        /* ignore */
+    if (this._fxWam) {
+      for (const id of FX_IDS) {
+        await this._destroySlotWam(id);
       }
-      try {
-        await this._circleWam.destroy?.();
-      } catch {
-        /* ignore */
-      }
-      this._circleWam = null;
     }
     try {
       await this.ctx?.close();
@@ -284,12 +274,14 @@ export class EchoScapeAudioEngine {
     this.ctx = null;
     this.stems = {};
     this.fx = {};
+    this.fxAssignment = {};
+    this._fxWam = {};
+    this._fxInsertIn = {};
     this.ready = false;
     this.running = false;
     this._l1Held = false;
     this._r1Held = false;
     this.circleFxMode = "pending";
-    this._circleIn = null;
   }
 
   _createReverb() {
@@ -413,44 +405,98 @@ export class EchoScapeAudioEngine {
   _applyShoulders(l1, r1, t) {
     const l1On = !!l1;
     const r1On = !!r1;
-    const l1Attack = l1On && !this._l1Held;
-    const r1Attack = r1On && !this._r1Held;
+    const l1Changed = l1On !== this._l1Held;
+    const r1Changed = r1On !== this._r1Held;
     this._l1Held = l1On;
     this._r1Held = r1On;
 
-    // L1: plunge into resonant mud (fast in, slower surface)
-    const l1Tau = l1Attack ? 0.045 : l1On ? 0.08 : 0.22;
-    this._l1Filter.frequency.setTargetAtTime(l1On ? 240 : 20000, t, l1Tau);
-    this._l1Filter.Q.setTargetAtTime(l1On ? 16 : 0.7, t, l1Tau);
-    this._l1Peak.frequency.setTargetAtTime(l1On ? 380 : 900, t, l1Tau);
-    this._l1Peak.Q.setTargetAtTime(l1On ? 11 : 4, t, l1Tau);
-    this._l1Peak.gain.setTargetAtTime(l1On ? 14 : 0, t, l1Tau);
-    this._l1DriveGain.gain.setTargetAtTime(l1On ? 0.42 : 0, t, l1Tau);
+    // Only schedule on press/release edges. Re-calling setTargetAtTime every
+    // frame restarts the ramp and makes release feel instantaneous.
+    // Attack: snappy so FX is fully in while held. Release: long fade out.
+    const L1_ATTACK = 0.04;
+    const L1_RELEASE = 0.85;
+    const R1_ATTACK = 0.025;
+    const R1_RELEASE = 1.15;
 
-    // R1: shatter upward into reverse glass space (snap in, long hang out)
-    const r1Tau = r1Attack ? 0.018 : r1On ? 0.04 : 0.55;
-    this._r1Send.gain.setTargetAtTime(r1On ? 1.35 : 0, t, r1Tau);
-    this._r1Highpass.frequency.setTargetAtTime(r1On ? 4800 : 280, t, r1Tau);
-    this._r1Highpass.Q.setTargetAtTime(r1On ? 8.5 : 0.9, t, r1Tau);
-    this._r1PreDelay.delayTime.setTargetAtTime(r1On ? 0.14 : 0.048, t, r1Tau);
-    this._r1Feedback.gain.setTargetAtTime(r1On ? 0.72 : 0, t, r1Tau);
-    this._r1Peak.frequency.setTargetAtTime(r1On ? 5100 : 3200, t, r1Tau);
-    this._r1Peak.Q.setTargetAtTime(r1On ? 14 : 6, t, r1Tau);
-    this._r1Peak.gain.setTargetAtTime(r1On ? 16 : 0, t, r1Tau);
-    this._r1Wet.gain.setTargetAtTime(r1On ? 1.55 : 1, t, r1Tau);
+    if (l1Changed) {
+      const tau = l1On ? L1_ATTACK : L1_RELEASE;
+      this._l1Filter.frequency.setTargetAtTime(l1On ? 240 : 20000, t, tau);
+      this._l1Filter.Q.setTargetAtTime(l1On ? 16 : 0.7, t, tau);
+      this._l1Peak.frequency.setTargetAtTime(l1On ? 380 : 900, t, tau);
+      this._l1Peak.Q.setTargetAtTime(l1On ? 11 : 4, t, tau);
+      this._l1Peak.gain.setTargetAtTime(l1On ? 14 : 0, t, tau);
+      this._l1DriveGain.gain.setTargetAtTime(l1On ? 0.42 : 0, t, tau);
+    }
 
-    // Duck dry path so bloom owns the mix (L1 grit still stacks if both held)
-    const dryTarget = r1On ? 0.28 : l1On ? 0.78 : 1;
-    const dryTau = r1On ? r1Tau : l1Tau;
-    this._shoulderOut.gain.setTargetAtTime(dryTarget, t, dryTau);
+    if (r1Changed) {
+      const tau = r1On ? R1_ATTACK : R1_RELEASE;
+      this._r1Send.gain.setTargetAtTime(r1On ? 1.35 : 0, t, tau);
+      this._r1Highpass.frequency.setTargetAtTime(r1On ? 4800 : 280, t, tau);
+      this._r1Highpass.Q.setTargetAtTime(r1On ? 8.5 : 0.9, t, tau);
+      this._r1PreDelay.delayTime.setTargetAtTime(r1On ? 0.14 : 0.048, t, tau);
+      this._r1Feedback.gain.setTargetAtTime(r1On ? 0.72 : 0, t, tau);
+      this._r1Peak.frequency.setTargetAtTime(r1On ? 5100 : 3200, t, tau);
+      this._r1Peak.Q.setTargetAtTime(r1On ? 14 : 6, t, tau);
+      this._r1Peak.gain.setTargetAtTime(r1On ? 16 : 0, t, tau);
+      this._r1Wet.gain.setTargetAtTime(r1On ? 1.55 : 1, t, tau);
+    }
+
+    if (l1Changed || r1Changed) {
+      // Duck dry path so bloom/abyss owns the mix while held; restore on release.
+      const dryTarget = r1On ? 0.28 : l1On ? 0.78 : 1;
+      let tau = Math.max(L1_RELEASE, R1_RELEASE);
+      if (r1Changed && !l1Changed) tau = r1On ? R1_ATTACK : R1_RELEASE;
+      else if (l1Changed && !r1Changed) tau = l1On ? L1_ATTACK : L1_RELEASE;
+      else if (r1On) tau = R1_ATTACK;
+      else if (l1On) tau = L1_ATTACK;
+      this._shoulderOut.gain.setTargetAtTime(dryTarget, t, tau);
+    }
   }
 
   _buildFx() {
     const ctx = this.ctx;
     this._wetIn = ctx.createGain();
     this._wetIn.gain.value = 1;
+    this._fxInsertIn = {};
+    this._fxWam = {};
+    this.fxAssignment = {};
 
-    // --- Cross: Saturn-like saturation ---
+    this._wireNativeSlot("cross", (insertIn, out) => this._buildNativeCross(insertIn, out));
+    this._wireNativeSlot("square", (insertIn, out) => this._buildNativeSquare(insertIn, out));
+    this._wireNativeSlot("triangle", (insertIn, out) => this._buildNativeTriangle(insertIn, out));
+    this._wireNativeSlot("circle", (insertIn, out) => this._buildNativeCircle(insertIn, out));
+  }
+
+  /**
+   * @param {string} id
+   * @param {(insertIn: GainNode, out: GainNode) => { apply: Function, teardown: Function }} builder
+   */
+  _wireNativeSlot(id, builder) {
+    const ctx = this.ctx;
+    const insertIn = ctx.createGain();
+    insertIn.gain.value = 1;
+    const out = ctx.createGain();
+    out.gain.value = 0;
+    this._wetIn.connect(insertIn);
+    out.connect(this._wet);
+    this._fxInsertIn[id] = insertIn;
+    const native = builder(insertIn, out);
+    this.fx[id] = {
+      out,
+      apply: native.apply,
+      teardownNative: native.teardown,
+      rebuildNative: () => builder(insertIn, out),
+    };
+    this.fxAssignment[id] = {
+      id: NATIVE_FX[id].id,
+      label: NATIVE_FX[id].label,
+      kind: "native",
+    };
+    this._fxWam[id] = null;
+  }
+
+  _buildNativeCross(insertIn, out) {
+    const ctx = this.ctx;
     const satIn = ctx.createGain();
     const satDrive = ctx.createWaveShaper();
     satDrive.curve = makeDistortionCurve(0.35);
@@ -458,48 +504,78 @@ export class EchoScapeAudioEngine {
     const satTone = ctx.createBiquadFilter();
     satTone.type = "lowpass";
     satTone.frequency.value = 8000;
-    const satOut = ctx.createGain();
-    satOut.gain.value = 0;
-    this._wetIn.connect(satIn);
+    insertIn.connect(satIn);
     satIn.connect(satDrive);
     satDrive.connect(satTone);
-    satTone.connect(satOut);
-    satOut.connect(this._wet);
-    this.fx.cross = {
-      out: satOut,
+    satTone.connect(out);
+    return {
       apply(x, y) {
         const drive = clamp01(x);
         const tone = clamp01(1 - y * 0.85);
         satDrive.curve = makeDistortionCurve(0.15 + drive * 0.85);
         satTone.frequency.setTargetAtTime(1200 + tone * 14000, ctx.currentTime, RAMP);
       },
+      teardown() {
+        try {
+          satIn.disconnect();
+        } catch {
+          /* ignore */
+        }
+        try {
+          satDrive.disconnect();
+        } catch {
+          /* ignore */
+        }
+        try {
+          satTone.disconnect();
+        } catch {
+          /* ignore */
+        }
+      },
     };
+  }
 
-    // --- Square: Comb filter ---
+  _buildNativeSquare(insertIn, out) {
+    const ctx = this.ctx;
     const combIn = ctx.createGain();
     const combDelay = ctx.createDelay(0.1);
     combDelay.delayTime.value = 0.012;
     const combFb = ctx.createGain();
     combFb.gain.value = 0.45;
-    const combOut = ctx.createGain();
-    combOut.gain.value = 0;
-    this._wetIn.connect(combIn);
+    insertIn.connect(combIn);
     combIn.connect(combDelay);
     combDelay.connect(combFb);
     combFb.connect(combDelay);
-    combDelay.connect(combOut);
-    combOut.connect(this._wet);
-    this.fx.square = {
-      out: combOut,
+    combDelay.connect(out);
+    return {
       apply(x, y) {
         const t = 0.002 + clamp01(x) * 0.045;
         const fb = 0.15 + clamp01(y) * 0.75;
         combDelay.delayTime.setTargetAtTime(t, ctx.currentTime, RAMP);
         combFb.gain.setTargetAtTime(fb, ctx.currentTime, RAMP);
       },
+      teardown() {
+        try {
+          combIn.disconnect();
+        } catch {
+          /* ignore */
+        }
+        try {
+          combDelay.disconnect();
+        } catch {
+          /* ignore */
+        }
+        try {
+          combFb.disconnect();
+        } catch {
+          /* ignore */
+        }
+      },
     };
+  }
 
-    // --- Triangle: Formant-ish dual peaking ---
+  _buildNativeTriangle(insertIn, out) {
+    const ctx = this.ctx;
     const formIn = ctx.createGain();
     const f1 = ctx.createBiquadFilter();
     f1.type = "peaking";
@@ -511,15 +587,11 @@ export class EchoScapeAudioEngine {
     f2.frequency.value = 1200;
     f2.Q.value = 5;
     f2.gain.value = 8;
-    const formOut = ctx.createGain();
-    formOut.gain.value = 0;
-    this._wetIn.connect(formIn);
+    insertIn.connect(formIn);
     formIn.connect(f1);
     f1.connect(f2);
-    f2.connect(formOut);
-    formOut.connect(this._wet);
-    this.fx.triangle = {
-      out: formOut,
+    f2.connect(out);
+    return {
       apply(x, y) {
         const shift = 0.5 + clamp01(x) * 2.5;
         const res = 2 + clamp01(y) * 10;
@@ -528,23 +600,27 @@ export class EchoScapeAudioEngine {
         f1.Q.setTargetAtTime(res, ctx.currentTime, RAMP);
         f2.Q.setTargetAtTime(res * 1.1, ctx.currentTime, RAMP);
       },
-    };
-
-    // --- Circle: native crystallizer (upgradable to OWLShimmer WAM) ---
-    this._circleIn = ctx.createGain();
-    this._circleIn.gain.value = 1;
-    const cryOut = ctx.createGain();
-    cryOut.gain.value = 0;
-    this._wetIn.connect(this._circleIn);
-    cryOut.connect(this._wet);
-    this._wireNativeCircle(this._circleIn, cryOut);
-    this.fx.circle = {
-      out: cryOut,
-      apply: (x, y) => this._applyNativeCircle(x, y),
+      teardown() {
+        try {
+          formIn.disconnect();
+        } catch {
+          /* ignore */
+        }
+        try {
+          f1.disconnect();
+        } catch {
+          /* ignore */
+        }
+        try {
+          f2.disconnect();
+        } catch {
+          /* ignore */
+        }
+      },
     };
   }
 
-  _wireNativeCircle(input, output) {
+  _buildNativeCircle(insertIn, out) {
     const ctx = this.ctx;
     const cryDelay = ctx.createDelay(1.5);
     cryDelay.delayTime.value = 0.28;
@@ -561,87 +637,223 @@ export class EchoScapeAudioEngine {
     cryLfo.connect(cryLfoGain);
     cryLfoGain.connect(cryDelay.delayTime);
     cryLfo.start();
-    input.connect(cryDelay);
+    insertIn.connect(cryDelay);
     cryDelay.connect(cryFilter);
     cryFilter.connect(cryFb);
     cryFb.connect(cryDelay);
-    cryFilter.connect(output);
-    this._nativeCircle = { cryDelay, cryFb, cryFilter, cryLfo, cryLfoGain };
+    cryFilter.connect(out);
+    return {
+      apply: (x, y) => {
+        const delay = 0.08 + clamp01(1 - x) * 0.55;
+        const fb = 0.15 + clamp01(y) * 0.55;
+        cryDelay.delayTime.setTargetAtTime(delay, ctx.currentTime, 0.05);
+        cryFb.gain.setTargetAtTime(fb, ctx.currentTime, RAMP);
+        cryLfoGain.gain.setTargetAtTime(0.01 + clamp01(y) * 0.06, ctx.currentTime, RAMP);
+      },
+      teardown() {
+        try {
+          cryLfo.stop();
+        } catch {
+          /* ignore */
+        }
+        try {
+          cryDelay.disconnect();
+        } catch {
+          /* ignore */
+        }
+        try {
+          cryFilter.disconnect();
+        } catch {
+          /* ignore */
+        }
+        try {
+          cryFb.disconnect();
+        } catch {
+          /* ignore */
+        }
+        try {
+          cryLfo.disconnect();
+        } catch {
+          /* ignore */
+        }
+        try {
+          cryLfoGain.disconnect();
+        } catch {
+          /* ignore */
+        }
+      },
+    };
   }
 
-  _applyNativeCircle(x, y) {
-    const nodes = this._nativeCircle;
-    if (!nodes || !this.ctx) return;
-    const delay = 0.08 + clamp01(1 - x) * 0.55;
-    const fb = 0.15 + clamp01(y) * 0.55;
-    nodes.cryDelay.delayTime.setTargetAtTime(delay, this.ctx.currentTime, 0.05);
-    nodes.cryFb.gain.setTargetAtTime(fb, this.ctx.currentTime, RAMP);
-    nodes.cryLfoGain.gain.setTargetAtTime(0.01 + clamp01(y) * 0.06, this.ctx.currentTime, RAMP);
-  }
-
-  _applyOwlShimmer(x, y) {
-    const node = this._circleWam?.audioNode;
-    if (!node) return;
-    const shimmer = Math.min(0.7, 0.08 + clamp01(1 - x) * 0.62);
-    const decay = 0.5 + clamp01(y) * 0.5;
-    const mix = 0.55 + clamp01(y) * 0.4;
-    const tone = 1600 + clamp01(x) * 5400;
-    setWamParam(node, OWL_SHIMMER_PARAMS.shimmer, shimmer);
-    setWamParam(node, OWL_SHIMMER_PARAMS.decay, decay);
-    setWamParam(node, OWL_SHIMMER_PARAMS.mix, mix);
-    setWamParam(node, OWL_SHIMMER_PARAMS.tone, tone);
-    setWamParam(node, OWL_SHIMMER_PARAMS.bypass, 0);
+  async _destroySlotWam(id) {
+    const instance = this._fxWam?.[id];
+    if (!instance) return;
+    try {
+      instance.audioNode?.disconnect();
+    } catch {
+      /* ignore */
+    }
+    try {
+      await instance.destroy?.();
+    } catch {
+      /* ignore */
+    }
+    this._fxWam[id] = null;
   }
 
   /**
-   * Swap Circle insert from native crystallizer → OWLShimmer WAM.
-   * @returns {Promise<'wam' | 'native'>}
+   * Tear down every loaded WAM and restore native inserts (X / Cross bypass).
+   * @returns {Promise<string[]>} slots that previously had a WAM
    */
-  async _tryUpgradeCircleWam() {
-    if (!this.ctx || !this._circleIn || !this.fx.circle) return "native";
-    try {
-      const instance = await loadWam(this.ctx, OWL_SHIMMER_PATH);
-      const wamNode = instance.audioNode;
-
-      // Detach native insert completely before wiring the WAM.
-      try {
-        this._circleIn.disconnect();
-      } catch {
-        /* ignore */
-      }
-      try {
-        this._nativeCircle?.cryFilter?.disconnect();
-      } catch {
-        /* ignore */
-      }
-      try {
-        this._nativeCircle?.cryLfo?.stop();
-      } catch {
-        /* ignore */
-      }
-
-      this._circleIn.connect(wamNode);
-      wamNode.connect(this.fx.circle.out);
-
-      this._circleWam = instance;
-      this._nativeCircle = null;
-      this.fx.circle.apply = (x, y) => this._applyOwlShimmer(x, y);
-      this._applyOwlShimmer(0.5, 0.5);
-
-      console.info("[EchoScape audio] Circle FX → OWLShimmer (WAM)");
-      return "wam";
-    } catch (err) {
-      console.warn(
-        "[EchoScape audio] OWLShimmer unavailable, keeping native Circle FX:",
-        err?.message || err
+  async disableAllWams() {
+    if (!this.ctx || !this.fx) return [];
+    const cleared = [];
+    for (const id of FX_IDS) {
+      if (!this._fxWam?.[id]) continue;
+      await this._assignFxSlot(
+        id,
+        {
+          id: NATIVE_FX[id].id,
+          kind: "native",
+          label: NATIVE_FX[id].label,
+        },
+        { exclusive: false }
       );
-      return "native";
+      cleared.push(id);
     }
+    this.circleFxMode = "native";
+    if (cleared.length) {
+      console.info("[EchoScape audio] WAMs disabled (X bypass):", cleared.join(", "));
+    }
+    return cleared;
+  }
+
+  /**
+   * Assign native FX or a vendored WAM to a face-button slot.
+   * @param {string} button
+   * @param {{ id: string, kind: 'native'|'wam', label: string, path?: string }} choice
+   */
+  async replaceFx(button, choice) {
+    if (button === "cross") {
+      throw new Error("Cross (X) cannot host a WAM — it bypasses WAMs");
+    }
+    if (!this.ctx || !this.fx[button]) {
+      await this.start();
+    } else {
+      await this.resume();
+    }
+    return this._assignFxSlot(button, choice, { exclusive: true });
+  }
+
+  /**
+   * @param {string} button
+   * @param {{ id: string, kind: 'native'|'wam', label: string, path?: string }} choice
+   * @param {{ exclusive?: boolean }} [opts]
+   */
+  async _assignFxSlot(button, choice, opts = {}) {
+    const exclusive = opts.exclusive !== false;
+    if (!FX_IDS.includes(button)) throw new Error(`Unknown FX slot ${button}`);
+    if (!choice?.kind) throw new Error("replaceFx requires choice.kind");
+    if (button === "cross" && choice.kind === "wam") {
+      throw new Error("Cross (X) cannot host a WAM");
+    }
+
+    const slot = this.fx[button];
+    const insertIn = this._fxInsertIn[button];
+    if (!slot || !insertIn || !this.ctx) throw new Error(`FX slot ${button} not built`);
+
+    // Mutual exclusivity: only one WAM in the graph at a time.
+    if (choice.kind === "wam" && exclusive) {
+      for (const id of FX_IDS) {
+        if (id === button || !this._fxWam?.[id]) continue;
+        await this._assignFxSlot(
+          id,
+          {
+            id: NATIVE_FX[id].id,
+            kind: "native",
+            label: NATIVE_FX[id].label,
+          },
+          { exclusive: false }
+        );
+      }
+    }
+
+    // Tear down current insert (WAM or native chain).
+    await this._destroySlotWam(button);
+    try {
+      insertIn.disconnect();
+    } catch {
+      /* ignore */
+    }
+    try {
+      slot.teardownNative?.();
+    } catch {
+      /* ignore */
+    }
+    slot.teardownNative = null;
+
+    if (choice.kind === "wam") {
+      const path = choice.path;
+      if (!path) throw new Error("WAM choice requires path");
+      try {
+        const instance = await loadWam(this.ctx, path);
+        const wamNode = instance.audioNode;
+        insertIn.connect(wamNode);
+        wamNode.connect(slot.out);
+        this._fxWam[button] = instance;
+        const applyStick = stickMapForPath(path);
+        slot.apply = (x, y) => applyStick(wamNode, x, y);
+        applyStick(wamNode, 0.5, 0.5);
+        this.fxAssignment[button] = {
+          id: choice.id,
+          label: choice.label || path,
+          kind: "wam",
+          path,
+        };
+        if (button === "circle") this.circleFxMode = "wam";
+        console.info(`[EchoScape audio] ${button} FX → ${choice.label || path} (WAM)`);
+        this.setActiveFx(button, true);
+        this.sync(mixerState, mixerController);
+        return this.fxAssignment[button];
+      } catch (err) {
+        console.warn(
+          `[EchoScape audio] WAM failed for ${button}, restoring native:`,
+          err?.message || err
+        );
+        choice = {
+          id: NATIVE_FX[button].id,
+          kind: "native",
+          label: NATIVE_FX[button].label,
+        };
+      }
+    }
+
+    // Native
+    const native = slot.rebuildNative?.() || this._wireFallbackNative(button, insertIn, slot.out);
+    slot.apply = native.apply;
+    slot.teardownNative = native.teardown;
+    this.fxAssignment[button] = {
+      id: choice.id || NATIVE_FX[button].id,
+      label: choice.label || NATIVE_FX[button].label,
+      kind: "native",
+    };
+    if (button === "circle") this.circleFxMode = "native";
+    console.info(`[EchoScape audio] ${button} FX → ${this.fxAssignment[button].label} (native)`);
+    this.setActiveFx(this.activeFx, true);
+    this.sync(mixerState, mixerController);
+    return this.fxAssignment[button];
+  }
+
+  _wireFallbackNative(button, insertIn, out) {
+    if (button === "cross") return this._buildNativeCross(insertIn, out);
+    if (button === "square") return this._buildNativeSquare(insertIn, out);
+    if (button === "triangle") return this._buildNativeTriangle(insertIn, out);
+    return this._buildNativeCircle(insertIn, out);
   }
 
   async _loadStems() {
     // Load sequentially so the first bed can start sooner and we avoid
-    // saturating the network with four ~50MB WAVs at once.
+    // saturating the network with four large WAVs at once.
     for (const corner of CORNERS) {
       const meta = STEM_CORNERS[corner];
       const url = meta.url || `/beds/${encodeURIComponent(meta.file)}`;
@@ -759,6 +971,7 @@ export class EchoScapeAudioEngine {
     if (!force && !this.running) return;
     if (!this.ctx || !this.fx[button]) return;
 
+    const switchingToCross = button === "cross" && this.activeFx !== "cross";
     this.activeFx = button;
     const t = this.ctx.currentTime;
     for (const id of FX_IDS) {
@@ -768,6 +981,11 @@ export class EchoScapeAudioEngine {
     }
     this._wet.gain.setTargetAtTime(0.45, t, RAMP);
     this._dry.gain.setTargetAtTime(0.85, t, RAMP);
+
+    // X always bypasses WAMs — tear them down when Cross becomes active.
+    if (switchingToCross) {
+      void this.disableAllWams();
+    }
   }
 
   /**

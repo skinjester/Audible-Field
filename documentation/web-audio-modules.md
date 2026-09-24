@@ -88,12 +88,12 @@ Burns Audio (Sequencer Party) plugins live under `burns-audio/` in the community
 
 | Slot | Max (typical) | Browser today | WAM status | Stick idea |
 | --- | --- | --- | --- | --- |
-| **Cross** | Saturn 2 | Native waveshaper saturation | Candidate: Simple Distortion, Temper, QuadraFuzz | X = drive, Y = tone |
-| **Square** | kHs Comb | Native delay comb | Candidate: ThruZeroFlanger, WeirdPhaser, StonePhaser | X = time/rate, Y = feedback |
-| **Triangle** | kHs Formant | Native dual peaking | Candidate: SweetWah, GraphicEqualizer, Simple EQ | X = formant shift, Y = resonance |
-| **Circle** | Crystallizer | **OWLShimmer (WAM)** + crystallizer fallback | **Vendored & wired** | X = shimmer/tone, Y = decay/mix |
-| **RT hall** | Ambient reverb | Native noise IR convolver | Candidate: Grey Hole, KBVerb, Microverb, OwlDirty | RT depth only (no stick) |
-| **L1 / R1** | Shoulder color | Native abyss / glass bloom | Optional later; keep native unless a WAM clearly wins | Momentary |
+| **Cross** | Saturn 2 | Native waveshaper | **Vendored:** Temper, Simple Distortion, QuadraFuzz | X = drive, Y = tone |
+| **Square** | kHs Comb | Native delay comb | **Vendored:** ThruZeroFlanger, StonePhaser, WeirdPhaser, PingPongDelay | X = time/rate, Y = feedback |
+| **Triangle** | kHs Formant | Native dual peaking | **Vendored:** SweetWah, DualPitchShifter, GraphicEqualizer | X = formant shift, Y = resonance |
+| **Circle** | Crystallizer | OWLShimmer default | **Vendored:** OWLShimmer, DualPitchShifter, OwlDirty, Grey Hole | X = shimmer/tone, Y = decay/mix |
+| **RT hall** | Ambient reverb | Native noise IR | **Vendored (not wired yet):** Grey Hole, Microverb (`burns-audio/reverb`) | RT depth only |
+| **L1 / R1** | Shoulder color | Native abyss / glass bloom | Optional later | Momentary |
 
 ## Catalog — community WAM2 plugins
 
@@ -118,9 +118,9 @@ Browse / audition: https://wamlist.com/
 
 | Name | Vendor | Path | Status | Notes |
 | --- | --- | --- | --- | --- |
-| Simple Distortion | Sequencer Party | `burns-audio/distortion/` | candidate | Cross-like waveshaper |
-| Temper | Wimmics | `wimmics/temper/` | candidate | Phase-y digital drive |
-| QuadraFuzz | Wimmics | `wimmics/quadrafuzz/` | candidate | Multiband fuzz |
+| Simple Distortion | Sequencer Party | `burns-audio/distortion/` | **vendored** | Cross-like waveshaper |
+| Temper | Wimmics | `wimmics/temper/` | **vendored** | Phase-y digital drive |
+| QuadraFuzz | Wimmics | `wimmics/quadrafuzz/dist/` | **vendored** | Multiband fuzz |
 | TS9 Overdrive | Wimmics | `wimmics/TS9_Overdrive/` | candidate | Pedal color |
 | Big Muff | Wimmics | `wimmics/BigMuff/` | candidate | Heavy fuzz |
 | KppFuzz | Wimmics | `wimmics/Kpp_fuzz/` | candidate | Vintage fuzz |
@@ -140,42 +140,40 @@ Browse / audition: https://wamlist.com/
 | Name | Vendor | Path | Status | Notes |
 | --- | --- | --- | --- | --- |
 | Simple Delay | Sequencer Party | `burns-audio/delay/` | candidate | Stereo filtered delay |
-| PingPongDelay | Wimmics | `wimmics/pingpongdelay/` | candidate | Classic ping-pong |
+| PingPongDelay | Wimmics | `wimmics/pingpongdelay/dist/` | **vendored** | Classic ping-pong |
 | SmoothDelay | Wimmics | `wimmics/SmoothDelay/` | candidate | Click-free time changes |
 
 ### Effect / Reverb — A
 
 | Name | Vendor | Path | Status | Notes |
 | --- | --- | --- | --- | --- |
-| **OWLShimmer** | Wimmics | `wimmics/OwlShimmer/` | **vendored + wired (Circle)** | Shimmer reverb; Crystallizer-adjacent |
-| Grey Hole | Wimmics | `wimmics/greyhole/` | candidate | Blackhole-ish; RT hall candidate |
-| KBVerb | Wimmics | `wimmics/kbverb/` | candidate | Ambient hall |
-| OwlDirty | Wimmics | `wimmics/OwlDirty/` | candidate | Dirty reverb tail |
-| Microverb | Sequencer Party | `burns-audio/reverb/` | candidate | Convolution + IR set |
+| **OWLShimmer** | Wimmics | `wimmics/OwlShimmer/` | **vendored + wired** | Shimmer reverb; Crystallizer-adjacent |
+| Grey Hole | Wimmics | `wimmics/greyhole/` | **vendored** | Blackhole-ish; Circle / RT hall |
+| OwlDirty | Wimmics | `wimmics/OwlDirty/` | **vendored** | Dirty reverb tail; Circle |
 
 ### Effect / EQ & filter — A/B
 
 | Name | Vendor | Path | Status | Notes |
 | --- | --- | --- | --- | --- |
 | Simple EQ | Sequencer Party | `burns-audio/simpleEQ/` | candidate | Three-band |
-| GraphicEqualizer | Wimmics | `wimmics/graphicEqualizer/` | candidate | Bank of filters |
-| SweetWah | Wimmics | `wimmics/sweetWah/` | candidate | Autowah; Triangle-adjacent |
+| GraphicEqualizer | Wimmics | `wimmics/graphicEqualizer/` | **vendored** | Bank of filters |
+| SweetWah | Wimmics | `wimmics/sweetWah/` | **vendored** | Autowah; Triangle-adjacent |
 | Blipper | Wimmics | `wimmics/blipper/` | skip | Percussion synth-ish |
 
 ### Effect / Modulation — A
 
 | Name | Vendor | Path | Status | Notes |
 | --- | --- | --- | --- | --- |
-| StonePhaser | Wimmics | `wimmics/stonephaser/` | candidate | Small Stone–like |
-| ThruZeroFlanger | Wimmics | `wimmics/ThruZeroFlanger/` | candidate | Comb-adjacent |
-| WeirdPhaser | Wimmics | `wimmics/WeirdPhaser/` | candidate | Stereo SSB phaser |
+| StonePhaser | Wimmics | `wimmics/stonephaser/` | **vendored** | Small Stone–like |
+| ThruZeroFlanger | Wimmics | `wimmics/ThruZeroFlanger/` | **vendored** | Comb-adjacent |
+| WeirdPhaser | Wimmics | `wimmics/WeirdPhaser/` | **vendored** | Stereo SSB phaser |
 | Stereo Enhancer | Wimmics | `wimmics/StereoEnhancer/` | candidate | Width (post-pan optional) |
 
 ### Effect / Pitch — A/B
 
 | Name | Vendor | Path | Status | Notes |
 | --- | --- | --- | --- | --- |
-| DualPitchShifter | Wimmics | `wimmics/DualPitchShifter/` | candidate | Crystallizer-family |
+| DualPitchShifter | Wimmics | `wimmics/DualPitchShifter/` | **vendored** | Crystallizer-family |
 | StereoFreqShifter | Wimmics | `wimmics/StereoFreqShifter/` | candidate | Lush stereo shift |
 | Csound Pitch Shifter | Wimmics | `wimmics/csoundPitchShifter/` | candidate | WASM size / CPU watch |
 
