@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { controller } from "./mixer-core.js?v=65";
 
 const GRID = 16;
 const CELL = 1;
@@ -16,6 +17,10 @@ const PITCH_MIN = 0.32;
 const PITCH_MAX = 1.2;
 const DIST_MIN = 9;
 const DIST_MAX = 40;
+const STICK_DEADZONE = 0.12;
+const AIM_SPEED = 9;
+const YAW_RATE = 1.15;
+const PITCH_RATE = 0.65;
 
 let canvas = null;
 let wrap = null;
@@ -47,6 +52,9 @@ let splashes = [];
 let aim = null;
 /** @type {{ x: number, y: number, id: number } | null} */
 let press = null;
+let aimX = 0.5;
+let aimZ = 0.5;
+let crossWasDown = false;
 
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
@@ -105,6 +113,21 @@ function resizeCanvas() {
   return true;
 }
 
+function stickAxis(value) {
+  const n = Number(value) || 0;
+  return Math.abs(n) < STICK_DEADZONE ? 0 : n;
+}
+
+function setAimFromWorld() {
+  const limit = (GRID * CELL) / 2 - 0.001;
+  aimX = Math.min(limit, Math.max(-limit, aimX));
+  aimZ = Math.min(limit, Math.max(-limit, aimZ));
+  const ix = Math.floor(aimX / CELL + GRID / 2);
+  const iz = Math.floor(aimZ / CELL + GRID / 2);
+  if (ix < 0 || iz < 0 || ix >= GRID || iz >= GRID) return;
+  setAim({ ix, iz });
+}
+
 function aimFromEvent(event) {
   if (!canvas || !camera) return;
   const rect = canvas.getBoundingClientRect();
@@ -112,17 +135,58 @@ function aimFromEvent(event) {
   pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointerNdc, camera);
-  if (!raycaster.ray.intersectPlane(groundPlane, hitPoint)) {
-    setAim(null);
-    return;
-  }
+  if (!raycaster.ray.intersectPlane(groundPlane, hitPoint)) return;
   const ix = Math.floor(hitPoint.x / CELL + GRID / 2);
   const iz = Math.floor(hitPoint.z / CELL + GRID / 2);
-  if (ix < 0 || iz < 0 || ix >= GRID || iz >= GRID) {
-    setAim(null);
-    return;
-  }
+  if (ix < 0 || iz < 0 || ix >= GRID || iz >= GRID) return;
+  aimX = hitPoint.x;
+  aimZ = hitPoint.z;
   setAim({ ix, iz });
+}
+
+function connectedPad() {
+  const pads = navigator.getGamepads?.();
+  if (!pads) return null;
+  let fallback = null;
+  for (let i = 0; i < pads.length; i += 1) {
+    const pad = pads[i];
+    if (!pad) continue;
+    if (/dualsense|dualshock|wireless controller|playstation/i.test(pad.id || "")) return pad;
+    if (!fallback) fallback = pad;
+  }
+  return fallback;
+}
+
+function applyController(dt) {
+  if (!camera || dt <= 0) return;
+
+  const lx = stickAxis(controller.rawX);
+  const ly = stickAxis(controller.rawY);
+  const rx = stickAxis(controller.rightX);
+  const ry = stickAxis(controller.rightY);
+  let cameraMoved = false;
+
+  if (rx || ry) {
+    yaw -= rx * YAW_RATE * dt;
+    pitch = Math.min(PITCH_MAX, Math.max(PITCH_MIN, pitch + ry * PITCH_RATE * dt));
+    cameraMoved = true;
+  }
+
+  if (lx || ly) {
+    const sin = Math.sin(yaw);
+    const cos = Math.cos(yaw);
+    const step = AIM_SPEED * dt;
+    aimX += (cos * lx - sin * ly) * step;
+    aimZ += (-sin * lx - cos * ly) * step;
+    setAimFromWorld();
+  }
+
+  if (cameraMoved) syncCamera();
+
+  const cross = connectedPad()?.buttons?.[0];
+  const crossDown = !!(cross && (cross.pressed || cross.value > 0.5));
+  if (crossDown && !crossWasDown && aim) dropAt(aim.ix, aim.iz);
+  crossWasDown = crossDown;
 }
 
 function setAim(next) {
@@ -173,6 +237,8 @@ function spawnSplash(x, y, z) {
 }
 
 function step(dt) {
+  applyController(dt);
+
   for (let i = fallers.length - 1; i >= 0; i -= 1) {
     const faller = fallers[i];
     faller.vy -= GRAVITY * dt;
@@ -282,10 +348,6 @@ function onPointerCancel() {
   press = null;
 }
 
-function onPointerLeave() {
-  if (!orbiting) setAim(null);
-}
-
 function onWheel(event) {
   event.preventDefault();
   distance = Math.min(DIST_MAX, Math.max(DIST_MIN, distance + event.deltaY * 0.012));
@@ -365,11 +427,11 @@ function initFallingBlocks(nextCanvas) {
   marker.visible = false;
   marker.renderOrder = 1;
   scene.add(marker);
+  setAimFromWorld();
 
   canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("pointerdown", onPointerDown);
   canvas.addEventListener("pointerup", onPointerUp);
-  canvas.addEventListener("pointerleave", onPointerLeave);
   canvas.addEventListener("pointercancel", onPointerCancel);
   canvas.addEventListener("wheel", onWheel, { passive: false });
   canvas.addEventListener("contextmenu", onContextMenu);

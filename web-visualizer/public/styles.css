@@ -205,9 +205,9 @@ h1 {
 }
 
 .tabs button[aria-selected="true"] {
-  color: var(--ink);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+  background: rgba(110, 231, 183, 0.16);
+  color: var(--live);
+  border-color: rgba(110, 231, 183, 0.35);
 }
 
 [data-panel][hidden] {

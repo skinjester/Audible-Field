@@ -19,7 +19,7 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { hideFallingBlocks, showFallingBlocks } from "./falling-blocks.js?v=1";
+import { hideFallingBlocks, showFallingBlocks } from "./falling-blocks.js?v=5";
 import { audioEngine } from "./audio-engine.js?v=20";
 import { gamepadInput } from "./gamepad-input.js?v=6";
 import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=4";
@@ -110,6 +110,9 @@ const dpadDirs = new Set(["up", "down", "left", "right"]);
 
 /** @type {"max" | "browser"} */
 let inputMode = "browser";
+const TAB_IDS = new Set(["diagnostics", "visualize", "falling-blocks"]);
+const TAB_STORAGE_KEY = "echoscape.tab";
+
 /** @type {"diagnostics" | "visualize" | "falling-blocks"} */
 let activeTab = "diagnostics";
 /** True while Falling Blocks has suspended browser playback. */
@@ -805,9 +808,29 @@ async function setFallingBlocksAudio(disabled) {
   }
 }
 
+function storedTab() {
+  try {
+    const saved = localStorage.getItem(TAB_STORAGE_KEY);
+    if (TAB_IDS.has(saved)) return saved;
+  } catch {
+    /* storage unavailable */
+  }
+  return "diagnostics";
+}
+
+function rememberTab(tabId) {
+  try {
+    localStorage.setItem(TAB_STORAGE_KEY, tabId);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 function setActiveTab(tabId) {
+  if (!TAB_IDS.has(tabId)) return;
   const prevTab = activeTab;
   activeTab = tabId;
+  rememberTab(tabId);
 
   document.body.classList.toggle("mode-visualize", tabId === "visualize");
   document.body.classList.toggle("mode-falling-blocks", tabId === "falling-blocks");
@@ -1154,8 +1177,8 @@ updateCornerLabels();
 renderDiagnostics();
 window.requestAnimationFrame(tick);
 connect();
-const openingTab = location.hash.replace("#", "");
-setActiveTab(openingTab === "visualize" || openingTab === "falling-blocks" ? openingTab : "diagnostics");
+const hashTab = location.hash.replace("#", "");
+setActiveTab(TAB_IDS.has(hashTab) ? hashTab : storedTab());
 
 if (location.hash.replace("#", "") === "max") {
   void setInputMode("max");
