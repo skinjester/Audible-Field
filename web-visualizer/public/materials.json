@@ -89,8 +89,8 @@
       "id": "water",
       "label": "Water",
       "color": "#4a8fc7",
+      "opacity": 0.38,
       "surface": "liquid",
-      "shuffleLimit": 7,
       "rules": [
         {
           "name": "fall",
@@ -101,13 +101,16 @@
           "name": "slide",
           "match": ["@.", "x_"],
           "result": ["_.", "x@"],
-          "rotations": "xz"
+          "rotations": "xz",
+          "pick": "one"
         },
         {
           "name": "flow",
           "match": ["@_"],
           "result": ["_@"],
-          "rotations": "xz"
+          "rotations": "xz",
+          "pick": "one",
+          "chance": 0.35
         }
       ]
     }

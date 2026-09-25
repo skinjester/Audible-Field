@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { controller } from "./mixer-core.js?v=65";
-import { compileMaterials, stepWorld } from "./rule-engine.js?v=21";
+import { compileMaterials, stepWorld } from "./rule-engine.js?v=25";
 
 const MAX_Y = 12;
 /**
@@ -110,6 +110,17 @@ let shuffleOriginX = null;
 /** Cell Z where the current shuffle streak began. */
 /** @type {Uint16Array | null} */
 let shuffleOriginZ = null;
+/** Seconds spent below minNeighbors (sparse absorb). */
+/** @type {Float32Array | null} */
+let sparseAges = null;
+/** Seconds spent resting on the liquid world floor. */
+/** @type {Float32Array | null} */
+let floorAges = null;
+/** Last horizontal flow facing (path follow). */
+/** @type {Int8Array | null} */
+let flowDx = null;
+/** @type {Int8Array | null} */
+let flowDz = null;
 /** Packed cell indices that currently hold material. */
 const occupied = new Set();
 /** @type {Map<number, THREE.InstancedMesh>} */
@@ -264,6 +275,10 @@ function setCell(x, y, z, value) {
     if (shuffleCounts) shuffleCounts[i] = 0;
     if (shuffleOriginX) shuffleOriginX[i] = 0;
     if (shuffleOriginZ) shuffleOriginZ[i] = 0;
+    if (sparseAges) sparseAges[i] = 0;
+    if (floorAges) floorAges[i] = 0;
+    if (flowDx) flowDx[i] = 0;
+    if (flowDz) flowDz[i] = 0;
   } else if (prev === 0) {
     // Fresh spawn: bake current atom size; pitch matches so neighbors of this size touch.
     // Clear lifetime so rule transfers (or emit) start clean — don't inherit stale shrink.
@@ -274,6 +289,10 @@ function setCell(x, y, z, value) {
     if (shuffleCounts) shuffleCounts[i] = 0;
     if (shuffleOriginX) shuffleOriginX[i] = 0;
     if (shuffleOriginZ) shuffleOriginZ[i] = 0;
+    if (sparseAges) sparseAges[i] = 0;
+    if (floorAges) floorAges[i] = 0;
+    if (flowDx) flowDx[i] = 0;
+    if (flowDz) flowDz[i] = 0;
     if (posY) posY[i] = (y + 0.5) * atomSize;
     if (posX) posX[i] = worldXForCell(x, atomSize);
     if (posZ) posZ[i] = worldZForCell(z, atomSize);
@@ -383,6 +402,46 @@ function setShuffleOriginZ(x, y, z, value) {
   shuffleOriginZ[idx(x, y, z)] = Math.max(0, value | 0);
 }
 
+function getFlowDx(x, y, z) {
+  if (!flowDx || !inBounds(x, y, z)) return 0;
+  return flowDx[idx(x, y, z)];
+}
+
+function setFlowDx(x, y, z, value) {
+  if (!flowDx || !inBounds(x, y, z)) return;
+  flowDx[idx(x, y, z)] = value | 0;
+}
+
+function getFlowDz(x, y, z) {
+  if (!flowDz || !inBounds(x, y, z)) return 0;
+  return flowDz[idx(x, y, z)];
+}
+
+function setFlowDz(x, y, z, value) {
+  if (!flowDz || !inBounds(x, y, z)) return;
+  flowDz[idx(x, y, z)] = value | 0;
+}
+
+function getSparseAge(x, y, z) {
+  if (!sparseAges || !inBounds(x, y, z)) return 0;
+  return sparseAges[idx(x, y, z)];
+}
+
+function setSparseAge(x, y, z, value) {
+  if (!sparseAges || !inBounds(x, y, z)) return;
+  sparseAges[idx(x, y, z)] = Math.max(0, Number(value) || 0);
+}
+
+function getFloorAge(x, y, z) {
+  if (!floorAges || !inBounds(x, y, z)) return 0;
+  return floorAges[idx(x, y, z)];
+}
+
+function setFloorAge(x, y, z, value) {
+  if (!floorAges || !inBounds(x, y, z)) return;
+  floorAges[idx(x, y, z)] = Math.max(0, Number(value) || 0);
+}
+
 const gridApi = {
   get: getCell,
   set: setCell,
@@ -407,6 +466,14 @@ const gridApi = {
   setShuffleOriginX,
   getShuffleOriginZ,
   setShuffleOriginZ,
+  getFlowDx,
+  setFlowDx,
+  getFlowDz,
+  setFlowDz,
+  getSparseAge,
+  setSparseAge,
+  getFloorAge,
+  setFloorAge,
 };
 
 function materialLifetime(matIndex) {
@@ -667,10 +734,17 @@ function materialColor(matIndex) {
 function materialMeshMat(matIndex) {
   let mat = matCache.get(matIndex);
   if (mat) return mat;
+  const id = catalog?.idByIndex[matIndex];
+  const def = id ? catalog.byId.get(id) : null;
+  const opacity = def?.opacity ?? 1;
+  const transparent = opacity < 1;
   mat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(materialColor(matIndex)),
-    roughness: 0.76,
-    metalness: 0.02,
+    roughness: transparent ? 0.28 : 0.76,
+    metalness: transparent ? 0.08 : 0.02,
+    transparent,
+    opacity,
+    depthWrite: !transparent,
   });
   matCache.set(matIndex, mat);
   return mat;
@@ -745,6 +819,10 @@ export function clearBoard() {
   if (shuffleCounts) shuffleCounts.fill(0);
   if (shuffleOriginX) shuffleOriginX.fill(0);
   if (shuffleOriginZ) shuffleOriginZ.fill(0);
+  if (sparseAges) sparseAges.fill(0);
+  if (floorAges) floorAges.fill(0);
+  if (flowDx) flowDx.fill(0);
+  if (flowDz) flowDz.fill(0);
   occupied.clear();
 
   for (const splash of splashes) {
@@ -982,8 +1060,9 @@ function reconcileMeshes() {
 
 /**
  * Tag neighbors of eroding atoms with a forced lifetime.
- * Runs before rules so mobile liquids (water) get infected while still adjacent,
- * then again after rules for grains that just fell into contact.
+ * Solids shrink/dissolve on contact; liquids are left alone so they can spill
+ * into gaps instead of being pulled into the erode cluster.
+ * Runs before and after rules so newly adjacent solids still get tagged.
  * @returns {boolean}
  */
 function infectErodeContacts() {
@@ -1013,6 +1092,10 @@ function infectErodeContacts() {
       const nmat = cells[ni];
       if (nmat <= 0 || nmat === mat) continue;
       if ((erodeLives[ni] || 0) > 0) continue;
+      const nid = catalog.idByIndex[nmat];
+      const nDef = nid ? catalog.byId.get(nid) : null;
+      // Liquids flow into openings; don't infect/shrink them toward erode.
+      if (nDef?.surface === "liquid") continue;
       erodeLives[ni] = duration;
       dirty = true;
     }
@@ -1425,10 +1508,111 @@ function cullShuffling(moves) {
   return culled;
 }
 
+const FACE_DIRS = [
+  [1, 0, 0],
+  [-1, 0, 0],
+  [0, 1, 0],
+  [0, -1, 0],
+  [0, 0, 1],
+  [0, 0, -1],
+];
+
+function countSameNeighbors(x, y, z, matIndex) {
+  let n = 0;
+  for (const [dx, dy, dz] of FACE_DIRS) {
+    const nx = x + dx;
+    const ny = y + dy;
+    const nz = z + dz;
+    if (!inBounds(nx, ny, nz)) continue;
+    if (getCell(nx, ny, nz) === matIndex) n += 1;
+  }
+  return n;
+}
+
+/** True when resting on a solid grain (basin floor) or touching a solid wall. */
+function isInBoundedCatchment(x, y, z) {
+  if (!catalog) return false;
+  if (y > 0) {
+    const below = getCell(x, y - 1, z);
+    if (below > 0) {
+      const id = catalog.idByIndex[below];
+      const def = id ? catalog.byId.get(id) : null;
+      if (def?.surface === "solid") return true;
+    }
+  }
+  const sides = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+  ];
+  for (const [dx, dy, dz] of sides) {
+    const nx = x + dx;
+    const ny = y + dy;
+    const nz = z + dz;
+    if (!inBounds(nx, ny, nz)) continue;
+    const nmat = getCell(nx, ny, nz);
+    if (nmat <= 0) continue;
+    const id = catalog.idByIndex[nmat];
+    const def = id ? catalog.byId.get(id) : null;
+    if (def?.surface === "solid") return true;
+  }
+  return false;
+}
+
+/**
+ * Absorb sparse grains only when they have nowhere to collect (open floor,
+ * not in a solid basin). Pooling on/against solids is left alone.
+ * @param {number} dt
+ * @returns {boolean}
+ */
+function absorbSparseAndFloor(dt) {
+  if (!cells || !catalog || !sparseAges || dt <= 0 || occupied.size === 0) {
+    return false;
+  }
+  /** @type {number[]} */
+  const doomed = [];
+  for (const i of occupied) {
+    const mat = cells[i];
+    if (mat <= 0) continue;
+    const id = catalog.idByIndex[mat];
+    const def = id ? catalog.byId.get(id) : null;
+    if (!def) continue;
+    const minN = def.minNeighbors || 0;
+    const sparseLimit = def.sparseAbsorb || 0;
+    if (minN <= 0 || sparseLimit <= 0) {
+      sparseAges[i] = 0;
+      continue;
+    }
+
+    const { x, y, z } = decodeCell(i);
+    // Bounded catchments (solid floor or walls) may pool freely.
+    if (isInBoundedCatchment(x, y, z)) {
+      sparseAges[i] = 0;
+      if (floorAges) floorAges[i] = 0;
+      continue;
+    }
+
+    if (countSameNeighbors(x, y, z, mat) < minN) {
+      sparseAges[i] += dt;
+      if (sparseAges[i] >= sparseLimit) doomed.push(i);
+    } else {
+      sparseAges[i] = 0;
+    }
+  }
+  if (!doomed.length) return false;
+  for (const i of doomed) {
+    if (cells[i] <= 0) continue;
+    const { x, y, z } = decodeCell(i);
+    setCell(x, y, z, 0);
+  }
+  return true;
+}
+
 function step(dt) {
   applyController(dt);
 
-  // Infect before rules so water still touching erode gets tagged before it flows away.
+  // Infect solids before rules; liquids are not tagged (they spill into gaps).
   let infected = infectErodeContacts();
 
   ruleAcc += dt;
@@ -1442,12 +1626,13 @@ function step(dt) {
   infected = infectErodeContacts() || infected;
 
   const aged = ageAtoms(dt);
+  const absorbed = absorbSparseAndFloor(dt);
   const crushed = crushStackBottoms(dt);
   const settled = settleGravity(dt);
   const lateral = settleLateral(dt);
   const packed = packStickTogether();
   const culled = consumeOutOfBounds();
-  if (infected || aged || crushed || settled || lateral || packed || culled) {
+  if (infected || aged || absorbed || crushed || settled || lateral || packed || culled) {
     reconcileMeshes();
   }
 
@@ -1579,7 +1764,7 @@ function onWheel(event) {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=30`);
+  const res = await fetch(`/materials.json?v=36`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(await res.json());
@@ -1612,6 +1797,10 @@ function initScene(nextCanvas) {
   shuffleCounts = new Uint8Array(GRID_MAX * GRID_MAX * MAX_Y);
   shuffleOriginX = new Uint16Array(GRID_MAX * GRID_MAX * MAX_Y);
   shuffleOriginZ = new Uint16Array(GRID_MAX * GRID_MAX * MAX_Y);
+  sparseAges = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
+  floorAges = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
+  flowDx = new Int8Array(GRID_MAX * GRID_MAX * MAX_Y);
+  flowDz = new Int8Array(GRID_MAX * GRID_MAX * MAX_Y);
   occupied.clear();
   for (const mesh of instances.values()) {
     surface?.remove(mesh);

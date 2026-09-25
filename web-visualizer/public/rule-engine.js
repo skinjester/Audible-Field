@@ -16,12 +16,11 @@
  * World floor uses catalog.floor ("liquid" | "solid").
  *
  * Optional rule fields:
- *   rotations: "xz"     — try all four horizontal facings (SandPond for(xz.rotations))
+ *   rotations: "xz"     — try horizontal facings (SandPond for/any(xz.rotations))
+ *   pick: "one"         — try one facing per tick (SandPond any / Water8); default all
+ *   chance: 0..1        — probability this rule is attempted (SpaceTode maybe)
  *   belowBottom: "liquid" — only fire when support under the bottom row is liquid
  *   symbols: { w: "water" } — named material letters in match/result
- *
- * Material fields:
- *   shuffleLimit — after this many same-height hops with little net travel, delete the grain
  */
 
 const ROTATIONS_XZ = [
@@ -32,7 +31,7 @@ const ROTATIONS_XZ = [
 ];
 
 /**
- * @typedef {{ id: string, label: string, color: string, surface: "solid" | "liquid", pushPower: number, lifetime: number, erode: number, shuffleLimit: number, rules: object[] }} MaterialDef
+ * @typedef {{ id: string, label: string, color: string, opacity: number, surface: "solid" | "liquid", pushPower: number, lifetime: number, erode: number, shuffleLimit: number, floorAbsorb: number, minNeighbors: number, sparseAbsorb: number, pathBias: number, rules: object[] }} MaterialDef
  * @typedef {{
  *   get: (x: number, y: number, z: number) => number,
  *   set: (x: number, y: number, z: number, v: number) => void,
@@ -57,6 +56,14 @@ const ROTATIONS_XZ = [
  *   setShuffleOriginX?: (x: number, y: number, z: number, v: number) => void,
  *   getShuffleOriginZ?: (x: number, y: number, z: number) => number,
  *   setShuffleOriginZ?: (x: number, y: number, z: number, v: number) => void,
+ *   getFlowDx?: (x: number, y: number, z: number) => number,
+ *   setFlowDx?: (x: number, y: number, z: number, v: number) => void,
+ *   getFlowDz?: (x: number, y: number, z: number) => number,
+ *   setFlowDz?: (x: number, y: number, z: number, v: number) => void,
+ *   getSparseAge?: (x: number, y: number, z: number) => number,
+ *   setSparseAge?: (x: number, y: number, z: number, v: number) => void,
+ *   getFloorAge?: (x: number, y: number, z: number) => number,
+ *   setFloorAge?: (x: number, y: number, z: number, v: number) => void,
  * }} GridApi
  * @typedef {{ defaultId: string, floor: "solid" | "liquid", list: MaterialDef[], byId: Map<string, MaterialDef>, indexById: Map<string, number>, idByIndex: string[] }} MaterialCatalog
  * @typedef {{ x: number, y: number, z: number }} CellPos
@@ -89,15 +96,40 @@ export function compileMaterials(raw) {
     const shuffleRaw = Number(item.shuffleLimit);
     const shuffleLimit =
       Number.isFinite(shuffleRaw) && shuffleRaw > 0 ? Math.floor(shuffleRaw) : 0;
+    const floorAbsorbRaw = Number(item.floorAbsorb);
+    const floorAbsorb =
+      Number.isFinite(floorAbsorbRaw) && floorAbsorbRaw > 0 ? floorAbsorbRaw : 0;
+    const minNeighborsRaw = Number(item.minNeighbors);
+    const minNeighbors =
+      Number.isFinite(minNeighborsRaw) && minNeighborsRaw > 0
+        ? Math.floor(minNeighborsRaw)
+        : 0;
+    const sparseAbsorbRaw = Number(item.sparseAbsorb);
+    const sparseAbsorb =
+      Number.isFinite(sparseAbsorbRaw) && sparseAbsorbRaw > 0 ? sparseAbsorbRaw : 0;
+    const opacityRaw = Number(item.opacity);
+    const opacity =
+      Number.isFinite(opacityRaw) && opacityRaw > 0 && opacityRaw < 1
+        ? opacityRaw
+        : 1;
+    const pathBiasRaw = Number(item.pathBias);
+    const pathBias = Number.isFinite(pathBiasRaw)
+      ? Math.min(1, Math.max(0, pathBiasRaw))
+      : 0;
     const def = {
       id: item.id,
       label: String(item.label || item.id),
       color: String(item.color || "#cccccc"),
+      opacity,
       surface,
       pushPower,
       lifetime,
       erode,
       shuffleLimit,
+      floorAbsorb,
+      minNeighbors,
+      sparseAbsorb,
+      pathBias,
       rules: Array.isArray(item.rules) ? item.rules.map(normalizeRule).filter(Boolean) : [],
     };
     materials.push(def);
@@ -157,6 +189,14 @@ function normalizeRule(rule) {
         ? { ...rule.symbols }
         : null,
     belowBottom: rule.belowBottom === "liquid" ? "liquid" : null,
+    /** Try one random/preferred xz facing ("one") or all until one fits ("all"). */
+    pick: rule.pick === "one" ? "one" : "all",
+    /** SpaceTode-style maybe(): probability of attempting this rule (default 1). */
+    chance: (() => {
+      const c = Number(rule.chance);
+      if (!Number.isFinite(c)) return 1;
+      return Math.min(1, Math.max(0, c));
+    })(),
   };
 }
 
@@ -248,10 +288,19 @@ export function tryMaterialRules(grid, x, y, z, matIndex, material, catalog = nu
       continue;
     }
 
+    if (rule.chance < 1 && Math.random() >= rule.chance) continue;
+
     if (rule.rotations === "xz") {
-      for (const rot of shuffled(ROTATIONS_XZ)) {
+      const bias = material.pathBias || 0;
+      const usePath = bias > 0 && Math.random() < bias;
+      const prefDx = usePath ? grid.getFlowDx?.(x, y, z) ?? 0 : 0;
+      const prefDz = usePath ? grid.getFlowDz?.(x, y, z) ?? 0 : 0;
+      const order = preferRotation(prefDx, prefDz);
+      const faces = rule.pick === "one" ? order.slice(0, 1) : order;
+      for (const rot of faces) {
         const to = applyOrientedRule(grid, x, y, z, matIndex, rule, rot.dx, rot.dz, catalog);
         if (to) {
+          rememberFlowDir(grid, x, y, z, to.x, to.y, to.z);
           const splash = shouldSplashMove(grid, from, to, matIndex, catalog);
           return { moved: true, from, to, splash };
         }
@@ -405,6 +454,29 @@ function shuffled(list) {
   return out;
 }
 
+/** Prefer continuing along the last travel facing; otherwise random order. */
+function preferRotation(prefDx, prefDz) {
+  const order = shuffled(ROTATIONS_XZ);
+  if (!prefDx && !prefDz) return order;
+  const pref = order.find((r) => r.dx === prefDx && r.dz === prefDz);
+  if (!pref) return order;
+  return [pref, ...order.filter((r) => r !== pref)];
+}
+
+function rememberFlowDir(grid, fromX, fromY, fromZ, toX, toY, toZ) {
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  const dz = toZ - fromZ;
+  // Only lock horizontal heading for path-following on spills / sheets.
+  if (dy !== 0 || (dx === 0 && dz === 0)) return;
+  const sx = Math.sign(dx);
+  const sz = Math.sign(dz);
+  // Cardinal only (diagram rules are axis-aligned).
+  if (sx !== 0 && sz !== 0) return;
+  grid.setFlowDx?.(toX, toY, toZ, sx);
+  grid.setFlowDz?.(toX, toY, toZ, sz);
+}
+
 /**
  * Map local (lx, ly) with lx along "right" (dx,dz) and ly down in world -Y.
  */
@@ -488,6 +560,10 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
   const shuffle = grid.getShuffle?.(x, y, z) ?? 0;
   const shuffleOx = grid.getShuffleOriginX?.(x, y, z) ?? 0;
   const shuffleOz = grid.getShuffleOriginZ?.(x, y, z) ?? 0;
+  const sparseAge = grid.getSparseAge?.(x, y, z) ?? 0;
+  const floorAge = grid.getFloorAge?.(x, y, z) ?? 0;
+  const flowDirX = grid.getFlowDx?.(x, y, z) ?? 0;
+  const flowDirZ = grid.getFlowDz?.(x, y, z) ?? 0;
 
   /** @type {CellPos | null} */
   let to = null;
@@ -518,6 +594,10 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
     grid.setShuffle?.(to.x, to.y, to.z, shuffle);
     grid.setShuffleOriginX?.(to.x, to.y, to.z, shuffleOx);
     grid.setShuffleOriginZ?.(to.x, to.y, to.z, shuffleOz);
+    grid.setSparseAge?.(to.x, to.y, to.z, sparseAge);
+    grid.setFloorAge?.(to.x, to.y, to.z, floorAge);
+    grid.setFlowDx?.(to.x, to.y, to.z, flowDirX);
+    grid.setFlowDz?.(to.x, to.y, to.z, flowDirZ);
     return to;
   }
   // Applied with no @ in result (e.g. etch consumes self + neighbor).
@@ -535,6 +615,10 @@ function clearCellMeta(grid, x, y, z) {
   grid.setShuffle?.(x, y, z, 0);
   grid.setShuffleOriginX?.(x, y, z, 0);
   grid.setShuffleOriginZ?.(x, y, z, 0);
+  grid.setSparseAge?.(x, y, z, 0);
+  grid.setFloorAge?.(x, y, z, 0);
+  grid.setFlowDx?.(x, y, z, 0);
+  grid.setFlowDz?.(x, y, z, 0);
 }
 
 function namedMaterialIndex(sym, rule, catalog) {
