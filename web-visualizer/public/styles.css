@@ -1175,6 +1175,46 @@ dd {
   touch-action: none;
 }
 
+.falling-palette {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 2;
+  display: flex;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.falling-palette button {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 12px 6px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.falling-palette button::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--swatch, #888);
+  flex: 0 0 auto;
+}
+
+.falling-palette button[aria-pressed="true"] {
+  background: rgba(110, 231, 183, 0.16);
+  color: var(--live);
+  border-color: rgba(110, 231, 183, 0.35);
+}
+
 
 @media (max-height: 860px) and (min-width: 1180px) {
   .app {

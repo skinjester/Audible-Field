@@ -1,0 +1,38 @@
+{
+  "default": "block",
+  "floor": "liquid",
+  "materials": [
+    {
+      "id": "block",
+      "label": "Block",
+      "color": "#c4624e",
+      "surface": "solid",
+      "rules": [
+        {
+          "name": "fall",
+          "match": ["@", "_"],
+          "result": ["_", "@"]
+        }
+      ]
+    },
+    {
+      "id": "sand",
+      "label": "Sand",
+      "color": "#e0a84a",
+      "surface": "solid",
+      "rules": [
+        {
+          "name": "fall",
+          "match": ["@", "_"],
+          "result": ["_", "@"]
+        },
+        {
+          "name": "slide",
+          "match": ["@.", "x_"],
+          "result": ["_.", "x@"],
+          "rotations": "xz"
+        }
+      ]
+    }
+  ]
+}

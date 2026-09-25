@@ -1,17 +1,15 @@
 import * as THREE from "three";
 import { controller } from "./mixer-core.js?v=65";
+import { compileMaterials, stepWorld } from "./rule-engine.js?v=2";
 
 const GRID = 16;
+const MAX_Y = 12;
 const CELL = 1;
 const BLOCK = 0.9;
-const STEP = 1;
-const MAX_STACK = 12;
-const DROP_CLEARANCE = 6.5;
-const GRAVITY = 26;
-const BLOCK_COLOR = 0xc4624e;
 const SCENE_BG = 0x000000;
 const SPLASH_LIFE = 0.42;
 const CLICK_SLOP = 6;
+const RULE_HZ = 22;
 
 const PITCH_MIN = 0.32;
 const PITCH_MAX = 1.2;
@@ -21,6 +19,10 @@ const STICK_DEADZONE = 0.12;
 const AIM_SPEED = 9;
 const YAW_RATE = 1.15;
 const PITCH_RATE = 0.65;
+const RT_PRESS = 0.08;
+const DROP_INTERVAL = 0.22;
+const DROP_SIZE_MIN = 1;
+const DROP_SIZE_MAX = 3;
 
 let canvas = null;
 let wrap = null;
@@ -30,8 +32,8 @@ let renderer = null;
 let marker = null;
 let blockGeo = null;
 let splashGeo = null;
-let blockMat = null;
 let resizeObserver = null;
+let paletteEl = null;
 
 let running = false;
 let rafId = 0;
@@ -41,11 +43,14 @@ let orbiting = false;
 let yaw = 0.62;
 let pitch = 0.82;
 let distance = 20;
+let ruleAcc = 0;
 
 /** @type {Uint8Array | null} */
-let heights = null;
-/** @type {{ mesh: THREE.Mesh, vy: number, landY: number }[]} */
-let fallers = [];
+let cells = null;
+/** @type {Map<string, THREE.Mesh>} */
+const meshes = new Map();
+/** @type {Map<number, THREE.MeshStandardMaterial>} */
+const matCache = new Map();
 /** @type {{ mesh: THREE.Mesh, age: number }[]} */
 let splashes = [];
 /** @type {{ ix: number, iz: number } | null} */
@@ -54,7 +59,15 @@ let aim = null;
 let press = null;
 let aimX = 0.5;
 let aimZ = 0.5;
-let crossWasDown = false;
+let l1WasDown = false;
+let r1WasDown = false;
+let rtHeld = false;
+let rtDropAcc = 0;
+let dropCharge = 0;
+
+/** @type {ReturnType<typeof compileMaterials> | null} */
+let catalog = null;
+let activeMaterialId = "block";
 
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
@@ -73,14 +86,39 @@ function clearError() {
   if (el) el.hidden = true;
 }
 
-function cellIndex(ix, iz) {
-  return iz * GRID + ix;
+function idx(x, y, z) {
+  return (y * GRID + z) * GRID + x;
 }
 
-function cellOrigin(ix, iz, target) {
-  target.x = (ix + 0.5 - GRID / 2) * CELL;
-  target.z = (iz + 0.5 - GRID / 2) * CELL;
+function inBounds(x, y, z) {
+  return x >= 0 && z >= 0 && y >= 0 && x < GRID && z < GRID && y < MAX_Y;
+}
+
+function getCell(x, y, z) {
+  if (!cells || !inBounds(x, y, z)) return 0;
+  return cells[idx(x, y, z)];
+}
+
+function setCell(x, y, z, value) {
+  if (!cells || !inBounds(x, y, z)) return;
+  cells[idx(x, y, z)] = value;
+}
+
+const gridApi = {
+  get: getCell,
+  set: setCell,
+  inBounds,
+};
+
+function cellWorld(x, y, z, target) {
+  target.x = (x + 0.5 - GRID / 2) * CELL;
+  target.y = y * CELL + BLOCK * 0.5;
+  target.z = (z + 0.5 - GRID / 2) * CELL;
   return target;
+}
+
+function cellKey(x, y, z) {
+  return `${x},${y},${z}`;
 }
 
 function syncCamera() {
@@ -118,6 +156,81 @@ function stickAxis(value) {
   return Math.abs(n) < STICK_DEADZONE ? 0 : n;
 }
 
+function clamp01(n) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(1, Math.max(0, n));
+}
+
+function sizeFromPressure(pressure) {
+  const t = clamp01(pressure);
+  const span = DROP_SIZE_MAX - DROP_SIZE_MIN;
+  return DROP_SIZE_MIN + Math.round(t * span);
+}
+
+function readRightTrigger(pad) {
+  const fromCore = clamp01(Number(controller.rt) || 0);
+  const btn = pad?.buttons?.[7];
+  const fromPad = btn
+    ? Number.isFinite(btn.value)
+      ? clamp01(btn.value)
+      : btn.pressed
+        ? 1
+        : 0
+    : 0;
+  return Math.max(fromCore, fromPad);
+}
+
+function surfaceY(ix, iz) {
+  if (!cells || ix < 0 || iz < 0 || ix >= GRID || iz >= GRID) return 0.03;
+  for (let y = MAX_Y - 1; y >= 0; y -= 1) {
+    if (getCell(ix, y, iz) > 0) return (y + 1) * CELL + 0.04;
+  }
+  return 0.03;
+}
+
+function footprintSurfaceY(cx, cz, side) {
+  const ox = cx - Math.floor((side - 1) / 2);
+  const oz = cz - Math.floor((side - 1) / 2);
+  let top = 0.03;
+  for (let z = 0; z < side; z += 1) {
+    for (let x = 0; x < side; x += 1) {
+      top = Math.max(top, surfaceY(ox + x, oz + z));
+    }
+  }
+  return top;
+}
+
+function syncDropMarker() {
+  if (!marker || !aim) {
+    if (marker) marker.visible = false;
+    return;
+  }
+  const side = sizeFromPressure(dropCharge > 0 ? dropCharge : RT_PRESS);
+  cellWorld(aim.ix, 0, aim.iz, marker.position);
+  marker.position.y = footprintSurfaceY(aim.ix, aim.iz, side);
+  marker.scale.set(side, side, 1);
+  marker.visible = true;
+  marker.material.opacity = dropCharge > 0 ? 0.28 + dropCharge * 0.45 : 0.42;
+}
+
+function materialColor(matIndex) {
+  const id = catalog?.idByIndex[matIndex];
+  const def = id ? catalog.byId.get(id) : null;
+  return def?.color || "#cccccc";
+}
+
+function materialMeshMat(matIndex) {
+  let mat = matCache.get(matIndex);
+  if (mat) return mat;
+  mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(materialColor(matIndex)),
+    roughness: 0.76,
+    metalness: 0.02,
+  });
+  matCache.set(matIndex, mat);
+  return mat;
+}
+
 function setAimFromWorld() {
   const limit = (GRID * CELL) / 2 - 0.001;
   aimX = Math.min(limit, Math.max(-limit, aimX));
@@ -135,6 +248,20 @@ function aimFromEvent(event) {
   pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointerNdc, camera);
+
+  const meshHits = raycaster.intersectObjects([...meshes.values()], false);
+  if (meshHits.length) {
+    const point = meshHits[0].point;
+    const ix = Math.floor(point.x / CELL + GRID / 2);
+    const iz = Math.floor(point.z / CELL + GRID / 2);
+    if (ix >= 0 && iz >= 0 && ix < GRID && iz < GRID) {
+      aimX = (ix + 0.5 - GRID / 2) * CELL;
+      aimZ = (iz + 0.5 - GRID / 2) * CELL;
+      setAim({ ix, iz });
+      return;
+    }
+  }
+
   if (!raycaster.ray.intersectPlane(groundPlane, hitPoint)) return;
   const ix = Math.floor(hitPoint.x / CELL + GRID / 2);
   const iz = Math.floor(hitPoint.z / CELL + GRID / 2);
@@ -155,6 +282,46 @@ function connectedPad() {
     if (!fallback) fallback = pad;
   }
   return fallback;
+}
+
+function setActiveMaterial(id) {
+  if (!catalog?.byId.has(id)) return;
+  activeMaterialId = id;
+  syncPaletteUi();
+}
+
+function cycleMaterial(delta) {
+  if (!catalog?.list.length) return;
+  const i = catalog.list.findIndex((m) => m.id === activeMaterialId);
+  const next = catalog.list[(i + delta + catalog.list.length) % catalog.list.length];
+  setActiveMaterial(next.id);
+}
+
+function syncPaletteUi() {
+  if (!paletteEl) return;
+  for (const btn of paletteEl.querySelectorAll("[data-material]")) {
+    const on = btn.getAttribute("data-material") === activeMaterialId;
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+}
+
+function buildPalette() {
+  paletteEl = document.querySelector("[data-falling-palette]");
+  if (!paletteEl || !catalog) return;
+  paletteEl.replaceChildren();
+  for (const mat of catalog.list) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.dataset.material = mat.id;
+    btn.textContent = mat.label;
+    btn.style.setProperty("--swatch", mat.color);
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setActiveMaterial(mat.id);
+    });
+    paletteEl.appendChild(btn);
+  }
+  syncPaletteUi();
 }
 
 function applyController(dt) {
@@ -183,40 +350,85 @@ function applyController(dt) {
 
   if (cameraMoved) syncCamera();
 
-  const cross = connectedPad()?.buttons?.[0];
-  const crossDown = !!(cross && (cross.pressed || cross.value > 0.5));
-  if (crossDown && !crossWasDown && aim) dropAt(aim.ix, aim.iz);
-  crossWasDown = crossDown;
+  const pad = connectedPad();
+  const buttons = pad?.buttons || [];
+  const pressed = (i) => !!(buttons[i] && (buttons[i].pressed || buttons[i].value > 0.5));
+
+  const rt = readRightTrigger(pad);
+  if (rt >= RT_PRESS) {
+    dropCharge = rt;
+    syncDropMarker();
+    if (!rtHeld) {
+      rtHeld = true;
+      rtDropAcc = 0;
+      if (aim) dropAt(aim.ix, aim.iz, rt);
+    } else {
+      rtDropAcc += dt;
+      if (rtDropAcc >= DROP_INTERVAL) {
+        rtDropAcc -= DROP_INTERVAL;
+        if (aim) dropAt(aim.ix, aim.iz, rt);
+      }
+    }
+  } else if (rtHeld || dropCharge !== 0) {
+    rtHeld = false;
+    rtDropAcc = 0;
+    dropCharge = 0;
+    syncDropMarker();
+  }
+
+  const l1Down = !!(controller.l1 || pressed(4));
+  if (l1Down && !l1WasDown) cycleMaterial(-1);
+  l1WasDown = l1Down;
+
+  const r1Down = !!(controller.r1 || pressed(5));
+  if (r1Down && !r1WasDown) cycleMaterial(1);
+  r1WasDown = r1Down;
 }
 
 function setAim(next) {
   aim = next;
-  if (!marker) return;
-  if (!aim) {
-    marker.visible = false;
-    return;
-  }
-  cellOrigin(aim.ix, aim.iz, marker.position);
-  marker.position.y = 0.03;
-  marker.visible = true;
+  syncDropMarker();
 }
 
-function dropAt(ix, iz) {
-  if (!heights || !scene || !blockGeo || !blockMat) return;
-  const h = heights[cellIndex(ix, iz)];
-  if (h >= MAX_STACK) return;
+function cubeFits(ox, oy, oz, side) {
+  for (let y = 0; y < side; y += 1) {
+    for (let z = 0; z < side; z += 1) {
+      for (let x = 0; x < side; x += 1) {
+        const wx = ox + x;
+        const wy = oy + y;
+        const wz = oz + z;
+        if (!inBounds(wx, wy, wz) || getCell(wx, wy, wz) !== 0) return false;
+      }
+    }
+  }
+  return true;
+}
 
-  const mesh = new THREE.Mesh(blockGeo, blockMat);
-  cellOrigin(ix, iz, mesh.position);
-  const landY = h * STEP + BLOCK * 0.5;
-  mesh.position.y = landY + DROP_CLEARANCE;
-  scene.add(mesh);
-  fallers.push({
-    mesh,
-    vy: 0,
-    landY,
-  });
-  heights[cellIndex(ix, iz)] = h + 1;
+function fillCube(ox, oy, oz, side, matIndex) {
+  for (let y = 0; y < side; y += 1) {
+    for (let z = 0; z < side; z += 1) {
+      for (let x = 0; x < side; x += 1) {
+        setCell(ox + x, oy + y, oz + z, matIndex);
+      }
+    }
+  }
+}
+
+function dropAt(ix, iz, pressure = 0) {
+  if (!cells || !catalog) return;
+  const matIndex = catalog.indexById.get(activeMaterialId);
+  if (!matIndex) return;
+
+  const side = sizeFromPressure(pressure);
+  const ox = ix - Math.floor((side - 1) / 2);
+  const oz = iz - Math.floor((side - 1) / 2);
+
+  for (let oy = MAX_Y - side; oy >= 0; oy -= 1) {
+    if (!cubeFits(ox, oy, oz, side)) continue;
+    fillCube(ox, oy, oz, side, matIndex);
+    reconcileMeshes();
+    return;
+  }
 }
 
 function spawnSplash(x, y, z) {
@@ -230,23 +442,78 @@ function spawnSplash(x, y, z) {
   });
   const mesh = new THREE.Mesh(splashGeo, material);
   mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(x, y, z);
+  cellWorld(x, y, z, mesh.position);
+  mesh.position.y = y * CELL + 0.04;
   mesh.scale.setScalar(0.55);
   scene.add(mesh);
   splashes.push({ mesh, age: 0 });
 }
 
+function collectOccupied() {
+  /** @type {{ x: number, y: number, z: number, mat: number }[]} */
+  const list = [];
+  if (!cells) return list;
+  for (let y = 0; y < MAX_Y; y += 1) {
+    for (let z = 0; z < GRID; z += 1) {
+      for (let x = 0; x < GRID; x += 1) {
+        const mat = getCell(x, y, z);
+        if (mat > 0) list.push({ x, y, z, mat });
+      }
+    }
+  }
+  return list;
+}
+
+function reconcileMeshes() {
+  if (!scene || !blockGeo) return;
+  const live = new Set();
+
+  for (let y = 0; y < MAX_Y; y += 1) {
+    for (let z = 0; z < GRID; z += 1) {
+      for (let x = 0; x < GRID; x += 1) {
+        const mat = getCell(x, y, z);
+        if (mat <= 0) continue;
+        const key = cellKey(x, y, z);
+        live.add(key);
+        let mesh = meshes.get(key);
+        if (!mesh) {
+          mesh = new THREE.Mesh(blockGeo, materialMeshMat(mat));
+          scene.add(mesh);
+          meshes.set(key, mesh);
+        } else if (mesh.material !== materialMeshMat(mat)) {
+          mesh.material = materialMeshMat(mat);
+        }
+        cellWorld(x, y, z, mesh.position);
+      }
+    }
+  }
+
+  for (const [key, mesh] of meshes) {
+    if (live.has(key)) continue;
+    scene.remove(mesh);
+    meshes.delete(key);
+  }
+  syncDropMarker();
+}
+
+function runRules() {
+  if (!catalog) return;
+  const occupied = collectOccupied();
+  const { splashes: splashCells } = stepWorld(gridApi, occupied, catalog);
+  reconcileMeshes();
+  for (const cell of splashCells) {
+    spawnSplash(cell.x, cell.y, cell.z);
+  }
+}
+
 function step(dt) {
   applyController(dt);
 
-  for (let i = fallers.length - 1; i >= 0; i -= 1) {
-    const faller = fallers[i];
-    faller.vy -= GRAVITY * dt;
-    faller.mesh.position.y += faller.vy * dt;
-    if (faller.mesh.position.y > faller.landY) continue;
-    faller.mesh.position.y = faller.landY;
-    spawnSplash(faller.mesh.position.x, faller.landY - BLOCK * 0.5 + 0.03, faller.mesh.position.z);
-    fallers.splice(i, 1);
+  ruleAcc += dt;
+  const interval = 1 / RULE_HZ;
+  while (ruleAcc >= interval) {
+    ruleAcc -= interval;
+    runRules();
   }
 
   for (let i = splashes.length - 1; i >= 0; i -= 1) {
@@ -259,8 +526,7 @@ function step(dt) {
       splashes.splice(i, 1);
       continue;
     }
-    const scale = 0.55 + t * 2.8;
-    splash.mesh.scale.setScalar(scale);
+    splash.mesh.scale.setScalar(0.55 + t * 2.8);
     splash.mesh.material.opacity = 0.75 * (1 - t);
   }
 }
@@ -340,7 +606,7 @@ function onPointerUp(event) {
   if (dx * dx + dy * dy > CLICK_SLOP * CLICK_SLOP) return;
   aimFromEvent(event);
   if (!aim) return;
-  dropAt(aim.ix, aim.iz);
+  dropAt(aim.ix, aim.iz, 0);
 }
 
 function onPointerCancel() {
@@ -358,17 +624,24 @@ function onContextMenu(event) {
   event.preventDefault();
 }
 
-function initFallingBlocks(nextCanvas) {
-  if (scene) return;
+async function loadCatalog() {
+  const res = await fetch(`/materials.json?v=3`);
+  if (!res.ok) throw new Error(`materials.json ${res.status}`);
+  catalog = compileMaterials(await res.json());
+  activeMaterialId = catalog.defaultId || catalog.list[0]?.id || "block";
+  buildPalette();
+}
 
+function initScene(nextCanvas) {
   canvas = nextCanvas;
   wrap = canvas.parentElement;
   canvas.style.cursor = "crosshair";
   canvas.style.touchAction = "none";
 
-  heights = new Uint8Array(GRID * GRID);
-  fallers = [];
+  cells = new Uint8Array(GRID * GRID * MAX_Y);
+  meshes.clear();
   splashes = [];
+  ruleAcc = 0;
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(SCENE_BG);
@@ -402,16 +675,11 @@ function initFallingBlocks(nextCanvas) {
   ground.position.y = -0.02;
   scene.add(ground);
 
-  const grid = new THREE.GridHelper(GRID * CELL, GRID, 0x314048, 0x28343a);
-  grid.position.y = 0.01;
-  scene.add(grid);
+  const gridHelper = new THREE.GridHelper(GRID * CELL, GRID, 0x314048, 0x28343a);
+  gridHelper.position.y = 0.01;
+  scene.add(gridHelper);
 
   blockGeo = new THREE.BoxGeometry(BLOCK, BLOCK, BLOCK);
-  blockMat = new THREE.MeshStandardMaterial({
-    color: BLOCK_COLOR,
-    roughness: 0.76,
-    metalness: 0.02,
-  });
   splashGeo = new THREE.RingGeometry(0.42, 0.62, 28);
 
   marker = new THREE.Mesh(
@@ -444,9 +712,14 @@ function initFallingBlocks(nextCanvas) {
   clearError();
 }
 
-export function showFallingBlocks(nextCanvas) {
+export async function showFallingBlocks(nextCanvas) {
   try {
-    initFallingBlocks(nextCanvas);
+    if (!scene) {
+      await loadCatalog();
+      initScene(nextCanvas);
+    } else {
+      buildPalette();
+    }
     running = true;
     sizeTries = 0;
     startRenderLoop();
@@ -460,6 +733,9 @@ export function hideFallingBlocks() {
   running = false;
   orbiting = false;
   press = null;
+  rtHeld = false;
+  rtDropAcc = 0;
+  dropCharge = 0;
   if (rafId) window.cancelAnimationFrame(rafId);
   rafId = 0;
 }

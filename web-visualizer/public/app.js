@@ -19,7 +19,7 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { hideFallingBlocks, showFallingBlocks } from "./falling-blocks.js?v=5";
+import { hideFallingBlocks, showFallingBlocks } from "./falling-blocks.js?v=13";
 import { audioEngine } from "./audio-engine.js?v=20";
 import { gamepadInput } from "./gamepad-input.js?v=6";
 import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=4";
