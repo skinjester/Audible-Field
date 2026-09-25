@@ -1175,14 +1175,121 @@ dd {
   touch-action: none;
 }
 
-.falling-palette {
+.falling-hud {
   position: absolute;
   left: 12px;
   bottom: 12px;
   z-index: 2;
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.falling-stats {
+  left: auto;
+  right: 12px;
+  bottom: 12px;
+}
+
+.falling-atom-size {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 148px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.falling-atom-size input[type="range"] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--live);
+  cursor: pointer;
+}
+
+.falling-emit-size {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 148px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.falling-emit-dims {
+  display: flex;
+  gap: 8px;
+}
+
+.falling-emit-dims label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.falling-emit-dims input[type="number"] {
+  width: 100%;
+  box-sizing: border-box;
+  appearance: textfield;
+  -moz-appearance: textfield;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text, #e8e8e8);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.falling-emit-dims input[type="number"]::-webkit-outer-spin-button,
+.falling-emit-dims input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.falling-palette-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.falling-palette {
+  display: flex;
   gap: 8px;
   pointer-events: auto;
+}
+
+.falling-clear {
+  pointer-events: auto;
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.falling-clear:hover {
+  color: var(--live);
+  border-color: rgba(110, 231, 183, 0.35);
 }
 
 .falling-palette button {

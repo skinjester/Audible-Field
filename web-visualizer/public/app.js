@@ -19,7 +19,7 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { hideFallingBlocks, showFallingBlocks } from "./falling-blocks.js?v=13";
+import { clearBoard, hideFallingBlocks, showFallingBlocks } from "./falling-blocks.js?v=55";
 import { audioEngine } from "./audio-engine.js?v=20";
 import { gamepadInput } from "./gamepad-input.js?v=6";
 import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=4";
@@ -363,6 +363,10 @@ function openFxPicker(slot, anchor) {
 
 function activateFaceButton(button) {
   if (!controller.fx[button]) return;
+  if (button === "circle" && activeTab === "falling-blocks") {
+    clearBoard();
+    return;
+  }
   setActiveFx(button);
   // X / Cross only switches the wet insert off the WAM faces (slot gains).
   // Do not tear down WAM assignments or stick scales — press Square/△/○ to hear them again.

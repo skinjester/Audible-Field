@@ -33,6 +33,51 @@
           "rotations": "xz"
         }
       ]
+    },
+    {
+      "id": "erode",
+      "label": "Erode",
+      "color": "#7a9e6a",
+      "surface": "solid",
+      "lifetime": 10,
+      "erode": 6,
+      "rules": [
+        {
+          "name": "fall",
+          "match": ["@", "_"],
+          "result": ["_", "@"]
+        },
+        {
+          "name": "slide",
+          "match": ["@.", "x_"],
+          "result": ["_.", "x@"],
+          "rotations": "xz"
+        }
+      ]
+    },
+    {
+      "id": "etch",
+      "label": "Etch",
+      "color": "#3d9b8f",
+      "surface": "solid",
+      "rules": [
+        {
+          "name": "etch-down",
+          "match": ["@", "x"],
+          "result": ["_", "_"]
+        },
+        {
+          "name": "etch-side",
+          "match": ["@x"],
+          "result": ["__"],
+          "rotations": "xz"
+        },
+        {
+          "name": "fall",
+          "match": ["@", "_"],
+          "result": ["_", "@"]
+        }
+      ]
     }
   ]
 }

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape mixer</title>
-    <link rel="stylesheet" href="/styles.css?v=115" />
+    <link rel="stylesheet" href="/styles.css?v=119" />
     <script type="importmap">
       {
         "imports": {
@@ -337,7 +337,7 @@
             <canvas data-viz-canvas aria-label="EchoScape terrain visualization"></canvas>
             <p class="viz-error" data-viz-error hidden></p>
             <div class="viz-hud" aria-live="polite">
-              <div><span data-viz-fps>--</span> fps · <span data-viz-verts>--</span></div>
+              <div><span data-viz-fps>--</span> fps · <span data-viz-verts>--</span> verts</div>
               <div class="viz-hud-flags" data-viz-flags></div>
             </div>
           </div>
@@ -349,11 +349,63 @@
           <div class="viz-canvas-wrap">
             <canvas data-falling-canvas aria-label="Falling Blocks playfield"></canvas>
             <p class="viz-error" data-falling-error hidden></p>
-            <div class="falling-palette" data-falling-palette role="group" aria-label="Material"></div>
+            <div class="falling-hud">
+              <label class="falling-atom-size">
+                <span>Atom size <span data-atom-size-value>1.00</span></span>
+                <input
+                  type="range"
+                  data-atom-size
+                  min="0.05"
+                  max="1"
+                  step="0.01"
+                  value="1"
+                  aria-label="Atom size"
+                />
+              </label>
+              <label class="falling-atom-size">
+                <span>Emitter height <span data-emit-altitude-value>7</span></span>
+                <input
+                  type="range"
+                  data-emit-altitude
+                  min="0"
+                  max="11"
+                  step="1"
+                  value="7"
+                  aria-label="Emitter height"
+                />
+              </label>
+              <div class="falling-emit-size">
+                <span>Emit L×W×H</span>
+                <div class="falling-emit-dims">
+                  <label>
+                    L
+                    <input type="number" data-emit-l min="1" step="1" value="1" inputmode="numeric" aria-label="Emit length" />
+                  </label>
+                  <label>
+                    W
+                    <input type="number" data-emit-w min="1" step="1" value="1" inputmode="numeric" aria-label="Emit width" />
+                  </label>
+                  <label>
+                    H
+                    <input type="number" data-emit-h min="1" step="1" value="1" inputmode="numeric" aria-label="Emit height" />
+                  </label>
+                </div>
+              </div>
+              <div class="falling-palette-row">
+                <div class="falling-palette" data-falling-palette role="group" aria-label="Material"></div>
+                <button type="button" class="falling-clear" data-falling-clear title="Clear board (Circle)">
+                  Clear
+                </button>
+              </div>
+            </div>
+            <div class="viz-hud falling-stats" aria-live="polite">
+              <div><span data-falling-fps>--</span> fps</div>
+              <div><span data-falling-atoms>--</span> atoms · <span data-falling-tris>--</span> polys</div>
+            </div>
           </div>
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=144"></script>
+    <script type="module" src="/app.js?v=169"></script>
   </body>
 </html>

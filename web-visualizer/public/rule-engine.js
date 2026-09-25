@@ -8,6 +8,8 @@
  *   x  occupied (any material)
  *   .  anything (keep / ignore)
  *
+ * A result with no @ clears this grain (consume-in-place), e.g. etch.
+ *
  * Surfaces (material.surface):
  *   solid   — no splash when something rests on it
  *   liquid  — splash when a grain lands or shifts onto it
@@ -22,8 +24,24 @@ const ROTATIONS_XZ = [
 ];
 
 /**
- * @typedef {{ id: string, label: string, color: string, surface: "solid" | "liquid", rules: object[] }} MaterialDef
- * @typedef {{ get: (x: number, y: number, z: number) => number, set: (x: number, y: number, z: number, v: number) => void, inBounds: (x: number, y: number, z: number) => boolean }} GridApi
+ * @typedef {{ id: string, label: string, color: string, surface: "solid" | "liquid", pushPower: number, lifetime: number, erode: number, rules: object[] }} MaterialDef
+ * @typedef {{
+ *   get: (x: number, y: number, z: number) => number,
+ *   set: (x: number, y: number, z: number, v: number) => void,
+ *   inBounds: (x: number, y: number, z: number) => boolean,
+ *   getBudget?: (x: number, y: number, z: number) => number,
+ *   setBudget?: (x: number, y: number, z: number, v: number) => void,
+ *   getAge?: (x: number, y: number, z: number) => number,
+ *   setAge?: (x: number, y: number, z: number, v: number) => void,
+ *   getErodeLife?: (x: number, y: number, z: number) => number,
+ *   setErodeLife?: (x: number, y: number, z: number, v: number) => void,
+ *   getPosY?: (x: number, y: number, z: number) => number,
+ *   setPosY?: (x: number, y: number, z: number, v: number) => void,
+ *   getPosX?: (x: number, y: number, z: number) => number,
+ *   setPosX?: (x: number, y: number, z: number, v: number) => void,
+ *   getPosZ?: (x: number, y: number, z: number) => number,
+ *   setPosZ?: (x: number, y: number, z: number, v: number) => void,
+ * }} GridApi
  * @typedef {{ defaultId: string, floor: "solid" | "liquid", list: MaterialDef[], byId: Map<string, MaterialDef>, indexById: Map<string, number>, idByIndex: string[] }} MaterialCatalog
  * @typedef {{ x: number, y: number, z: number }} CellPos
  */
@@ -45,11 +63,21 @@ export function compileMaterials(raw) {
   for (const item of list) {
     if (!item || typeof item.id !== "string" || !item.id) continue;
     const surface = item.surface === "liquid" ? "liquid" : "solid";
+    const pushPower = Math.max(0, Math.floor(Number(item.pushPower) || 0));
+    const lifetimeRaw = Number(item.lifetime);
+    const lifetime =
+      Number.isFinite(lifetimeRaw) && lifetimeRaw > 0 ? lifetimeRaw : 0;
+    const erodeRaw = Number(item.erode);
+    const erode =
+      Number.isFinite(erodeRaw) && erodeRaw > 0 ? erodeRaw : 0;
     const def = {
       id: item.id,
       label: String(item.label || item.id),
       color: String(item.color || "#cccccc"),
       surface,
+      pushPower,
+      lifetime,
+      erode,
       rules: Array.isArray(item.rules) ? item.rules.map(normalizeRule).filter(Boolean) : [],
     };
     materials.push(def);
@@ -70,6 +98,24 @@ export function compileMaterials(raw) {
 
 function normalizeRule(rule) {
   if (!rule || typeof rule !== "object") return null;
+
+  if (rule.type === "push") {
+    const target = String(rule.target || "").trim();
+    if (!target) return null;
+    return {
+      name: String(rule.name || "push"),
+      type: "push",
+      target,
+      match: null,
+      result: null,
+      height: 0,
+      width: 0,
+      rotations: null,
+      symbols: null,
+      belowBottom: null,
+    };
+  }
+
   const match = parseRows(rule.match);
   const result = parseRows(rule.result);
   if (!match || !result) return null;
@@ -80,11 +126,21 @@ function normalizeRule(rule) {
 
   return {
     name: String(rule.name || "rule"),
+    type: "diagram",
     match,
     result,
     height: match.length,
     width,
     rotations: rule.rotations === "xz" ? "xz" : null,
+    symbols:
+      rule.symbols && typeof rule.symbols === "object" && !Array.isArray(rule.symbols)
+        ? { ...rule.symbols }
+        : null,
+    belowBottom: rule.belowBottom === "liquid" ? "liquid" : null,
+    /** Only fire when the cell above @ is empty / out of bounds (column top). */
+    openAbove: rule.openAbove === true,
+    /** Destination @_ cells must have solid (or floor) support underneath. */
+    supportUnderDest: rule.supportUnderDest === true,
   };
 }
 
@@ -167,10 +223,19 @@ export function tryMaterialRules(grid, x, y, z, matIndex, material, catalog = nu
   if (!material?.rules?.length) return { moved: false, from, to: null, splash: false };
 
   for (const rule of material.rules) {
+    if (rule.type === "push") {
+      const to = applyPushRule(grid, x, y, z, matIndex, rule, catalog);
+      if (to) {
+        const splash = shouldSplashMove(grid, from, to, matIndex, catalog);
+        return { moved: true, from, to, splash };
+      }
+      continue;
+    }
+
     if (rule.rotations === "xz") {
       const order = shuffled(ROTATIONS_XZ);
       for (const rot of order) {
-        const to = applyOrientedRule(grid, x, y, z, matIndex, rule, rot.dx, rot.dz);
+        const to = applyOrientedRule(grid, x, y, z, matIndex, rule, rot.dx, rot.dz, catalog);
         if (to) {
           const splash = shouldSplashMove(grid, from, to, matIndex, catalog);
           return { moved: true, from, to, splash };
@@ -178,7 +243,7 @@ export function tryMaterialRules(grid, x, y, z, matIndex, material, catalog = nu
       }
       continue;
     }
-    const to = applyOrientedRule(grid, x, y, z, matIndex, rule, 1, 0);
+    const to = applyOrientedRule(grid, x, y, z, matIndex, rule, 1, 0, catalog);
     if (to) {
       const splash = shouldSplashMove(grid, from, to, matIndex, catalog);
       return { moved: true, from, to, splash };
@@ -188,38 +253,122 @@ export function tryMaterialRules(grid, x, y, z, matIndex, material, catalog = nu
 }
 
 /**
+ * Push a contiguous column of `rule.target` down by one.
+ * Into empty: shift the column. Into liquid floor: shift and destroy the bottom grain.
+ * Consumes 1 push budget from this block or any block stacked contiguously above it
+ * (so N stacked blocks with pushPower 1 can dig N deep).
+ */
+function applyPushRule(grid, x, y, z, matIndex, rule, catalog) {
+  if (!catalog) return null;
+  const targetIndex = catalog.indexById.get(rule.target) || 0;
+  if (targetIndex <= 0) return null;
+
+  const topSandY = y - 1;
+  if (!grid.inBounds(x, topSandY, z)) return null;
+  if (grid.get(x, topSandY, z) !== targetIndex) return null;
+
+  let bottomY = topSandY;
+  while (bottomY > 0 && grid.get(x, bottomY - 1, z) === targetIndex) {
+    bottomY -= 1;
+  }
+
+  const underY = bottomY - 1;
+  const underEmpty =
+    underY >= 0 && grid.inBounds(x, underY, z) && grid.get(x, underY, z) === 0;
+  const underLiquid = isLiquidSupport(grid, x, bottomY, z, catalog);
+
+  if (!underEmpty && !underLiquid) return null;
+  if (!consumeColumnBudget(grid, x, y, z, matIndex)) return null;
+
+  const remain = grid.getBudget?.(x, y, z) ?? 0;
+  const age = grid.getAge?.(x, y, z) ?? 0;
+  const erodeLife = grid.getErodeLife?.(x, y, z) ?? 0;
+  const posY = grid.getPosY?.(x, y, z) ?? 0;
+  const posX = grid.getPosX?.(x, y, z) ?? 0;
+  const posZ = grid.getPosZ?.(x, y, z) ?? 0;
+  grid.set(x, y, z, 0);
+  grid.setBudget?.(x, y, z, 0);
+  grid.setAge?.(x, y, z, 0);
+  grid.setErodeLife?.(x, y, z, 0);
+  grid.setPosY?.(x, y, z, 0);
+  grid.setPosX?.(x, y, z, 0);
+  grid.setPosZ?.(x, y, z, 0);
+  grid.set(x, topSandY, z, matIndex);
+  grid.setBudget?.(x, topSandY, z, remain);
+  grid.setAge?.(x, topSandY, z, age);
+  grid.setErodeLife?.(x, topSandY, z, erodeLife);
+  grid.setPosY?.(x, topSandY, z, posY);
+  grid.setPosX?.(x, topSandY, z, posX);
+  grid.setPosZ?.(x, topSandY, z, posZ);
+
+  if (underEmpty) {
+    for (let sy = underY; sy < topSandY; sy += 1) {
+      grid.set(x, sy, z, targetIndex);
+    }
+  } else {
+    for (let sy = bottomY; sy < topSandY; sy += 1) {
+      grid.set(x, sy, z, targetIndex);
+    }
+  }
+
+  return { x, y: topSandY, z };
+}
+
+/**
+ * Spend 1 budget from this cell or a contiguous same-material stack above it.
+ * @returns {boolean}
+ */
+function consumeColumnBudget(grid, x, y, z, matIndex) {
+  let cy = y;
+  while (grid.inBounds(x, cy, z) && grid.get(x, cy, z) === matIndex) {
+    const b = grid.getBudget?.(x, cy, z) ?? 0;
+    if (b >= 1) {
+      grid.setBudget?.(x, cy, z, b - 1);
+      return true;
+    }
+    cy += 1;
+  }
+  return false;
+}
+
+/**
  * One simulation tick: shuffle occupied cells, apply first matching rule each.
  * @param {GridApi} grid
  * @param {{ x: number, y: number, z: number, mat: number }[]} cells
  * @param {MaterialCatalog} catalog
- * @returns {{ moved: number, splashes: CellPos[] }}
+ * @returns {{ moved: number, splashes: CellPos[], moves: { from: CellPos, to: CellPos, mat: number }[] }}
  */
 export function stepWorld(grid, cells, catalog) {
   let moved = 0;
   /** @type {CellPos[]} */
   const splashes = [];
-  const order = shuffled(cells);
+  /** @type {{ from: CellPos, to: CellPos, mat: number }[]} */
+  const moves = [];
+  const order = cells.slice().sort((a, b) => b.y - a.y || Math.random() - 0.5);
   const seen = new Set();
 
   for (const cell of order) {
     const key = `${cell.x},${cell.y},${cell.z}`;
     if (seen.has(key)) continue;
     const mat = grid.get(cell.x, cell.y, cell.z);
-    if (mat <= 0) continue;
+    // Snapshot can go stale when a higher cell pushes into this one.
+    if (mat <= 0 || mat !== cell.mat) continue;
     const id = catalog.idByIndex[mat];
     const material = id ? catalog.byId.get(id) : null;
     if (!material) continue;
 
     const result = tryMaterialRules(grid, cell.x, cell.y, cell.z, mat, material, catalog);
-    if (!result.moved) continue;
+    if (!result.moved || !result.to) continue;
     moved += 1;
     seen.add(key);
-    if (result.splash && result.to) {
+    seen.add(`${result.to.x},${result.to.y},${result.to.z}`);
+    moves.push({ from: result.from, to: result.to, mat });
+    if (result.splash) {
       splashes.push({ x: result.to.x, y: result.to.y, z: result.to.z });
     }
   }
 
-  return { moved, splashes };
+  return { moved, splashes, moves };
 }
 
 /**
@@ -252,7 +401,7 @@ function worldOffset(lx, ly, dx, dz) {
 /**
  * @returns {CellPos | null} new @ position when the rule applied
  */
-function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz) {
+function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
   /** @type {{ x: number, y: number, z: number, want: string }[]} */
   const sites = [];
   let atX = 0;
@@ -283,14 +432,59 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz) {
   for (const site of sites) {
     if (!grid.inBounds(site.x, site.y, site.z)) return null;
     const value = grid.get(site.x, site.y, site.z);
-    if (!matchSymbol(site.want, value, matIndex, site.x === atX && site.y === atY && site.z === atZ)) {
+    if (
+      !matchSymbol(
+        site.want,
+        value,
+        matIndex,
+        site.x === atX && site.y === atY && site.z === atZ,
+        rule,
+        catalog,
+      )
+    ) {
       return null;
+    }
+  }
+
+  if (rule.belowBottom === "liquid") {
+    if (!catalog) return null;
+    for (let lx = 0; lx < rule.width; lx += 1) {
+      const off = worldOffset(lx, rule.height - 1, dx, dz);
+      const bx = x + off.x;
+      const by = y + off.y;
+      const bz = z + off.z;
+      if (!isLiquidSupport(grid, bx, by, bz, catalog)) return null;
+    }
+  }
+
+  if (rule.openAbove) {
+    const ay = atY + 1;
+    if (grid.inBounds(atX, ay, atZ) && grid.get(atX, ay, atZ) > 0) return null;
+  }
+
+  if (rule.supportUnderDest) {
+    for (let ly = 0; ly < rule.height; ly += 1) {
+      for (let lx = 0; lx < rule.width; lx += 1) {
+        if (rule.result[ly][lx] !== "@") continue;
+        if (rule.match[ly][lx] === "@") continue; // staying put
+        const off = worldOffset(lx, ly, dx, dz);
+        const wx = x + off.x;
+        const wy = y + off.y;
+        const wz = z + off.z;
+        if (!hasSupportBelow(grid, wx, wy, wz, catalog)) return null;
+      }
     }
   }
 
   /** @type {number[]} */
   const before = [];
   for (const site of sites) before.push(grid.get(site.x, site.y, site.z));
+  const budget = grid.getBudget?.(x, y, z) ?? 0;
+  const age = grid.getAge?.(x, y, z) ?? 0;
+  const erodeLife = grid.getErodeLife?.(x, y, z) ?? 0;
+  const posY = grid.getPosY?.(x, y, z) ?? 0;
+  const posX = grid.getPosX?.(x, y, z) ?? 0;
+  const posZ = grid.getPosZ?.(x, y, z) ?? 0;
 
   /** @type {CellPos | null} */
   let to = null;
@@ -302,27 +496,75 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz) {
       const wy = y + off.y;
       const wz = z + off.z;
       const idx = ly * rule.width + lx;
-      const next = resultValue(outSym, before[idx], matIndex);
+      const next = resultValue(outSym, before[idx], matIndex, rule, catalog);
       if (next == null) continue;
       grid.set(wx, wy, wz, next);
+      if (next === 0) {
+        grid.setBudget?.(wx, wy, wz, 0);
+        grid.setAge?.(wx, wy, wz, 0);
+        grid.setErodeLife?.(wx, wy, wz, 0);
+        grid.setPosY?.(wx, wy, wz, 0);
+        grid.setPosX?.(wx, wy, wz, 0);
+        grid.setPosZ?.(wx, wy, wz, 0);
+      }
       if (outSym === "@") to = { x: wx, y: wy, z: wz };
     }
   }
-  return to;
+  if (to) {
+    grid.setBudget?.(x, y, z, 0);
+    grid.setBudget?.(to.x, to.y, to.z, budget);
+    grid.setAge?.(x, y, z, 0);
+    grid.setAge?.(to.x, to.y, to.z, age);
+    grid.setErodeLife?.(x, y, z, 0);
+    grid.setErodeLife?.(to.x, to.y, to.z, erodeLife);
+    grid.setPosY?.(x, y, z, 0);
+    grid.setPosY?.(to.x, to.y, to.z, posY);
+    grid.setPosX?.(x, y, z, 0);
+    grid.setPosX?.(to.x, to.y, to.z, posX);
+    grid.setPosZ?.(x, y, z, 0);
+    grid.setPosZ?.(to.x, to.y, to.z, posZ);
+    return to;
+  }
+  // Applied with no @ in result (e.g. etch consumes self + neighbor).
+  return { x, y, z };
 }
 
-function matchSymbol(sym, value, matIndex, isOrigin) {
+/**
+ * Occupied cell under (x,y,z). Floor alone does not count (avoids sand walking forever).
+ * @param {GridApi} grid
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @param {MaterialCatalog} [_catalog]
+ */
+function hasSupportBelow(grid, x, y, z, _catalog) {
+  if (y <= 0) return false;
+  if (!grid.inBounds(x, y - 1, z)) return false;
+  return grid.get(x, y - 1, z) > 0;
+}
+
+function namedMaterialIndex(sym, rule, catalog) {
+  const id = rule?.symbols?.[sym];
+  if (!id || !catalog) return 0;
+  return catalog.indexById.get(id) || 0;
+}
+
+function matchSymbol(sym, value, matIndex, isOrigin, rule, catalog) {
   if (sym === ".") return true;
   if (sym === "@") return isOrigin && value === matIndex;
   if (sym === "_") return value === 0;
   if (sym === "x") return value > 0;
+  const named = namedMaterialIndex(sym, rule, catalog);
+  if (named > 0) return value === named;
   return false;
 }
 
-function resultValue(sym, previous, matIndex) {
+function resultValue(sym, previous, matIndex, rule, catalog) {
   if (sym === ".") return previous;
   if (sym === "_") return 0;
   if (sym === "@") return matIndex;
   if (sym === "x") return previous > 0 ? previous : null;
+  const named = namedMaterialIndex(sym, rule, catalog);
+  if (named > 0) return named;
   return null;
 }
