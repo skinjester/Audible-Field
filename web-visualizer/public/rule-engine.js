@@ -14,6 +14,16 @@
  *   solid   — no splash when something rests on it
  *   liquid  — splash when a grain lands or shifts onto it
  * World floor uses catalog.floor ("liquid" | "solid").
+ *
+ * Useful rule flags:
+ *   supportUnderDest — only move onto cells with support (surface flow / fill basins)
+ *   requireAbove     — only when stacked (pressure); flat pools settle
+ *   keepTouch        — surface tension; stay face-adjacent to same material
+ *   seekTouch        — only move into a cell that already touches other same-material
+ *                      (pull across gaps / fill holes; won't wet dry edges)
+ *   gainTouch        — only move if same-material face-neighbors after >= before
+ *                      (stops shoreline thrash while still allowing gap-close)
+ *   pick: "one"      — try one random xz facing per tick (less thrash)
  */
 
 const ROTATIONS_XZ = [
@@ -41,6 +51,8 @@ const ROTATIONS_XZ = [
  *   setPosX?: (x: number, y: number, z: number, v: number) => void,
  *   getPosZ?: (x: number, y: number, z: number) => number,
  *   setPosZ?: (x: number, y: number, z: number, v: number) => void,
+ *   getEmitSize?: (x: number, y: number, z: number) => number,
+ *   setEmitSize?: (x: number, y: number, z: number, v: number) => void,
  * }} GridApi
  * @typedef {{ defaultId: string, floor: "solid" | "liquid", list: MaterialDef[], byId: Map<string, MaterialDef>, indexById: Map<string, number>, idByIndex: string[] }} MaterialCatalog
  * @typedef {{ x: number, y: number, z: number }} CellPos
@@ -139,8 +151,27 @@ function normalizeRule(rule) {
     belowBottom: rule.belowBottom === "liquid" ? "liquid" : null,
     /** Only fire when the cell above @ is empty / out of bounds (column top). */
     openAbove: rule.openAbove === true,
-    /** Destination @_ cells must have solid (or floor) support underneath. */
+    /** Only fire when the cell above @ is occupied (pressure / stacked). */
+    requireAbove: rule.requireAbove === true,
+    /** Destination must have support underneath (occupied cell or world floor). */
     supportUnderDest: rule.supportUnderDest === true,
+    /**
+     * Surface tension: after moving, @ must still face-touch another same-material
+     * cell. Alone grains (no same-material neighbors) may still move.
+     */
+    keepTouch: rule.keepTouch === true,
+    /**
+     * Cohesion pull: destination must already face-touch same material other than @
+     * (closes gaps / fills holes; open edges with no far water stay put).
+     */
+    seekTouch: rule.seekTouch === true,
+    /**
+     * Only move when same-material face-neighbor count after >= before
+     * (vacating origin). Blocks shoreline thrash that reduces contact.
+     */
+    gainTouch: rule.gainTouch === true,
+    /** For xz rotations: try one random facing ("one") or all until one fits ("all"). */
+    pick: rule.pick === "one" ? "one" : "all",
   };
 }
 
@@ -234,7 +265,8 @@ export function tryMaterialRules(grid, x, y, z, matIndex, material, catalog = nu
 
     if (rule.rotations === "xz") {
       const order = shuffled(ROTATIONS_XZ);
-      for (const rot of order) {
+      const faces = rule.pick === "one" ? order.slice(0, 1) : order;
+      for (const rot of faces) {
         const to = applyOrientedRule(grid, x, y, z, matIndex, rule, rot.dx, rot.dz, catalog);
         if (to) {
           const splash = shouldSplashMove(grid, from, to, matIndex, catalog);
@@ -286,6 +318,7 @@ function applyPushRule(grid, x, y, z, matIndex, rule, catalog) {
   const posY = grid.getPosY?.(x, y, z) ?? 0;
   const posX = grid.getPosX?.(x, y, z) ?? 0;
   const posZ = grid.getPosZ?.(x, y, z) ?? 0;
+  const emitSize = grid.getEmitSize?.(x, y, z) ?? 0;
   grid.set(x, y, z, 0);
   grid.setBudget?.(x, y, z, 0);
   grid.setAge?.(x, y, z, 0);
@@ -293,6 +326,7 @@ function applyPushRule(grid, x, y, z, matIndex, rule, catalog) {
   grid.setPosY?.(x, y, z, 0);
   grid.setPosX?.(x, y, z, 0);
   grid.setPosZ?.(x, y, z, 0);
+  grid.setEmitSize?.(x, y, z, 0);
   grid.set(x, topSandY, z, matIndex);
   grid.setBudget?.(x, topSandY, z, remain);
   grid.setAge?.(x, topSandY, z, age);
@@ -300,6 +334,7 @@ function applyPushRule(grid, x, y, z, matIndex, rule, catalog) {
   grid.setPosY?.(x, topSandY, z, posY);
   grid.setPosX?.(x, topSandY, z, posX);
   grid.setPosZ?.(x, topSandY, z, posZ);
+  if (emitSize > 0) grid.setEmitSize?.(x, topSandY, z, emitSize);
 
   if (underEmpty) {
     for (let sy = underY; sy < topSandY; sy += 1) {
@@ -462,6 +497,11 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
     if (grid.inBounds(atX, ay, atZ) && grid.get(atX, ay, atZ) > 0) return null;
   }
 
+  if (rule.requireAbove) {
+    const ay = atY + 1;
+    if (!grid.inBounds(atX, ay, atZ) || grid.get(atX, ay, atZ) <= 0) return null;
+  }
+
   if (rule.supportUnderDest) {
     for (let ly = 0; ly < rule.height; ly += 1) {
       for (let lx = 0; lx < rule.width; lx += 1) {
@@ -476,6 +516,42 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
     }
   }
 
+  /** @type {CellPos | null} */
+  let dest = null;
+  for (let ly = 0; ly < rule.height; ly += 1) {
+    for (let lx = 0; lx < rule.width; lx += 1) {
+      if (rule.result[ly][lx] !== "@") continue;
+      const off = worldOffset(lx, ly, dx, dz);
+      dest = { x: x + off.x, y: y + off.y, z: z + off.z };
+    }
+  }
+  if (
+    rule.keepTouch &&
+    dest &&
+    (dest.x !== x || dest.y !== y || dest.z !== z) &&
+    !keepsSameMaterialTouch(grid, x, y, z, dest.x, dest.y, dest.z, matIndex)
+  ) {
+    return null;
+  }
+
+  if (
+    rule.seekTouch &&
+    dest &&
+    (dest.x !== x || dest.y !== y || dest.z !== z) &&
+    !destinationSeeksTouch(grid, x, y, z, dest.x, dest.y, dest.z, matIndex)
+  ) {
+    return null;
+  }
+
+  if (
+    rule.gainTouch &&
+    dest &&
+    (dest.x !== x || dest.y !== y || dest.z !== z) &&
+    !moveGainsOrKeepsTouch(grid, x, y, z, dest.x, dest.y, dest.z, matIndex)
+  ) {
+    return null;
+  }
+
   /** @type {number[]} */
   const before = [];
   for (const site of sites) before.push(grid.get(site.x, site.y, site.z));
@@ -485,6 +561,7 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
   const posY = grid.getPosY?.(x, y, z) ?? 0;
   const posX = grid.getPosX?.(x, y, z) ?? 0;
   const posZ = grid.getPosZ?.(x, y, z) ?? 0;
+  const emitSize = grid.getEmitSize?.(x, y, z) ?? 0;
 
   /** @type {CellPos | null} */
   let to = null;
@@ -506,6 +583,7 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
         grid.setPosY?.(wx, wy, wz, 0);
         grid.setPosX?.(wx, wy, wz, 0);
         grid.setPosZ?.(wx, wy, wz, 0);
+        grid.setEmitSize?.(wx, wy, wz, 0);
       }
       if (outSym === "@") to = { x: wx, y: wy, z: wz };
     }
@@ -523,6 +601,8 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
     grid.setPosX?.(to.x, to.y, to.z, posX);
     grid.setPosZ?.(x, y, z, 0);
     grid.setPosZ?.(to.x, to.y, to.z, posZ);
+    grid.setEmitSize?.(x, y, z, 0);
+    if (emitSize > 0) grid.setEmitSize?.(to.x, to.y, to.z, emitSize);
     return to;
   }
   // Applied with no @ in result (e.g. etch consumes self + neighbor).
@@ -530,7 +610,8 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
 }
 
 /**
- * Occupied cell under (x,y,z). Floor alone does not count (avoids sand walking forever).
+ * Occupied cell or world floor under (x,y,z). Used by supportUnderDest so liquids
+ * can sheet across the ground and into basins; sand does not use that flag.
  * @param {GridApi} grid
  * @param {number} x
  * @param {number} y
@@ -538,9 +619,91 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
  * @param {MaterialCatalog} [_catalog]
  */
 function hasSupportBelow(grid, x, y, z, _catalog) {
-  if (y <= 0) return false;
-  if (!grid.inBounds(x, y - 1, z)) return false;
+  if (y <= 0) return true;
+  if (!grid.inBounds(x, y - 1, z)) return true;
   return grid.get(x, y - 1, z) > 0;
+}
+
+const TOUCH_DIRS = [
+  [1, 0, 0],
+  [-1, 0, 0],
+  [0, 1, 0],
+  [0, -1, 0],
+  [0, 0, 1],
+  [0, 0, -1],
+];
+
+/**
+ * Surface tension check: after vacating (ox,oy,oz) and landing at (tx,ty,tz),
+ * still face-touch the same material — unless the grain was already alone.
+ */
+function keepsSameMaterialTouch(grid, ox, oy, oz, tx, ty, tz, matIndex) {
+  let before = 0;
+  for (const [dx, dy, dz] of TOUCH_DIRS) {
+    const nx = ox + dx;
+    const ny = oy + dy;
+    const nz = oz + dz;
+    if (!grid.inBounds(nx, ny, nz)) continue;
+    if (grid.get(nx, ny, nz) === matIndex) before += 1;
+  }
+  if (before === 0) return true;
+
+  for (const [dx, dy, dz] of TOUCH_DIRS) {
+    const nx = tx + dx;
+    const ny = ty + dy;
+    const nz = tz + dz;
+    if (nx === ox && ny === oy && nz === oz) continue;
+    if (!grid.inBounds(nx, ny, nz)) continue;
+    if (grid.get(nx, ny, nz) === matIndex) return true;
+  }
+  return false;
+}
+
+/**
+ * True when (tx,ty,tz) already face-touches same material other than the mover at
+ * (ox,oy,oz). Used to pull grains into gaps between bodies of the same liquid.
+ */
+function destinationSeeksTouch(grid, ox, oy, oz, tx, ty, tz, matIndex) {
+  for (const [dx, dy, dz] of TOUCH_DIRS) {
+    const nx = tx + dx;
+    const ny = ty + dy;
+    const nz = tz + dz;
+    if (nx === ox && ny === oy && nz === oz) continue;
+    if (!grid.inBounds(nx, ny, nz)) continue;
+    if (grid.get(nx, ny, nz) === matIndex) return true;
+  }
+  return false;
+}
+
+/** Face-adjacent same-material neighbors of (x,y,z). */
+function countSameTouches(grid, x, y, z, matIndex) {
+  let n = 0;
+  for (const [dx, dy, dz] of TOUCH_DIRS) {
+    const nx = x + dx;
+    const ny = y + dy;
+    const nz = z + dz;
+    if (!grid.inBounds(nx, ny, nz)) continue;
+    if (grid.get(nx, ny, nz) === matIndex) n += 1;
+  }
+  return n;
+}
+
+/**
+ * True when moving @ from origin to dest does not reduce same-material face contacts
+ * (vacated origin is not counted as a neighbor of dest).
+ */
+function moveGainsOrKeepsTouch(grid, ox, oy, oz, tx, ty, tz, matIndex) {
+  const before = countSameTouches(grid, ox, oy, oz, matIndex);
+  let after = 0;
+  for (const [dx, dy, dz] of TOUCH_DIRS) {
+    const nx = tx + dx;
+    const ny = ty + dy;
+    const nz = tz + dz;
+    if (nx === ox && ny === oy && nz === oz) continue;
+    if (!grid.inBounds(nx, ny, nz)) continue;
+    if (grid.get(nx, ny, nz) === matIndex) after += 1;
+  }
+  return after >= before;
 }
 
 function namedMaterialIndex(sym, rule, catalog) {

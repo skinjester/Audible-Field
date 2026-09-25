@@ -1,5 +1,5 @@
 {
-  "default": "block",
+  "default": "sand",
   "floor": "liquid",
   "materials": [
     {
@@ -76,6 +76,65 @@
           "name": "fall",
           "match": ["@", "_"],
           "result": ["_", "@"]
+        },
+        {
+          "name": "dissolve",
+          "match": ["@"],
+          "result": ["_"],
+          "belowBottom": "liquid"
+        }
+      ]
+    },
+    {
+      "id": "water",
+      "label": "Water",
+      "color": "#4a8fc7",
+      "surface": "liquid",
+      "rules": [
+        {
+          "name": "fall",
+          "match": ["@", "_"],
+          "result": ["_", "@"]
+        },
+        {
+          "name": "slide",
+          "match": ["@.", "x_"],
+          "result": ["_.", "x@"],
+          "rotations": "xz",
+          "pick": "one",
+          "keepTouch": true
+        },
+        {
+          "name": "level",
+          "match": ["@_", "w."],
+          "result": ["_@", "w."],
+          "rotations": "xz",
+          "pick": "all",
+          "openAbove": true,
+          "supportUnderDest": true,
+          "seekTouch": true,
+          "gainTouch": true,
+          "symbols": { "w": "water" }
+        },
+        {
+          "name": "coalesce",
+          "match": ["@_"],
+          "result": ["_@"],
+          "rotations": "xz",
+          "pick": "all",
+          "openAbove": true,
+          "supportUnderDest": true,
+          "seekTouch": true,
+          "gainTouch": true
+        },
+        {
+          "name": "flow",
+          "match": ["@_"],
+          "result": ["_@"],
+          "rotations": "xz",
+          "pick": "one",
+          "supportUnderDest": true,
+          "requireAbove": true
         }
       ]
     }

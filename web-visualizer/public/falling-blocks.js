@@ -1,18 +1,20 @@
 import * as THREE from "three";
 import { controller } from "./mixer-core.js?v=65";
-import { compileMaterials, stepWorld } from "./rule-engine.js?v=14";
+import { compileMaterials, stepWorld } from "./rule-engine.js?v=19";
 
-const GRID = 16;
 const MAX_Y = 12;
 /**
- * Atom edge length AND grid pitch (world units). Neighbors always touch.
- * Change at runtime with setAtomSize().
+ * Fixed atom pitch. Smaller than the old default so the playfield holds a
+ * denser grid (Sand1-style room to paint).
  */
-const ATOM_SIZE_DEFAULT = 1;
-const ATOM_SIZE_MIN = 0.1;
-const ATOM_SIZE_MAX = 2;
-/** Fixed ground plane edge length (world units). Independent of atom size. */
-const GROUND_PLANE_SIZE = GRID * ATOM_SIZE_DEFAULT + 10 * ATOM_SIZE_DEFAULT;
+const ATOM_SIZE = 0.25;
+/** Fixed ground / aim span (world units). */
+const PLAYFIELD_SPAN = 16;
+const PLAYFIELD_HALF = PLAYFIELD_SPAN / 2;
+const GROUND_PLANE_SIZE = PLAYFIELD_SPAN + 2;
+/** Cells across the playfield at the fixed atom pitch. */
+const GRID_XZ = Math.max(1, Math.floor(PLAYFIELD_SPAN / ATOM_SIZE + 1e-9));
+const GRID_MAX = GRID_XZ;
 const SCENE_BG = 0x000000;
 const SPLASH_LIFE = 0.42;
 const CLICK_SLOP = 6;
@@ -29,12 +31,23 @@ const STICK_DEADZONE = 0.12;
 const AIM_SPEED = 9;
 const SURFACE_YAW_RATE = 1.15;
 const RT_PRESS = 0.08;
-const DROP_INTERVAL = 0.1;
+/**
+ * Sand1-style brush: emit a flat N×N field, each cell rolling a chance so
+ * atoms cascade at staggered times instead of dropping as a solid slab.
+ */
+const BRUSH = 5;
+const EMIT_INTERVAL = 1 / 40;
+const EMIT_CHANCE = 0.4;
+/** Fixed spawn row near the top of the sim. */
+const EMIT_Y = MAX_Y - 3;
 /** Continuous fall speed toward contact (world units / second). */
 const GRAVITY = 28;
-/** Default spawn altitude (cell Y for bottom of emit volume). */
-const EMIT_ALTITUDE_DEFAULT = MAX_Y - 5;
-const EMIT_DIM_MIN = 1;
+/**
+ * When a column has 2+ blocks, the bottom one despawns after this many
+ * seconds under the stack; atoms above then settle. Sand and other
+ * materials are not crushed and may accumulate.
+ */
+const STACK_CRUSH_TIME = 3.5;
 
 let canvas = null;
 let wrap = null;
@@ -82,6 +95,12 @@ let posY = null;
 let posX = null;
 /** @type {Float32Array | null} */
 let posZ = null;
+/** Edge length baked at emit time (existing atoms keep their size). */
+/** @type {Float32Array | null} */
+let emitSizes = null;
+/** Seconds the cell has been the bottom of a 2+ stack (crush timer). */
+/** @type {Float32Array | null} */
+let stackCrushAge = null;
 /** Packed cell indices that currently hold material. */
 const occupied = new Set();
 /** @type {Map<number, THREE.InstancedMesh>} */
@@ -102,18 +121,17 @@ let circleWasDown = false;
 let pointerPouring = false;
 let emitAcc = 0;
 let emitting = false;
+/** Last cell poured while dragging — used to fill trail between pulses. */
+let lastPourIx = -1;
+let lastPourIz = -1;
 
 /** @type {ReturnType<typeof compileMaterials> | null} */
 let catalog = null;
-let activeMaterialId = "block";
-/** Current atom cube edge length (world units). */
-let atomSize = ATOM_SIZE_DEFAULT;
-/** Emitter volume in cells: length (X) × width (Z) × height (Y). */
-let emitL = 1;
-let emitW = 1;
-let emitH = 1;
-/** Cell Y for the bottom layer of the emit volume. */
-let emitAltitude = EMIT_ALTITUDE_DEFAULT;
+let activeMaterialId = "sand";
+/** Fixed atom cube edge length (world units). */
+const atomSize = ATOM_SIZE;
+/** Cells across the playfield. */
+const gridXZ = GRID_XZ;
 
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
@@ -137,11 +155,82 @@ function clearError() {
 }
 
 function idx(x, y, z) {
-  return (y * GRID + z) * GRID + x;
+  return (y * GRID_MAX + z) * GRID_MAX + x;
+}
+
+function decodeCell(i) {
+  const x = i % GRID_MAX;
+  const rest = (i / GRID_MAX) | 0;
+  const z = rest % GRID_MAX;
+  const y = (rest / GRID_MAX) | 0;
+  return { x, y, z };
+}
+
+/** World X of a cell center for a given pitch, anchored to the playfield. */
+function worldXForCell(x, pitch) {
+  return -PLAYFIELD_HALF + (x + 0.5) * pitch;
+}
+
+/** World Z of a cell center for a given pitch, anchored to the playfield. */
+function worldZForCell(z, pitch) {
+  return -PLAYFIELD_HALF + (z + 0.5) * pitch;
 }
 
 function inBounds(x, y, z) {
-  return x >= 0 && z >= 0 && y >= 0 && x < GRID && z < GRID && y < MAX_Y;
+  return x >= 0 && z >= 0 && y >= 0 && x < GRID_MAX && z < GRID_MAX && y < MAX_Y;
+}
+
+/** Valid column for new emits. */
+function inEmitXZ(x, z) {
+  return x >= 0 && z >= 0 && x < gridXZ && z < gridXZ;
+}
+
+/** Max world Y an atom may occupy (top of the tallest cell stack). */
+const SIM_Y_MAX = MAX_Y * ATOM_SIZE;
+
+/**
+ * True when the atom's visual AABB stays inside the playfield.
+ * Anything drawn past the edges is treated as out of the sim.
+ */
+function isDrawnInSim(wx, wy, wz, halfExtent) {
+  const eps = 1e-3;
+  const h = Math.max(0, halfExtent);
+  if (wx - h < -PLAYFIELD_HALF - eps) return false;
+  if (wx + h > PLAYFIELD_HALF + eps) return false;
+  if (wz - h < -PLAYFIELD_HALF - eps) return false;
+  if (wz + h > PLAYFIELD_HALF + eps) return false;
+  if (wy - h < -eps) return false;
+  if (wy + h > SIM_Y_MAX + eps) return false;
+  return true;
+}
+
+/**
+ * Delete / consume any atom whose drawn volume leaves the sim area
+ * (e.g. fluid that flowed past the playfield edge).
+ * @returns {boolean}
+ */
+function consumeOutOfBounds() {
+  if (!cells || occupied.size === 0) return false;
+  /** @type {number[]} */
+  const doomed = [];
+  for (const i of occupied) {
+    const mat = cells[i];
+    if (mat <= 0) continue;
+    const { x, y, z } = decodeCell(i);
+    const pitch = cellAtomSize(i);
+    const half = atomExtent(x, y, z, mat) * 0.5;
+    const wx = posX ? posX[i] : worldXForCell(x, pitch);
+    const wy = posY ? posY[i] : (y + 0.5) * pitch;
+    const wz = posZ ? posZ[i] : worldZForCell(z, pitch);
+    if (!isDrawnInSim(wx, wy, wz, half)) doomed.push(i);
+  }
+  if (!doomed.length) return false;
+  for (const i of doomed) {
+    if (cells[i] <= 0) continue;
+    const { x, y, z } = decodeCell(i);
+    setCell(x, y, z, 0);
+  }
+  return true;
 }
 
 function getCell(x, y, z) {
@@ -161,12 +250,18 @@ function setCell(x, y, z, value) {
     if (posY) posY[i] = 0;
     if (posX) posX[i] = 0;
     if (posZ) posZ[i] = 0;
+    if (emitSizes) emitSizes[i] = 0;
+    if (stackCrushAge) stackCrushAge[i] = 0;
   } else if (prev === 0) {
-    // Fresh spawn: start at discrete cell center; gravity / pack settle from there.
-    const p = atomSize;
-    if (posY) posY[i] = (y + 0.5) * p;
-    if (posX) posX[i] = (x + 0.5 - GRID / 2) * p;
-    if (posZ) posZ[i] = (z + 0.5 - GRID / 2) * p;
+    // Fresh spawn: bake current atom size; pitch matches so neighbors of this size touch.
+    // Clear lifetime so rule transfers (or emit) start clean — don't inherit stale shrink.
+    if (ages) ages[i] = 0;
+    if (erodeLives) erodeLives[i] = 0;
+    if (emitSizes) emitSizes[i] = atomSize;
+    if (stackCrushAge) stackCrushAge[i] = 0;
+    if (posY) posY[i] = (y + 0.5) * atomSize;
+    if (posX) posX[i] = worldXForCell(x, atomSize);
+    if (posZ) posZ[i] = worldZForCell(z, atomSize);
   }
   if (value > 0) occupied.add(i);
   else if (prev > 0) occupied.delete(i);
@@ -232,6 +327,17 @@ function setPosZ(x, y, z, value) {
   posZ[idx(x, y, z)] = Number.isFinite(value) ? value : 0;
 }
 
+function getCellEmitSize(x, y, z) {
+  if (!emitSizes || !inBounds(x, y, z)) return 0;
+  return emitSizes[idx(x, y, z)];
+}
+
+function setCellEmitSize(x, y, z, value) {
+  if (!emitSizes || !inBounds(x, y, z)) return;
+  const n = Number(value);
+  emitSizes[idx(x, y, z)] = Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 const gridApi = {
   get: getCell,
   set: setCell,
@@ -248,6 +354,8 @@ const gridApi = {
   setPosX,
   getPosZ,
   setPosZ,
+  getEmitSize: getCellEmitSize,
+  setEmitSize: setCellEmitSize,
 };
 
 function materialLifetime(matIndex) {
@@ -273,6 +381,11 @@ function cellLifetime(cellIndex, matIndex) {
   return native;
 }
 
+function cellAtomSize(cellIndex) {
+  if (emitSizes && emitSizes[cellIndex] > 0) return emitSizes[cellIndex];
+  return atomSize;
+}
+
 function cellScale(x, y, z, matIndex) {
   const life = cellLifetime(idx(x, y, z), matIndex);
   if (life <= 0 || !ages) return 1;
@@ -281,38 +394,19 @@ function cellScale(x, y, z, matIndex) {
 }
 
 function atomExtent(x, y, z, matIndex) {
-  return atomSize * cellScale(x, y, z, matIndex);
+  return cellAtomSize(idx(x, y, z)) * cellScale(x, y, z, matIndex);
 }
 
 function cellWorld(x, y, z, target, scale = 1) {
-  const p = atomSize;
   const i = idx(x, y, z);
-  target.x = posX ? posX[i] : (x + 0.5 - GRID / 2) * p;
-  target.y = posY ? posY[i] : (y + 0.5) * p;
-  target.z = posZ ? posZ[i] : (z + 0.5 - GRID / 2) * p;
+  const pitch = cellAtomSize(i);
+  target.x = posX ? posX[i] : worldXForCell(x, pitch);
+  target.y = posY ? posY[i] : (y + 0.5) * pitch;
+  target.z = posZ ? posZ[i] : worldZForCell(z, pitch);
   return target;
 }
 
 export function getAtomSize() {
-  return atomSize;
-}
-
-/**
- * Set atom cube size. Also sets grid pitch so neighbors stay in contact.
- */
-export function setAtomSize(size) {
-  const next = Math.min(
-    ATOM_SIZE_MAX,
-    Math.max(ATOM_SIZE_MIN, Number(size) || ATOM_SIZE_DEFAULT),
-  );
-  if (Math.abs(next - atomSize) < 1e-6) return atomSize;
-  atomSize = next;
-  rebuildAtomGeometry();
-  rebuildEmitterGeometry();
-  rebuildSplashGeometry();
-  setAimFromWorld();
-  syncEmitter();
-  syncAtomSizeUi();
   return atomSize;
 }
 
@@ -321,7 +415,8 @@ function rebuildAtomGeometry() {
     blockGeo.dispose();
     blockGeo = null;
   }
-  blockGeo = new THREE.BoxGeometry(atomSize, atomSize, atomSize);
+  // Unit cube; per-instance scale carries each atom's baked emit size.
+  blockGeo = new THREE.BoxGeometry(1, 1, 1);
   if (!surface) return;
   for (const mesh of instances.values()) {
     surface.remove(mesh);
@@ -365,36 +460,55 @@ function rotateSurface(deltaYaw) {
   surface.rotation.y += deltaYaw;
 }
 
-/** Clamp continuous aim and snap to the nearest grid cell. */
+/** Clamp continuous aim to the fixed playfield; snap to atom-pitch cells. */
 function setAimFromWorld() {
-  const half = (GRID * atomSize) / 2;
-  const limit = half - 0.001;
+  const limit = PLAYFIELD_HALF - 0.001;
   aimX = Math.min(limit, Math.max(-limit, aimX));
   aimZ = Math.min(limit, Math.max(-limit, aimZ));
-  const ix = Math.floor(aimX / atomSize + GRID / 2);
-  const iz = Math.floor(aimZ / atomSize + GRID / 2);
-  if (ix < 0 || iz < 0 || ix >= GRID || iz >= GRID) {
-    aim = null;
-    return;
-  }
+  // Map playfield XZ onto however many cells fit at the current atom size.
+  let ix = Math.floor((aimX + PLAYFIELD_HALF) / atomSize);
+  let iz = Math.floor((aimZ + PLAYFIELD_HALF) / atomSize);
+  ix = Math.min(gridXZ - 1, Math.max(0, ix));
+  iz = Math.min(gridXZ - 1, Math.max(0, iz));
   aim = { ix, iz };
 }
 
-/** Move the emitter in camera-relative XZ (surface stays put). */
+/**
+ * Move the emitter on the playfield (XZ only) in screen-relative directions.
+ * Stick/D-pad: +lx = right on screen, +ly = up on screen.
+ */
 function moveAim(lx, ly, dt) {
   if (dt <= 0 || (!lx && !ly)) return;
   const camSin = Math.sin(CAMERA_YAW);
   const camCos = Math.cos(CAMERA_YAW);
   const step = AIM_SPEED * dt;
+  // Camera-relative ground axes (fixed view looking toward origin).
   const wx = (camCos * lx - camSin * ly) * step;
   const wz = (-camSin * lx - camCos * ly) * step;
+  // World → surface-local (inverse of surface yaw).
   const sy = surface ? surface.rotation.y : 0;
   const c = Math.cos(sy);
   const s = Math.sin(sy);
-  aimX += c * wx + s * wz;
-  aimZ += -s * wx + c * wz;
+  aimX += c * wx - s * wz;
+  aimZ += s * wx + c * wz;
   setAimFromWorld();
   syncEmitter();
+}
+
+/** Digital aim from D-pad (−1 / 0 / +1), diagonals normalized. */
+function dpadAimAxes() {
+  const dpad = controller.dpad;
+  let lx = 0;
+  let ly = 0;
+  if (dpad.left) lx -= 1;
+  if (dpad.right) lx += 1;
+  if (dpad.up) ly += 1;
+  if (dpad.down) ly -= 1;
+  if (lx && ly) {
+    lx *= Math.SQRT1_2;
+    ly *= Math.SQRT1_2;
+  }
+  return { lx, ly };
 }
 
 function aimFromEvent(event) {
@@ -461,76 +575,15 @@ function readRightTrigger(pad) {
 }
 
 function emitWorldY() {
-  // Height uses a fixed pitch so atom size does not move the emitter.
-  return (emitAltitude + emitH * 0.5) * ATOM_SIZE_DEFAULT;
-}
-
-/** Bottom cell Y of the emit volume, aligned to the emitter's world height. */
-function emitCellBottom() {
-  const bottomWorld = emitWorldY() - emitH * atomSize * 0.5;
-  return Math.max(0, Math.min(maxEmitAltitude(), Math.round(bottomWorld / atomSize)));
-}
-
-function maxEmitAltitude() {
-  return Math.max(0, MAX_Y - emitH);
-}
-
-function clampEmitAltitude(value) {
-  const n = Math.round(Number(value));
-  if (!Number.isFinite(n)) return EMIT_ALTITUDE_DEFAULT;
-  return Math.max(0, Math.min(maxEmitAltitude(), n));
-}
-
-export function getEmitAltitude() {
-  return emitAltitude;
-}
-
-/** Set emitter spawn altitude in cells (bottom of emit volume). */
-export function setEmitAltitude(value) {
-  const next = clampEmitAltitude(value);
-  if (next === emitAltitude) return emitAltitude;
-  emitAltitude = next;
-  syncEmitter();
-  syncEmitAltitudeUi();
-  return emitAltitude;
-}
-
-function clampEmitDim(value) {
-  const n = Math.round(Number(value));
-  if (!Number.isFinite(n)) return EMIT_DIM_MIN;
-  return Math.max(EMIT_DIM_MIN, n);
-}
-
-export function getEmitSize() {
-  return { l: emitL, w: emitW, h: emitH };
-}
-
-/**
- * Set emitter volume in cells (L×W×H). Rebuilds emitter geometry with direct sizes.
- */
-export function setEmitSize(l, w, h) {
-  const nextL = clampEmitDim(l);
-  const nextW = clampEmitDim(w);
-  const nextH = clampEmitDim(h);
-  if (nextL === emitL && nextW === emitW && nextH === emitH) {
-    return getEmitSize();
-  }
-  emitL = nextL;
-  emitW = nextW;
-  emitH = nextH;
-  emitAltitude = clampEmitAltitude(emitAltitude);
-  rebuildEmitterGeometry();
-  syncEmitter();
-  syncEmitAltitudeUi();
-  return getEmitSize();
+  return (EMIT_Y + 0.5) * atomSize;
 }
 
 function emitterBoxSize() {
-  // Span cell centers for multi-atom volumes; pitch equals atomSize.
+  // Flat brush footprint (Sand1-style array), thin so it reads as a field.
   return {
-    x: emitL * atomSize,
-    y: emitH * atomSize,
-    z: emitW * atomSize,
+    x: BRUSH * atomSize,
+    y: atomSize * 0.35,
+    z: BRUSH * atomSize,
   };
 }
 
@@ -607,106 +660,6 @@ function syncPaletteUi() {
   }
 }
 
-function syncAtomSizeUi() {
-  const input = document.querySelector("[data-atom-size]");
-  const valueEl = document.querySelector("[data-atom-size-value]");
-  if (input instanceof HTMLInputElement) input.value = String(atomSize);
-  if (valueEl) valueEl.textContent = atomSize.toFixed(2);
-}
-
-function syncEmitAltitudeUi() {
-  const input = document.querySelector("[data-emit-altitude]");
-  const valueEl = document.querySelector("[data-emit-altitude-value]");
-  if (input instanceof HTMLInputElement) {
-    input.max = String(maxEmitAltitude());
-    input.value = String(emitAltitude);
-  }
-  if (valueEl) valueEl.textContent = String(emitAltitude);
-}
-
-function bindEmitAltitudeUi() {
-  const input = document.querySelector("[data-emit-altitude]");
-  if (!(input instanceof HTMLInputElement) || input.dataset.bound === "1") {
-    syncEmitAltitudeUi();
-    return;
-  }
-  input.dataset.bound = "1";
-  input.min = "0";
-  input.max = String(maxEmitAltitude());
-  input.step = "1";
-  const onInput = () => {
-    setEmitAltitude(Number(input.value));
-  };
-  input.addEventListener("input", onInput);
-  syncEmitAltitudeUi();
-}
-
-function bindAtomSizeUi() {
-  const input = document.querySelector("[data-atom-size]");
-  if (!(input instanceof HTMLInputElement) || input.dataset.bound === "1") {
-    syncAtomSizeUi();
-    return;
-  }
-  input.dataset.bound = "1";
-  input.min = String(ATOM_SIZE_MIN);
-  input.max = String(ATOM_SIZE_MAX);
-  input.step = "0.01";
-  const onInput = () => {
-    setAtomSize(Number(input.value));
-    syncAtomSizeUi();
-  };
-  input.addEventListener("input", onInput);
-  syncAtomSizeUi();
-}
-
-function syncEmitSizeUi() {
-  const lEl = document.querySelector("[data-emit-l]");
-  const wEl = document.querySelector("[data-emit-w]");
-  const hEl = document.querySelector("[data-emit-h]");
-  if (lEl instanceof HTMLInputElement) lEl.value = String(emitL);
-  if (wEl instanceof HTMLInputElement) wEl.value = String(emitW);
-  if (hEl instanceof HTMLInputElement) hEl.value = String(emitH);
-}
-
-function bindEmitSizeUi() {
-  const lEl = document.querySelector("[data-emit-l]");
-  const wEl = document.querySelector("[data-emit-w]");
-  const hEl = document.querySelector("[data-emit-h]");
-  if (
-    !(lEl instanceof HTMLInputElement) ||
-    !(wEl instanceof HTMLInputElement) ||
-    !(hEl instanceof HTMLInputElement)
-  ) {
-    return;
-  }
-  if (lEl.dataset.bound === "1") {
-    syncEmitSizeUi();
-    return;
-  }
-  lEl.dataset.bound = "1";
-  wEl.dataset.bound = "1";
-  hEl.dataset.bound = "1";
-  lEl.min = String(EMIT_DIM_MIN);
-  wEl.min = String(EMIT_DIM_MIN);
-  hEl.min = String(EMIT_DIM_MIN);
-  lEl.removeAttribute("max");
-  wEl.removeAttribute("max");
-  hEl.removeAttribute("max");
-  const apply = (sync) => {
-    const rawL = lEl.value.trim();
-    const rawW = wEl.value.trim();
-    const rawH = hEl.value.trim();
-    if (rawL === "" || rawW === "" || rawH === "") return;
-    setEmitSize(rawL, rawW, rawH);
-    if (sync) syncEmitSizeUi();
-  };
-  for (const el of [lEl, wEl, hEl]) {
-    el.addEventListener("input", () => apply(false));
-    el.addEventListener("change", () => apply(true));
-  }
-  syncEmitSizeUi();
-}
-
 function buildPalette() {
   paletteEl = document.querySelector("[data-falling-palette]");
   if (!paletteEl || !catalog) return;
@@ -724,9 +677,6 @@ function buildPalette() {
     paletteEl.appendChild(btn);
   }
   syncPaletteUi();
-  bindAtomSizeUi();
-  bindEmitAltitudeUi();
-  bindEmitSizeUi();
   bindClearUi();
 }
 
@@ -739,6 +689,8 @@ export function clearBoard() {
   if (posY) posY.fill(0);
   if (posX) posX.fill(0);
   if (posZ) posZ.fill(0);
+  if (emitSizes) emitSizes.fill(0);
+  if (stackCrushAge) stackCrushAge.fill(0);
   occupied.clear();
 
   for (const splash of splashes) {
@@ -780,8 +732,11 @@ function bindClearUi() {
 function applyController(dt) {
   if (!camera || dt <= 0) return;
 
-  const lx = stickAxis(controller.rawX);
-  const ly = stickAxis(controller.rawY);
+  const stickX = stickAxis(controller.rawX);
+  const stickY = stickAxis(controller.rawY);
+  const dpad = dpadAimAxes();
+  const lx = Math.max(-1, Math.min(1, stickX + dpad.lx));
+  const ly = Math.max(-1, Math.min(1, stickY + dpad.ly));
   const rx = stickAxis(controller.rightX);
   const ry = stickAxis(controller.rightY);
 
@@ -812,51 +767,59 @@ function applyController(dt) {
 
 function updateEmitStream(dt, active) {
   if (active && aim) {
+    const moved = lastPourIx !== aim.ix || lastPourIz !== aim.iz;
     if (!emitting) {
       emitting = true;
       emitAcc = 0;
-      dropAt(aim.ix, aim.iz);
+      pourBrush(aim.ix, aim.iz);
+      lastPourIx = aim.ix;
+      lastPourIz = aim.iz;
       syncEmitter();
     } else {
       emitAcc += dt;
-      while (emitAcc >= DROP_INTERVAL) {
-        emitAcc -= DROP_INTERVAL;
-        dropAt(aim.ix, aim.iz);
+      let pulsed = false;
+      while (emitAcc >= EMIT_INTERVAL) {
+        emitAcc -= EMIT_INTERVAL;
+        pourBrush(aim.ix, aim.iz);
+        pulsed = true;
       }
+      // Moving the aim leaves a field-trail even between cascade pulses.
+      if (moved && !pulsed) pourBrush(aim.ix, aim.iz);
+      lastPourIx = aim.ix;
+      lastPourIz = aim.iz;
     }
   } else if (emitting) {
     emitting = false;
     emitAcc = 0;
+    lastPourIx = -1;
+    lastPourIz = -1;
     syncEmitter();
   }
 }
 
 /**
- * SandPond Dropper: place an L×W×H block of atoms centered on (ix, iz),
- * starting at the floating emitter height. Skips occupied cells.
+ * Sand1-style brush: scatter atoms across a flat N×N field centered on aim.
+ * Each cell rolls EMIT_CHANCE so the column cascades instead of falling as one slab.
  */
-function dropAt(ix, iz) {
+function pourBrush(ix, iz) {
   if (!cells || !catalog) return;
   const matIndex = catalog.indexById.get(activeMaterialId);
   if (!matIndex) return;
 
-  const x0 = ix - Math.floor((emitL - 1) / 2);
-  const z0 = iz - Math.floor((emitW - 1) / 2);
-  const y0 = emitCellBottom();
+  const half = (BRUSH - 1) >> 1;
+  const y = EMIT_Y;
+  if (y < 0 || y >= MAX_Y) return;
   let placed = 0;
 
-  for (let dy = 0; dy < emitH; dy += 1) {
-    const y = y0 + dy;
-    if (y >= MAX_Y) break;
-    for (let dx = 0; dx < emitL; dx += 1) {
-      for (let dz = 0; dz < emitW; dz += 1) {
-        const x = x0 + dx;
-        const z = z0 + dz;
-        if (!inBounds(x, y, z)) continue;
-        if (getCell(x, y, z) !== 0) continue;
-        setCell(x, y, z, matIndex);
-        placed += 1;
-      }
+  for (let dz = -half; dz <= half; dz += 1) {
+    for (let dx = -half; dx <= half; dx += 1) {
+      if (Math.random() > EMIT_CHANCE) continue;
+      const x = ix + dx;
+      const z = iz + dz;
+      if (!inEmitXZ(x, z) || !inBounds(x, y, z)) continue;
+      if (getCell(x, y, z) !== 0) continue;
+      setCell(x, y, z, matIndex);
+      placed += 1;
     }
   }
 
@@ -875,8 +838,9 @@ function spawnSplash(x, y, z) {
   const mesh = new THREE.Mesh(splashGeo, material);
   mesh.rotation.x = -Math.PI / 2;
   cellWorld(x, y, z, mesh.position);
-  mesh.position.y = y * atomSize + atomSize * 0.08;
-  mesh.scale.setScalar(1);
+  const sz = cellAtomSize(idx(x, y, z));
+  mesh.position.y = (posY ? posY[idx(x, y, z)] : (y + 0.5) * sz) - sz * 0.42;
+  mesh.scale.setScalar(atomSize > 1e-6 ? sz / atomSize : 1);
   surface.add(mesh);
   splashes.push({ mesh, age: 0 });
 }
@@ -891,10 +855,10 @@ function collectOccupied() {
       occupied.delete(i);
       continue;
     }
-    const x = i % GRID;
-    const rest = (i / GRID) | 0;
-    const z = rest % GRID;
-    const y = (rest / GRID) | 0;
+    const x = i % GRID_MAX;
+    const rest = (i / GRID_MAX) | 0;
+    const z = rest % GRID_MAX;
+    const y = (rest / GRID_MAX) | 0;
     list.push({ x, y, z, mat });
   }
   return list;
@@ -924,10 +888,10 @@ function reconcileMeshes() {
   for (const i of occupied) {
     const mat = cells[i];
     if (mat <= 0) continue;
-    const x = i % GRID;
-    const rest = (i / GRID) | 0;
-    const z = rest % GRID;
-    const y = (rest / GRID) | 0;
+    const x = i % GRID_MAX;
+    const rest = (i / GRID_MAX) | 0;
+    const z = rest % GRID_MAX;
+    const y = (rest / GRID_MAX) | 0;
     let coords = byMat.get(mat);
     if (!coords) {
       coords = [];
@@ -950,7 +914,7 @@ function reconcileMeshes() {
       const x = coords[o];
       const y = coords[o + 1];
       const z = coords[o + 2];
-      const scale = cellScale(x, y, z, mat);
+      const scale = cellScale(x, y, z, mat) * cellAtomSize(idx(x, y, z));
       cellWorld(x, y, z, scratchPos, scale);
       scratchScale.set(scale, scale, scale);
       scratchMat4.compose(scratchPos, scratchQuat, scratchScale);
@@ -963,14 +927,14 @@ function reconcileMeshes() {
 }
 
 /**
- * Age materials with a lifetime; shrink visually and despawn when expired.
- * Contact with eroding materials infects neighbors with a forced lifetime.
- * @returns {boolean} true if meshes need a refresh
+ * Tag neighbors of eroding atoms with a forced lifetime.
+ * Runs before rules so mobile liquids (water) get infected while still adjacent,
+ * then again after rules for grains that just fell into contact.
+ * @returns {boolean}
  */
-function ageAtoms(dt) {
-  if (!cells || !ages || !catalog || dt <= 0 || occupied.size === 0) return false;
+function infectErodeContacts() {
+  if (!cells || !erodeLives || !catalog || occupied.size === 0) return false;
   let dirty = false;
-
   const NEIGHBORS = [
     [1, 0, 0],
     [-1, 0, 0],
@@ -980,31 +944,35 @@ function ageAtoms(dt) {
     [0, 0, -1],
   ];
 
-  // Infect neighbors of eroding atoms (once infected, shrink continues even if they separate).
-  if (erodeLives) {
-    for (const i of occupied) {
-      const mat = cells[i];
-      if (mat <= 0) continue;
-      const duration = materialErode(mat);
-      if (duration <= 0) continue;
-      const x = i % GRID;
-      const rest = (i / GRID) | 0;
-      const z = rest % GRID;
-      const y = (rest / GRID) | 0;
-      for (const [dx, dy, dz] of NEIGHBORS) {
-        const nx = x + dx;
-        const ny = y + dy;
-        const nz = z + dz;
-        if (!inBounds(nx, ny, nz)) continue;
-        const ni = idx(nx, ny, nz);
-        const nmat = cells[ni];
-        if (nmat <= 0 || nmat === mat) continue;
-        if ((erodeLives[ni] || 0) > 0) continue;
-        erodeLives[ni] = duration;
-        dirty = true;
-      }
+  for (const i of occupied) {
+    const mat = cells[i];
+    if (mat <= 0) continue;
+    const duration = materialErode(mat);
+    if (duration <= 0) continue;
+    const { x, y, z } = decodeCell(i);
+    for (const [dx, dy, dz] of NEIGHBORS) {
+      const nx = x + dx;
+      const ny = y + dy;
+      const nz = z + dz;
+      if (!inBounds(nx, ny, nz)) continue;
+      const ni = idx(nx, ny, nz);
+      const nmat = cells[ni];
+      if (nmat <= 0 || nmat === mat) continue;
+      if ((erodeLives[ni] || 0) > 0) continue;
+      erodeLives[ni] = duration;
+      dirty = true;
     }
   }
+  return dirty;
+}
+
+/**
+ * Age materials with a lifetime; shrink visually and despawn when expired.
+ * @returns {boolean} true if meshes need a refresh
+ */
+function ageAtoms(dt) {
+  if (!cells || !ages || !catalog || dt <= 0 || occupied.size === 0) return false;
+  let dirty = false;
 
   const doomed = [];
   for (const i of occupied) {
@@ -1017,10 +985,7 @@ function ageAtoms(dt) {
     if (ages[i] >= life) doomed.push(i);
   }
   for (const i of doomed) {
-    const x = i % GRID;
-    const rest = (i / GRID) | 0;
-    const z = rest % GRID;
-    const y = (rest / GRID) | 0;
+    const { x, y, z } = decodeCell(i);
     setCell(x, y, z, 0);
   }
   return dirty || doomed.length > 0;
@@ -1038,10 +1003,10 @@ function settleGravity(dt) {
   const columns = new Map();
   for (const i of occupied) {
     if (cells[i] <= 0) continue;
-    const x = i % GRID;
-    const rest = (i / GRID) | 0;
-    const z = rest % GRID;
-    const key = z * GRID + x;
+    const x = i % GRID_MAX;
+    const rest = (i / GRID_MAX) | 0;
+    const z = rest % GRID_MAX;
+    const key = z * GRID_MAX + x;
     let list = columns.get(key);
     if (!list) {
       list = [];
@@ -1064,10 +1029,10 @@ function settleGravity(dt) {
     let floorTop = 0;
     for (const i of list) {
       const mat = cells[i];
-      const x = i % GRID;
-      const rest = (i / GRID) | 0;
-      const z = rest % GRID;
-      const y = (rest / GRID) | 0;
+      const x = i % GRID_MAX;
+      const rest = (i / GRID_MAX) | 0;
+      const z = rest % GRID_MAX;
+      const y = (rest / GRID_MAX) | 0;
       const size = atomExtent(x, y, z, mat);
       const restCenter = floorTop + size * 0.5;
       let yCenter = posY[i] > 0 ? posY[i] : restCenter;
@@ -1076,7 +1041,6 @@ function settleGravity(dt) {
         yCenter = Math.max(restCenter, yCenter - fall);
         moved = true;
       } else if (yCenter < restCenter - 1e-5) {
-        // Support grew/shrunk — snap up onto contact (no tunneling into ground).
         yCenter = restCenter;
         moved = true;
       } else {
@@ -1093,8 +1057,120 @@ function settleGravity(dt) {
 }
 
 /**
- * Keep connected atoms flush as they shrink: contract each cluster in XZ so
- * neighbors stay in contact and the surface area shrinks as a whole.
+ * Bottom block of a 2+ stack despawns after STACK_CRUSH_TIME under the pile.
+ * Only applies to "block" (which has no lifetime of its own). Sand, water,
+ * and other materials accumulate without crushing.
+ * @returns {boolean}
+ */
+function crushStackBottoms(dt) {
+  if (!cells || !stackCrushAge || !catalog || dt <= 0 || occupied.size === 0) {
+    return false;
+  }
+
+  const blockIndex = catalog.indexById.get("block") || 0;
+  if (blockIndex <= 0) return false;
+
+  /** @type {Map<number, number[]>} */
+  const columns = new Map();
+  for (const i of occupied) {
+    if (cells[i] <= 0) continue;
+    const x = i % GRID_MAX;
+    const rest = (i / GRID_MAX) | 0;
+    const z = rest % GRID_MAX;
+    const key = z * GRID_MAX + x;
+    let list = columns.get(key);
+    if (!list) {
+      list = [];
+      columns.set(key, list);
+    }
+    list.push(i);
+  }
+
+  /** @type {number[]} */
+  const doomed = [];
+
+  for (const list of columns.values()) {
+    list.sort((a, b) => {
+      const ay = posY?.[a] || 0;
+      const by = posY?.[b] || 0;
+      if (ay !== by) return ay - by;
+      return a - b;
+    });
+
+    const bottom = list[0];
+    for (const i of list) {
+      if (i !== bottom || list.length < 2 || cells[i] !== blockIndex) {
+        stackCrushAge[i] = 0;
+        continue;
+      }
+      stackCrushAge[i] += dt;
+      if (stackCrushAge[i] >= STACK_CRUSH_TIME) doomed.push(i);
+    }
+  }
+
+  if (!doomed.length) return false;
+  for (const i of doomed) {
+    if (cells[i] <= 0) continue;
+    const { x, y, z } = decodeCell(i);
+    setCell(x, y, z, 0);
+  }
+  return true;
+}
+
+/** True when a cell is actively shrinking (native lifetime or erode infection). */
+function isShrinking(cellIndex, matIndex) {
+  return cellLifetime(cellIndex, matIndex) > 0;
+}
+
+/**
+ * Keep non-shrinking atoms easing toward their grid cell centers in XZ
+ * (smooths slide/flow hops instead of teleporting each rule tick).
+ * @returns {boolean}
+ */
+function settleLateral(dt) {
+  if (!cells || !posX || !posZ || dt <= 0 || occupied.size === 0) return false;
+
+  let moved = false;
+  for (const i of occupied) {
+    const mat = cells[i];
+    if (mat <= 0 || isShrinking(i, mat)) continue;
+    const x = i % GRID_MAX;
+    const rest = (i / GRID_MAX) | 0;
+    const z = rest % GRID_MAX;
+    const pitch = cellAtomSize(i);
+    const tx = worldXForCell(x, pitch);
+    const tz = worldZForCell(z, pitch);
+    let px = posX[i];
+    let pz = posZ[i];
+    const dx = tx - px;
+    const dz = tz - pz;
+    const dist = Math.hypot(dx, dz);
+    if (dist <= 1e-5) {
+      if (px !== tx || pz !== tz) {
+        posX[i] = tx;
+        posZ[i] = tz;
+        moved = true;
+      }
+      continue;
+    }
+    // Ease toward the cell; slightly under one-cell/tick so hops don't look frantic.
+    const maxStep = pitch * RULE_HZ * 0.85 * dt;
+    if (dist <= maxStep) {
+      posX[i] = tx;
+      posZ[i] = tz;
+    } else {
+      const s = maxStep / dist;
+      posX[i] = px + dx * s;
+      posZ[i] = pz + dz * s;
+    }
+    moved = true;
+  }
+  return moved;
+}
+
+/**
+ * Keep connected shrinking atoms flush: contract each shrinking cluster in XZ
+ * so neighbors stay in contact. Full-size atoms ease onto the grid via settleLateral.
  * @returns {boolean}
  */
 function packStickTogether() {
@@ -1112,7 +1188,10 @@ function packStickTogether() {
   let moved = false;
 
   for (const start of occupied) {
-    if (cells[start] <= 0 || visited.has(start)) continue;
+    const startMat = cells[start];
+    if (startMat <= 0 || visited.has(start) || !isShrinking(start, startMat)) {
+      continue;
+    }
 
     /** @type {number[]} */
     const comp = [];
@@ -1121,10 +1200,10 @@ function packStickTogether() {
     while (queue.length) {
       const i = queue.pop();
       comp.push(i);
-      const x = i % GRID;
-      const rest = (i / GRID) | 0;
-      const z = rest % GRID;
-      const y = (rest / GRID) | 0;
+      const x = i % GRID_MAX;
+      const rest = (i / GRID_MAX) | 0;
+      const z = rest % GRID_MAX;
+      const y = (rest / GRID_MAX) | 0;
       for (const [dx, dy, dz] of dirs) {
         const nx = x + dx;
         const ny = y + dy;
@@ -1132,6 +1211,7 @@ function packStickTogether() {
         if (!inBounds(nx, ny, nz)) continue;
         const ni = idx(nx, ny, nz);
         if (visited.has(ni) || cells[ni] <= 0) continue;
+        if (!isShrinking(ni, cells[ni])) continue;
         visited.add(ni);
         queue.push(ni);
       }
@@ -1143,18 +1223,19 @@ function packStickTogether() {
     /** @type {{ i: number, x: number, y: number, z: number, ext: number, wx: number, wz: number }[]} */
     const members = [];
     for (const i of comp) {
-      const x = i % GRID;
-      const rest = (i / GRID) | 0;
-      const z = rest % GRID;
-      const y = (rest / GRID) | 0;
+      const x = i % GRID_MAX;
+      const rest = (i / GRID_MAX) | 0;
+      const z = rest % GRID_MAX;
+      const y = (rest / GRID_MAX) | 0;
       const mat = cells[i];
       const s = cellScale(x, y, z, mat);
-      const wx = (x + 0.5 - GRID / 2) * atomSize;
-      const wz = (z + 0.5 - GRID / 2) * atomSize;
+      const pitch = cellAtomSize(i);
+      const wx = worldXForCell(x, pitch);
+      const wz = worldZForCell(z, pitch);
       sumS += s;
       cX += wx;
       cZ += wz;
-      members.push({ i, x, y, z, ext: atomSize * s, wx, wz });
+      members.push({ i, x, y, z, ext: pitch * s, wx, wz });
     }
 
     const n = members.length;
@@ -1162,19 +1243,7 @@ function packStickTogether() {
     cX /= n;
     cZ /= n;
 
-    // Full-size clusters stay on the grid pitch.
-    if (sAvg >= 0.999) {
-      for (const m of members) {
-        if (Math.abs(posX[m.i] - m.wx) > 1e-5 || Math.abs(posZ[m.i] - m.wz) > 1e-5) {
-          moved = true;
-        }
-        posX[m.i] = m.wx;
-        posZ[m.i] = m.wz;
-      }
-      continue;
-    }
-
-    // Contract toward centroid by average scale so the whole surface shrinks.
+    // Contract toward centroid by average scale so the shrinking surface stays flush.
     for (const m of members) {
       const nx = cX + (m.wx - cX) * sAvg;
       const nz = cZ + (m.wz - cZ) * sAvg;
@@ -1231,14 +1300,23 @@ function runRules() {
   const occupiedList = collectOccupied();
   const { splashes: splashCells } = stepWorld(gridApi, occupiedList, catalog);
 
+  consumeOutOfBounds();
   reconcileMeshes();
   for (const cell of splashCells) {
+    const pitch = cellAtomSize(idx(cell.x, cell.y, cell.z));
+    const wx = worldXForCell(cell.x, pitch);
+    const wy = (cell.y + 0.5) * pitch;
+    const wz = worldZForCell(cell.z, pitch);
+    if (!isDrawnInSim(wx, wy, wz, pitch * 0.5)) continue;
     spawnSplash(cell.x, cell.y, cell.z);
   }
 }
 
 function step(dt) {
   applyController(dt);
+
+  // Infect before rules so water still touching erode gets tagged before it flows away.
+  let infected = infectErodeContacts();
 
   ruleAcc += dt;
   const interval = 1 / RULE_HZ;
@@ -1247,10 +1325,18 @@ function step(dt) {
     runRules();
   }
 
+  // Catch solids/liquids that fell or slid into contact during the rule pass.
+  infected = infectErodeContacts() || infected;
+
   const aged = ageAtoms(dt);
+  const crushed = crushStackBottoms(dt);
   const settled = settleGravity(dt);
+  const lateral = settleLateral(dt);
   const packed = packStickTogether();
-  if (aged || settled || packed) reconcileMeshes();
+  const culled = consumeOutOfBounds();
+  if (infected || aged || crushed || settled || lateral || packed || culled) {
+    reconcileMeshes();
+  }
 
   for (let i = splashes.length - 1; i >= 0; i -= 1) {
     const splash = splashes[i];
@@ -1380,13 +1466,13 @@ function onWheel(event) {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=15`);
+  const res = await fetch(`/materials.json?v=27`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(await res.json());
   activeMaterialId = catalog.byId.has(prev)
     ? prev
-    : catalog.defaultId || catalog.list[0]?.id || "block";
+    : catalog.defaultId || catalog.list[0]?.id || "sand";
   buildPalette();
 }
 
@@ -1401,13 +1487,15 @@ function initScene(nextCanvas) {
   fpsFrames = 0;
   fpsLastAt = 0;
 
-  cells = new Uint8Array(GRID * GRID * MAX_Y);
-  budgets = new Uint8Array(GRID * GRID * MAX_Y);
-  ages = new Float32Array(GRID * GRID * MAX_Y);
-  erodeLives = new Float32Array(GRID * GRID * MAX_Y);
-  posY = new Float32Array(GRID * GRID * MAX_Y);
-  posX = new Float32Array(GRID * GRID * MAX_Y);
-  posZ = new Float32Array(GRID * GRID * MAX_Y);
+  cells = new Uint8Array(GRID_MAX * GRID_MAX * MAX_Y);
+  budgets = new Uint8Array(GRID_MAX * GRID_MAX * MAX_Y);
+  ages = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
+  erodeLives = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
+  posY = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
+  posX = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
+  posZ = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
+  emitSizes = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
+  stackCrushAge = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   occupied.clear();
   for (const mesh of instances.values()) {
     surface?.remove(mesh);
@@ -1451,7 +1539,7 @@ function initScene(nextCanvas) {
   groundMesh.position.y = -0.02;
   surface.add(groundMesh);
 
-  blockGeo = new THREE.BoxGeometry(atomSize, atomSize, atomSize);
+  blockGeo = new THREE.BoxGeometry(1, 1, 1);
   {
     const size = emitterBoxSize();
     emitterGeo = new THREE.BoxGeometry(size.x, size.y, size.z);
@@ -1471,6 +1559,7 @@ function initScene(nextCanvas) {
   );
   emitter.renderOrder = 2;
   surface.add(emitter);
+
   setAimFromWorld();
   syncEmitter();
 
@@ -1501,6 +1590,7 @@ export async function showFallingBlocks(nextCanvas) {
       fpsFrames = 0;
       fpsLastAt = 0;
     }
+    bindClearUi();
     running = true;
     sizeTries = 0;
     startRenderLoop();
