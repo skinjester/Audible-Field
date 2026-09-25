@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { controller } from "./mixer-core.js?v=65";
-import { compileMaterials, stepWorld } from "./rule-engine.js?v=19";
+import { compileMaterials, stepWorld } from "./rule-engine.js?v=21";
 
 const MAX_Y = 12;
 /**
@@ -101,6 +101,15 @@ let emitSizes = null;
 /** Seconds the cell has been the bottom of a 2+ stack (crush timer). */
 /** @type {Float32Array | null} */
 let stackCrushAge = null;
+/** Consecutive same-height hops (shuffle detection). */
+/** @type {Uint8Array | null} */
+let shuffleCounts = null;
+/** Cell X where the current shuffle streak began. */
+/** @type {Uint16Array | null} */
+let shuffleOriginX = null;
+/** Cell Z where the current shuffle streak began. */
+/** @type {Uint16Array | null} */
+let shuffleOriginZ = null;
 /** Packed cell indices that currently hold material. */
 const occupied = new Set();
 /** @type {Map<number, THREE.InstancedMesh>} */
@@ -252,6 +261,9 @@ function setCell(x, y, z, value) {
     if (posZ) posZ[i] = 0;
     if (emitSizes) emitSizes[i] = 0;
     if (stackCrushAge) stackCrushAge[i] = 0;
+    if (shuffleCounts) shuffleCounts[i] = 0;
+    if (shuffleOriginX) shuffleOriginX[i] = 0;
+    if (shuffleOriginZ) shuffleOriginZ[i] = 0;
   } else if (prev === 0) {
     // Fresh spawn: bake current atom size; pitch matches so neighbors of this size touch.
     // Clear lifetime so rule transfers (or emit) start clean — don't inherit stale shrink.
@@ -259,6 +271,9 @@ function setCell(x, y, z, value) {
     if (erodeLives) erodeLives[i] = 0;
     if (emitSizes) emitSizes[i] = atomSize;
     if (stackCrushAge) stackCrushAge[i] = 0;
+    if (shuffleCounts) shuffleCounts[i] = 0;
+    if (shuffleOriginX) shuffleOriginX[i] = 0;
+    if (shuffleOriginZ) shuffleOriginZ[i] = 0;
     if (posY) posY[i] = (y + 0.5) * atomSize;
     if (posX) posX[i] = worldXForCell(x, atomSize);
     if (posZ) posZ[i] = worldZForCell(z, atomSize);
@@ -338,6 +353,36 @@ function setCellEmitSize(x, y, z, value) {
   emitSizes[idx(x, y, z)] = Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+function getShuffle(x, y, z) {
+  if (!shuffleCounts || !inBounds(x, y, z)) return 0;
+  return shuffleCounts[idx(x, y, z)];
+}
+
+function setShuffle(x, y, z, value) {
+  if (!shuffleCounts || !inBounds(x, y, z)) return;
+  shuffleCounts[idx(x, y, z)] = Math.max(0, value | 0);
+}
+
+function getShuffleOriginX(x, y, z) {
+  if (!shuffleOriginX || !inBounds(x, y, z)) return 0;
+  return shuffleOriginX[idx(x, y, z)];
+}
+
+function setShuffleOriginX(x, y, z, value) {
+  if (!shuffleOriginX || !inBounds(x, y, z)) return;
+  shuffleOriginX[idx(x, y, z)] = Math.max(0, value | 0);
+}
+
+function getShuffleOriginZ(x, y, z) {
+  if (!shuffleOriginZ || !inBounds(x, y, z)) return 0;
+  return shuffleOriginZ[idx(x, y, z)];
+}
+
+function setShuffleOriginZ(x, y, z, value) {
+  if (!shuffleOriginZ || !inBounds(x, y, z)) return;
+  shuffleOriginZ[idx(x, y, z)] = Math.max(0, value | 0);
+}
+
 const gridApi = {
   get: getCell,
   set: setCell,
@@ -356,6 +401,12 @@ const gridApi = {
   setPosZ,
   getEmitSize: getCellEmitSize,
   setEmitSize: setCellEmitSize,
+  getShuffle,
+  setShuffle,
+  getShuffleOriginX,
+  setShuffleOriginX,
+  getShuffleOriginZ,
+  setShuffleOriginZ,
 };
 
 function materialLifetime(matIndex) {
@@ -691,6 +742,9 @@ export function clearBoard() {
   if (posZ) posZ.fill(0);
   if (emitSizes) emitSizes.fill(0);
   if (stackCrushAge) stackCrushAge.fill(0);
+  if (shuffleCounts) shuffleCounts.fill(0);
+  if (shuffleOriginX) shuffleOriginX.fill(0);
+  if (shuffleOriginZ) shuffleOriginZ.fill(0);
   occupied.clear();
 
   for (const splash of splashes) {
@@ -1298,7 +1352,8 @@ function packStickTogether() {
 function runRules() {
   if (!catalog) return;
   const occupiedList = collectOccupied();
-  const { splashes: splashCells } = stepWorld(gridApi, occupiedList, catalog);
+  const { splashes: splashCells, moves } = stepWorld(gridApi, occupiedList, catalog);
+  const culledShuffle = cullShuffling(moves);
 
   consumeOutOfBounds();
   reconcileMeshes();
@@ -1310,6 +1365,64 @@ function runRules() {
     if (!isDrawnInSim(wx, wy, wz, pitch * 0.5)) continue;
     spawnSplash(cell.x, cell.y, cell.z);
   }
+  return culledShuffle;
+}
+
+/**
+ * Track same-height hops. If a grain does many without leaving its local
+ * neighborhood, treat it as shuffle thrash and delete it.
+ * @param {{ from: { x: number, y: number, z: number }, to: { x: number, y: number, z: number }, mat: number }[]} moves
+ * @returns {boolean}
+ */
+function cullShuffling(moves) {
+  if (!catalog || !moves?.length || !shuffleCounts) return false;
+  let culled = false;
+  for (const move of moves) {
+    const id = catalog.idByIndex[move.mat];
+    const material = id ? catalog.byId.get(id) : null;
+    const limit = material?.shuffleLimit || 0;
+    if (limit <= 0) continue;
+    if (gridApi.get(move.to.x, move.to.y, move.to.z) !== move.mat) continue;
+
+    // Progress downward resets the streak.
+    if (move.to.y < move.from.y) {
+      setShuffle(move.to.x, move.to.y, move.to.z, 0);
+      setShuffleOriginX(move.to.x, move.to.y, move.to.z, 0);
+      setShuffleOriginZ(move.to.x, move.to.y, move.to.z, 0);
+      continue;
+    }
+    // Only same-height hops count as potential shuffle.
+    if (move.to.y !== move.from.y) {
+      setShuffle(move.to.x, move.to.y, move.to.z, 0);
+      continue;
+    }
+
+    let count = getShuffle(move.to.x, move.to.y, move.to.z);
+    let ox = getShuffleOriginX(move.to.x, move.to.y, move.to.z);
+    let oz = getShuffleOriginZ(move.to.x, move.to.y, move.to.z);
+    if (count <= 0) {
+      ox = move.from.x;
+      oz = move.from.z;
+      count = 0;
+    }
+    count += 1;
+    if (count >= limit) {
+      const span = Math.abs(move.to.x - ox) + Math.abs(move.to.z - oz);
+      if (span <= 2) {
+        setCell(move.to.x, move.to.y, move.to.z, 0);
+        culled = true;
+        continue;
+      }
+      // Made real travel — start a new window from here.
+      ox = move.to.x;
+      oz = move.to.z;
+      count = 1;
+    }
+    setShuffle(move.to.x, move.to.y, move.to.z, count);
+    setShuffleOriginX(move.to.x, move.to.y, move.to.z, ox);
+    setShuffleOriginZ(move.to.x, move.to.y, move.to.z, oz);
+  }
+  return culled;
 }
 
 function step(dt) {
@@ -1466,7 +1579,7 @@ function onWheel(event) {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=27`);
+  const res = await fetch(`/materials.json?v=30`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(await res.json());
@@ -1496,6 +1609,9 @@ function initScene(nextCanvas) {
   posZ = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   emitSizes = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   stackCrushAge = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
+  shuffleCounts = new Uint8Array(GRID_MAX * GRID_MAX * MAX_Y);
+  shuffleOriginX = new Uint16Array(GRID_MAX * GRID_MAX * MAX_Y);
+  shuffleOriginZ = new Uint16Array(GRID_MAX * GRID_MAX * MAX_Y);
   occupied.clear();
   for (const mesh of instances.values()) {
     surface?.remove(mesh);
