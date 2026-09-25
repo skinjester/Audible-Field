@@ -19,7 +19,7 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { audioEngine } from "./audio-engine.js?v=19";
+import { audioEngine } from "./audio-engine.js?v=20";
 import { gamepadInput } from "./gamepad-input.js?v=6";
 import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=4";
 import { openStemDropdown } from "./sample-picker.js?v=15";
@@ -108,6 +108,10 @@ const dpadDirs = new Set(["up", "down", "left", "right"]);
 
 /** @type {"max" | "browser"} */
 let inputMode = "browser";
+/** @type {"diagnostics" | "visualize" | "falling-blocks"} */
+let activeTab = "diagnostics";
+/** True while Falling Blocks has suspended browser playback. */
+let audioOffForFallingBlocks = false;
 let audioStarting = false;
 /** @type {Promise<void> | null} */
 let audioStartPromise = null;
@@ -582,6 +586,9 @@ function applyMaxPad(x, y, source) {
 }
 
 function browserStatusLabel() {
+  if (activeTab === "falling-blocks" || audioOffForFallingBlocks) {
+    return "Falling Blocks — audio off";
+  }
   if (audioStarting) return "Loading beds…";
   if (!audioEngine.running) return "Browser audio — click pad to start";
   if (audioEngine.ctx?.state === "suspended") {
@@ -679,6 +686,7 @@ function syncDualsenseHidUi() {
 
 async function ensureBrowserAudio() {
   if (inputMode !== "browser") return;
+  if (activeTab === "falling-blocks" || audioOffForFallingBlocks) return;
   if (audioEngine.running) {
     await audioEngine.resume();
     await audioEngine.ensurePlaying();
@@ -753,7 +761,7 @@ function tick(now) {
         sourceEl.textContent = state.source;
       }
       syncDualsenseHidUi();
-      if (audioEngine.running) {
+      if (audioEngine.running && activeTab !== "falling-blocks" && !audioOffForFallingBlocks) {
         audioEngine.sync(state, controller);
         syncFxLabelsFromEngine();
         const label = browserStatusLabel();
@@ -775,8 +783,32 @@ function setDpadLabel() {
   if (dpadEl) dpadEl.textContent = controller.dpadDir || "—";
 }
 
+async function setFallingBlocksAudio(disabled) {
+  if (disabled) {
+    if (audioEngine.running) {
+      await audioEngine.suspendPlayback();
+    }
+    audioOffForFallingBlocks = true;
+    setStatus("offline", "Falling Blocks — audio off");
+    return;
+  }
+
+  if (!audioOffForFallingBlocks) return;
+  audioOffForFallingBlocks = false;
+  if (inputMode === "browser" && audioEngine.running) {
+    await audioEngine.ensurePlaying();
+    setStatus("audio", browserStatusLabel());
+  } else if (inputMode === "browser") {
+    setStatus(audioEngine.running ? "audio" : "loading", browserStatusLabel());
+  }
+}
+
 function setActiveTab(tabId) {
+  const prevTab = activeTab;
+  activeTab = tabId;
+
   document.body.classList.toggle("mode-visualize", tabId === "visualize");
+  document.body.classList.toggle("mode-falling-blocks", tabId === "falling-blocks");
 
   for (const button of tabButtons) {
     const active = button.dataset.tab === tabId;
@@ -788,13 +820,19 @@ function setActiveTab(tabId) {
     panel.hidden = !active;
   }
 
-  if (tabId === "visualize") {
-    const panel = [...panels].find((item) => item.dataset.panel === "visualize");
-    void panel?.offsetHeight;
-    if (vizCanvas) showVisualize(vizCanvas);
-  } else {
+  if (tabId === "falling-blocks") {
     hideVisualize();
-    renderDiagnostics();
+    void setFallingBlocksAudio(true);
+  } else {
+    if (prevTab === "falling-blocks") void setFallingBlocksAudio(false);
+    if (tabId === "visualize") {
+      const panel = [...panels].find((item) => item.dataset.panel === "visualize");
+      void panel?.offsetHeight;
+      if (vizCanvas) showVisualize(vizCanvas);
+    } else {
+      hideVisualize();
+      renderDiagnostics();
+    }
   }
 }
 

@@ -287,7 +287,8 @@ h1 {
   grid-area: unset;
 }
 
-[data-panel="visualize"] {
+[data-panel="visualize"],
+[data-panel="falling-blocks"] {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;

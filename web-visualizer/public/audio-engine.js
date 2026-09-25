@@ -316,6 +316,27 @@ export class EchoScapeAudioEngine {
     await this._playAll();
   }
 
+  /** Pause beds and suspend the AudioContext without tearing down the graph. */
+  async suspendPlayback() {
+    if (!this.ctx) return;
+    for (const corner of CORNERS) {
+      const stem = this.stems[corner];
+      if (!stem?.el) continue;
+      try {
+        if (!stem.el.paused) stem.el.pause();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (this.ctx.state === "running") {
+      try {
+        await this.ctx.suspend();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   async _playAll() {
     const plays = CORNERS.map(async (corner) => {
       const stem = this.stems[corner];

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape mixer</title>
-    <link rel="stylesheet" href="/styles.css?v=111" />
+    <link rel="stylesheet" href="/styles.css?v=112" />
     <script type="importmap">
       {
         "imports": {
@@ -41,6 +41,9 @@
         </button>
         <button type="button" data-tab="visualize" aria-selected="false">
           Visualize
+        </button>
+        <button type="button" data-tab="falling-blocks" aria-selected="false">
+          Falling Blocks
         </button>
       </nav>
 
@@ -340,7 +343,16 @@
           </div>
         </section>
       </div>
+
+      <div data-panel="falling-blocks" hidden>
+        <section class="viz-stage">
+          <div class="viz-canvas-wrap">
+            <canvas data-falling-canvas aria-label="Falling Blocks playfield"></canvas>
+            <p class="viz-error" data-falling-error hidden></p>
+          </div>
+        </section>
+      </div>
     </main>
-    <script type="module" src="/app.js?v=128"></script>
+    <script type="module" src="/app.js?v=130"></script>
   </body>
 </html>
