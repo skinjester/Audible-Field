@@ -19,6 +19,7 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
+import { hideFallingBlocks, showFallingBlocks } from "./falling-blocks.js?v=1";
 import { audioEngine } from "./audio-engine.js?v=20";
 import { gamepadInput } from "./gamepad-input.js?v=6";
 import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=4";
@@ -62,6 +63,7 @@ const dsStatusEl = document.querySelector("[data-ds-status]");
 const tabButtons = document.querySelectorAll("[data-tab]");
 const panels = document.querySelectorAll("[data-panel]");
 const vizCanvas = document.querySelector("[data-viz-canvas]");
+const fallingCanvas = document.querySelector("[data-falling-canvas]");
 const modeButtons = document.querySelectorAll("[data-mode]");
 const stemSlots = document.querySelectorAll("[data-stem-slot]");
 const fxPluginBtns = document.querySelectorAll("[data-fx-plugin]");
@@ -823,8 +825,14 @@ function setActiveTab(tabId) {
   if (tabId === "falling-blocks") {
     hideVisualize();
     void setFallingBlocksAudio(true);
+    const panel = [...panels].find((item) => item.dataset.panel === "falling-blocks");
+    void panel?.offsetHeight;
+    if (fallingCanvas) showFallingBlocks(fallingCanvas);
   } else {
-    if (prevTab === "falling-blocks") void setFallingBlocksAudio(false);
+    if (prevTab === "falling-blocks") {
+      hideFallingBlocks();
+      void setFallingBlocksAudio(false);
+    }
     if (tabId === "visualize") {
       const panel = [...panels].find((item) => item.dataset.panel === "visualize");
       void panel?.offsetHeight;
@@ -1146,7 +1154,8 @@ updateCornerLabels();
 renderDiagnostics();
 window.requestAnimationFrame(tick);
 connect();
-setActiveTab(location.hash.replace("#", "") === "visualize" ? "visualize" : "diagnostics");
+const openingTab = location.hash.replace("#", "");
+setActiveTab(openingTab === "visualize" || openingTab === "falling-blocks" ? openingTab : "diagnostics");
 
 if (location.hash.replace("#", "") === "max") {
   void setInputMode("max");

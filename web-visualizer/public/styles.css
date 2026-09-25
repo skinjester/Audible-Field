@@ -1170,6 +1170,11 @@ dd {
   height: 100%;
 }
 
+[data-panel="falling-blocks"] canvas {
+  cursor: crosshair;
+  touch-action: none;
+}
+
 
 @media (max-height: 860px) and (min-width: 1180px) {
   .app {
