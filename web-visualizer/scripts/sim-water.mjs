@@ -2,7 +2,7 @@
  * Headless water parameter sweep against the SandPond-style rule engine.
  * Usage: node scripts/sim-water.mjs
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -119,20 +119,24 @@ function makeWorld(catalog) {
       const z = rest % SIZE;
       const y = (rest / SIZE) | 0;
       if (countSame(x, y, z, water) < minN) {
-        let open = false;
-        for (const [dx, dy, dz] of FACE) {
-          const nx = x + dx;
-          const ny = y + dy;
-          const nz = z + dz;
-          if (!inBounds(nx, ny, nz)) continue;
-          if (get(nx, ny, nz) === 0) {
-            open = true;
-            break;
+        const onOpenFloor = catalog.floor === "liquid" && y === 0;
+        // Match falling-blocks: open floor soaks loners even if they can still move.
+        if (!onOpenFloor) {
+          let open = false;
+          for (const [dx, dy, dz] of FACE) {
+            const nx = x + dx;
+            const ny = y + dy;
+            const nz = z + dz;
+            if (!inBounds(nx, ny, nz)) continue;
+            if (get(nx, ny, nz) === 0) {
+              open = true;
+              break;
+            }
           }
-        }
-        if (open) {
-          sparseAges[i] = 0;
-          continue;
+          if (open) {
+            sparseAges[i] = 0;
+            continue;
+          }
         }
         sparseAges[i] += DT;
         if (sparseAges[i] >= limit) doomed.push(i);
@@ -347,109 +351,152 @@ function score(results) {
 
 const baseMaterials = JSON.parse(readFileSync(materialsPath, "utf8"));
 
-const sweeps = [];
-for (const pathBias of [0.1, 0.2, 0.3, 0.45]) {
-  for (const chance of [0.35, 0.45, 0.55, 0.65]) {
-    for (const sparseAbsorb of [0.6, 0.9, 1.2]) {
-      sweeps.push({ pathBias, chance, sparseAbsorb, minNeighbors: 1 });
+function buildFlatPuddle(world, _sand, water) {
+  // Irregular flat sheet on the liquid floor — the jitter case.
+  const cells = [
+    [8, 0, 8],
+    [9, 0, 8],
+    [10, 0, 8],
+    [11, 0, 8],
+    [8, 0, 9],
+    [9, 0, 9],
+    [10, 0, 9],
+    [12, 0, 9],
+    [9, 0, 10],
+    [10, 0, 10],
+    [11, 0, 10],
+    [10, 0, 11],
+    [11, 0, 11],
+    [7, 0, 10],
+    [13, 0, 8],
+  ];
+  for (const [x, y, z] of cells) world.set(x, y, z, water);
+  return { poured: cells.length };
+}
+
+function buildSnake(world, _sand, water) {
+  // Thin line should contract toward a compact resting clump.
+  let n = 0;
+  for (let x = 6; x <= 17; x += 1) {
+    world.set(x, 0, 12, water);
+    n += 1;
+  }
+  return { poured: n };
+}
+
+function avgNeighbors(world, waterIndex) {
+  let sum = 0;
+  let count = 0;
+  for (const i of world.occupied) {
+    if (world.cells[i] !== waterIndex) continue;
+    const x = i % SIZE;
+    const rest = (i / SIZE) | 0;
+    const z = rest % SIZE;
+    const y = (rest / SIZE) | 0;
+    let n = 0;
+    for (const [dx, dy, dz] of FACE) {
+      if (world.get(x + dx, y + dy, z + dz) === waterIndex) n += 1;
+    }
+    sum += n;
+    count += 1;
+  }
+  return count ? sum / count : 0;
+}
+
+function runSettleTrace(catalog, setup, ticks) {
+  const world = makeWorld(catalog);
+  const water = catalog.indexById.get("water");
+  const sand = catalog.indexById.get("sand");
+  const meta = setup(world, sand, water);
+  const samples = [];
+  let lateMoves = 0;
+  const lateStart = Math.floor(ticks * 0.7);
+
+  for (let t = 0; t < ticks; t += 1) {
+    const { moves } = stepWorld(world.grid, world.collect(), catalog);
+    let lateral = 0;
+    for (const m of moves) {
+      if (m.to.y === m.from.y) lateral += 1;
+    }
+    if (t >= lateStart) lateMoves += lateral;
+    world.absorbSparse();
+    if (t % 10 === 0 || t === ticks - 1) {
+      const s = world.stats(water);
+      samples.push({
+        t,
+        water: s.count,
+        alone: s.alone,
+        spread: s.spread,
+        moves: lateral,
+        avgN: Number(avgNeighbors(world, water).toFixed(2)),
+      });
     }
   }
-}
 
-const ranked = [];
-for (const p of sweeps) {
-  const raw = withWaterParams(baseMaterials, {
-    material: {
-      pathBias: p.pathBias,
-      minNeighbors: p.minNeighbors,
-      sparseAbsorb: p.sparseAbsorb,
-    },
-    flow: { pick: "one", chance: p.chance },
-    slide: { pick: "one" },
-  });
-  const catalog = compileMaterials(raw);
-
-  /** @type {ReturnType<typeof score>[]} */
-  const trials = [];
-  let basinWater = 0;
-  let spillSpread = 0;
-  let aloneLeft = 0;
-  for (let trial = 0; trial < 3; trial += 1) {
-    const basin = runScenario(
-      catalog,
-      (world, sand, water) => {
-        buildBasin(world, sand, water);
-        return { poured: 4 * 4 * 4 };
-      },
-      90,
-    );
-    const spill = runScenario(
-      catalog,
-      (world, sand, water) => {
-        buildOpenSpill(world, sand, water);
-        return {};
-      },
-      80,
-    );
-    const alone = runScenario(
-      catalog,
-      (world, _sand, water) => {
-        const spawned = buildIsolated(world, water);
-        return { spawned };
-      },
-      50,
-    );
-    const results = { basin, spill, alone };
-    trials.push(score(results));
-    basinWater += basin.waterLeft;
-    spillSpread += spill.spread;
-    aloneLeft += alone.waterLeft;
-  }
-
-  const avg = {
-    total: trials.reduce((s, t) => s + t.total, 0) / trials.length,
-    basinRetain: trials.reduce((s, t) => s + t.basinRetain, 0) / trials.length,
-    jitterRate: trials.reduce((s, t) => s + t.jitterRate, 0) / trials.length,
+  return {
+    meta,
+    samples,
+    lateAvg: lateMoves / Math.max(1, ticks - lateStart),
+    end: world.stats(water),
   };
-  ranked.push({
-    ...p,
-    ...avg,
-    basinWater: basinWater / trials.length,
-    spillSpread: spillSpread / trials.length,
-    aloneLeft: aloneLeft / trials.length,
-  });
 }
 
-ranked.sort((a, b) => {
-  // Prefer high basin retain when totals are close.
-  if (Math.abs(b.total - a.total) < 4 && Math.abs(b.basinRetain - a.basinRetain) > 0.05) {
-    return b.basinRetain - a.basinRetain;
+const catalog = compileMaterials(baseMaterials);
+
+console.log("=== Flat puddle (should contract then stop) ===");
+{
+  const r = runSettleTrace(catalog, buildFlatPuddle, 80);
+  for (const s of r.samples) {
+    console.log(
+      `  t=${String(s.t).padStart(2)} water=${s.water} alone=${s.alone} spread=${s.spread} avgN=${s.avgN} moves=${s.moves}`,
+    );
   }
-  return b.total - a.total;
-});
-const top = ranked.slice(0, 8);
-const best = ranked[0];
-
-console.log("Top water tunings (higher score = better):");
-for (const row of top) {
-  console.log(
-    `  bias=${row.pathBias} chance=${row.chance} alone=${row.sparseAbsorb}s  ` +
-      `score=${row.total.toFixed(1)}  basinKeep=${(row.basinRetain * 100).toFixed(0)}%  ` +
-      `jitter=${row.jitterRate.toFixed(2)}/tick  spillSpread=${row.spillSpread}  aloneLeft=${row.aloneLeft}`,
-  );
+  console.log(`  lateAvgMoves=${r.lateAvg.toFixed(2)}/tick\n`);
 }
 
-console.log("\nBest:", best);
+console.log("=== Snake (should contract area) ===");
+{
+  const r = runSettleTrace(catalog, buildSnake, 100);
+  for (const s of r.samples) {
+    console.log(
+      `  t=${String(s.t).padStart(2)} water=${s.water} alone=${s.alone} spread=${s.spread} avgN=${s.avgN} moves=${s.moves}`,
+    );
+  }
+  console.log(`  lateAvgMoves=${r.lateAvg.toFixed(2)}/tick\n`);
+}
 
-// Apply best to materials.json
-const next = withWaterParams(baseMaterials, {
-  material: {
-    pathBias: best.pathBias,
-    minNeighbors: 1,
-    sparseAbsorb: best.sparseAbsorb,
-  },
-  flow: { pick: "one", chance: best.chance },
-  slide: { pick: "one" },
-});
-writeFileSync(materialsPath, `${JSON.stringify(next, null, 2)}\n`);
-console.log(`\nWrote tuned water params to ${materialsPath}`);
+console.log("=== Basin (flatten + settle) ===");
+{
+  const r = runSettleTrace(
+    catalog,
+    (world, sand, water) => {
+      buildBasin(world, sand, water);
+      return { poured: 64 };
+    },
+    100,
+  );
+  for (const s of r.samples) {
+    console.log(
+      `  t=${String(s.t).padStart(2)} water=${s.water} alone=${s.alone} spread=${s.spread} avgN=${s.avgN} moves=${s.moves}`,
+    );
+  }
+  console.log(`  lateAvgMoves=${r.lateAvg.toFixed(2)}/tick\n`);
+}
+
+console.log("=== Isolated scatter (soak) ===");
+{
+  const r = runSettleTrace(
+    catalog,
+    (world, _sand, water) => {
+      const spawned = buildIsolated(world, water);
+      return { spawned };
+    },
+    60,
+  );
+  for (const s of r.samples) {
+    console.log(
+      `  t=${String(s.t).padStart(2)} water=${s.water} alone=${s.alone} spread=${s.spread} moves=${s.moves}`,
+    );
+  }
+  console.log(`  lateAvgMoves=${r.lateAvg.toFixed(2)}/tick  left=${r.end.count}\n`);
+}

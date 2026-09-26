@@ -24,13 +24,15 @@
  *   supportUnderDest    — destination must have support underneath
  *   seekTouch           — destination must already touch other same-material (cohesion)
  *   gainTouch           — only move if same-material contacts after >= before
- *   onlySparse          — only when this grain has fewer than material.minNeighbors contacts
+ *   gainTouchStrict     — only move if same-material contacts after > before (contract)
+ *   onlySparse          — only when contacts < material.restNeighbors (or minNeighbors)
  *   belowBottom: "liquid" — only fire when support under the bottom row is liquid
  *   symbols: { w: "water" } — named material letters in match/result
  *
  * Material fields:
  *   pathBias: 0..1 — how often to prefer last travel dir (0 = random spread, 1 = linear streams)
- *   minNeighbors / sparseAbsorb — soak under-connected grains after N seconds
+ *   floorAbsorb         — seconds unbounded (no solid catchment) before dry-up; merge resets
+ *   restNeighbors — onlySparse stops seeking once contacts reach this (defaults to minNeighbors)
  */
 
 const ROTATIONS_XZ = [
@@ -95,6 +97,7 @@ export function compileMaterials(raw) {
 
   for (const item of list) {
     if (!item || typeof item.id !== "string" || !item.id) continue;
+    if (item.enabled === false) continue;
     const surface = item.surface === "liquid" ? "liquid" : "solid";
     const pushPower = Math.max(0, Math.floor(Number(item.pushPower) || 0));
     const lifetimeRaw = Number(item.lifetime);
@@ -114,6 +117,11 @@ export function compileMaterials(raw) {
       Number.isFinite(minNeighborsRaw) && minNeighborsRaw > 0
         ? Math.floor(minNeighborsRaw)
         : 0;
+    const restNeighborsRaw = Number(item.restNeighbors);
+    const restNeighbors =
+      Number.isFinite(restNeighborsRaw) && restNeighborsRaw > 0
+        ? Math.floor(restNeighborsRaw)
+        : minNeighbors;
     const sparseAbsorbRaw = Number(item.sparseAbsorb);
     const sparseAbsorb =
       Number.isFinite(sparseAbsorbRaw) && sparseAbsorbRaw > 0 ? sparseAbsorbRaw : 0;
@@ -138,6 +146,7 @@ export function compileMaterials(raw) {
       shuffleLimit,
       floorAbsorb,
       minNeighbors,
+      restNeighbors,
       sparseAbsorb,
       pathBias,
       rules: Array.isArray(item.rules) ? item.rules.map(normalizeRule).filter(Boolean) : [],
@@ -215,6 +224,8 @@ function normalizeRule(rule) {
     })(),
     /** Only move when same-material face contacts after >= before (don't fray clumps). */
     gainTouch: rule.gainTouch === true,
+    /** Like gainTouch but require a strict increase (contract until resting). */
+    gainTouchStrict: rule.gainTouchStrict === true,
     /** Only fire while this grain is under material.minNeighbors (seek friends, then stop). */
     onlySparse: rule.onlySparse === true,
     /** Try one random/preferred xz facing ("one") or all until one fits ("all"). */
@@ -584,8 +595,8 @@ function facingIsOpen(grid, x, y, z, rule, dx, dz, matIndex, catalog) {
   if (rule.onlySparse && catalog) {
     const id = catalog.idByIndex[matIndex];
     const def = id ? catalog.byId.get(id) : null;
-    const minN = def?.minNeighbors || 0;
-    if (minN > 0 && countSameTouches(grid, x, y, z, matIndex) >= minN) return false;
+    const restN = def?.restNeighbors || def?.minNeighbors || 0;
+    if (restN > 0 && countSameTouches(grid, x, y, z, matIndex) >= restN) return false;
   }
 
   /** @type {{ x: number, y: number, z: number } | null} */
@@ -603,6 +614,9 @@ function facingIsOpen(grid, x, y, z, rule, dx, dz, matIndex, catalog) {
       return false;
     }
     if (rule.gainTouch && !moveGainsOrKeepsTouch(grid, x, y, z, dest.x, dest.y, dest.z, matIndex)) {
+      return false;
+    }
+    if (rule.gainTouchStrict && !moveGainsTouch(grid, x, y, z, dest.x, dest.y, dest.z, matIndex)) {
       return false;
     }
   }
@@ -692,8 +706,8 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
   if (rule.onlySparse && catalog) {
     const id = catalog.idByIndex[matIndex];
     const def = id ? catalog.byId.get(id) : null;
-    const minN = def?.minNeighbors || 0;
-    if (minN > 0 && countSameTouches(grid, x, y, z, matIndex) >= minN) return null;
+    const restN = def?.restNeighbors || def?.minNeighbors || 0;
+    if (restN > 0 && countSameTouches(grid, x, y, z, matIndex) >= restN) return null;
   }
 
   /** @type {CellPos | null} */
@@ -724,6 +738,15 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
     dest &&
     (dest.x !== x || dest.y !== y || dest.z !== z) &&
     !moveGainsOrKeepsTouch(grid, x, y, z, dest.x, dest.y, dest.z, matIndex)
+  ) {
+    return null;
+  }
+
+  if (
+    rule.gainTouchStrict &&
+    dest &&
+    (dest.x !== x || dest.y !== y || dest.z !== z) &&
+    !moveGainsTouch(grid, x, y, z, dest.x, dest.y, dest.z, matIndex)
   ) {
     return null;
   }
@@ -800,14 +823,16 @@ const TOUCH_DIRS = [
   [0, 0, -1],
 ];
 
-function destinationTouchCount(grid, _ox, _oy, _oz, tx, ty, tz, matIndex) {
-  // Count water already adjacent to dest *before* the move (includes the mover
-  // at origin when adjacent). Gap between two bodies → 2; open perimeter → 1.
+function destinationTouchCount(grid, ox, oy, oz, tx, ty, tz, matIndex) {
+  // Count water already adjacent to dest, excluding the mover. That way
+  // seekTouchMin:2 means a real gap/pocket (2+ others), not a rim slide
+  // where the only second "touch" is the grain about to leave.
   let n = 0;
   for (const [dx, dy, dz] of TOUCH_DIRS) {
     const nx = tx + dx;
     const ny = ty + dy;
     const nz = tz + dz;
+    if (nx === ox && ny === oy && nz === oz) continue;
     if (!grid.inBounds(nx, ny, nz)) continue;
     if (grid.get(nx, ny, nz) === matIndex) n += 1;
   }
@@ -831,6 +856,14 @@ function countSameTouches(grid, x, y, z, matIndex) {
 }
 
 function moveGainsOrKeepsTouch(grid, ox, oy, oz, tx, ty, tz, matIndex) {
+  return touchDelta(grid, ox, oy, oz, tx, ty, tz, matIndex) >= 0;
+}
+
+function moveGainsTouch(grid, ox, oy, oz, tx, ty, tz, matIndex) {
+  return touchDelta(grid, ox, oy, oz, tx, ty, tz, matIndex) > 0;
+}
+
+function touchDelta(grid, ox, oy, oz, tx, ty, tz, matIndex) {
   const before = countSameTouches(grid, ox, oy, oz, matIndex);
   let after = 0;
   for (const [dx, dy, dz] of TOUCH_DIRS) {
@@ -841,7 +874,7 @@ function moveGainsOrKeepsTouch(grid, ox, oy, oz, tx, ty, tz, matIndex) {
     if (!grid.inBounds(nx, ny, nz)) continue;
     if (grid.get(nx, ny, nz) === matIndex) after += 1;
   }
-  return after >= before;
+  return after - before;
 }
 
 function clearCellMeta(grid, x, y, z) {

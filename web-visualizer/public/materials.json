@@ -1,5 +1,5 @@
 {
-  "default": "sand",
+  "default": "block",
   "floor": "liquid",
   "materials": [
     {
@@ -18,6 +18,7 @@
     {
       "id": "sand",
       "label": "Sand",
+      "enabled": false,
       "color": "#e0a84a",
       "surface": "solid",
       "rules": [
@@ -37,6 +38,7 @@
     {
       "id": "erode",
       "label": "Erode",
+      "enabled": false,
       "color": "#7a9e6a",
       "surface": "solid",
       "lifetime": 10,
@@ -58,6 +60,7 @@
     {
       "id": "etch",
       "label": "Etch",
+      "enabled": false,
       "color": "#3d9b8f",
       "surface": "solid",
       "rules": [
@@ -88,12 +91,11 @@
     {
       "id": "water",
       "label": "Water",
-      "color": "#4a8fc7",
-      "opacity": 0.38,
+      "enabled": false,
+      "color": "#add8e6",
+      "opacity": 0.35,
       "surface": "liquid",
-      "pathBias": 0.2,
-      "minNeighbors": 2,
-      "sparseAbsorb": 0.7,
+      "floorAbsorb": 5,
       "rules": [
         {
           "name": "fall",
@@ -104,39 +106,25 @@
           "name": "slide",
           "match": ["@.", "x_"],
           "result": ["_.", "x@"],
-          "rotations": "xz",
-          "pick": "one"
+          "rotations": "xz"
         },
         {
-          "name": "level",
-          "match": ["@_", "w."],
-          "result": ["_@", "w."],
-          "rotations": "xz",
-          "pick": "one",
-          "openAbove": true,
-          "symbols": { "w": "water" }
-        },
-        {
-          "name": "coalesce",
+          "name": "seek",
           "match": ["@_"],
           "result": ["_@"],
           "rotations": "xz",
           "pick": "one",
-          "openAbove": true,
           "supportUnderDest": true,
           "seekTouch": true,
-          "seekTouchMin": 2,
+          "seekTouchMin": 1,
+          "gainTouchStrict": true,
           "belowBottom": "liquid"
         },
         {
           "name": "flow",
           "match": ["@_"],
           "result": ["_@"],
-          "rotations": "xz",
-          "pick": "one",
-          "chance": 0.45,
-          "requireAbove": true,
-          "supportUnderDest": true
+          "rotations": "xz"
         }
       ]
     }

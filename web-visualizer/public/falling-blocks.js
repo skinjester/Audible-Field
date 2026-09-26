@@ -1,13 +1,16 @@
 import * as THREE from "three";
 import { controller } from "./mixer-core.js?v=65";
-import { compileMaterials, stepWorld } from "./rule-engine.js?v=32";
+import { compileMaterials, stepWorld } from "./rule-engine.js?v=34";
 
-const MAX_Y = 12;
 /**
  * Fixed atom pitch. Smaller than the old default so the playfield holds a
  * denser grid (Sand1-style room to paint).
  */
 const ATOM_SIZE = 0.25;
+/** Max emitter height above the ground plane (world units). */
+const EMIT_HEIGHT_MAX_U = 12;
+/** Tall enough for the emitter to sit at EMIT_HEIGHT_MAX_U. */
+const MAX_Y = Math.ceil(EMIT_HEIGHT_MAX_U / ATOM_SIZE - 0.5) + 1;
 /** Fixed ground / aim span (world units). */
 const PLAYFIELD_SPAN = 16;
 const PLAYFIELD_HALF = PLAYFIELD_SPAN / 2;
@@ -38,8 +41,10 @@ const RT_PRESS = 0.08;
 const BRUSH = 5;
 const EMIT_INTERVAL = 1 / 40;
 const EMIT_CHANCE = 0.4;
-/** Fixed spawn row near the top of the sim. */
-const EMIT_Y = MAX_Y - 3;
+/** Lowest spawn height the slider can pick (world units). */
+const EMIT_HEIGHT_MIN_U = 0.5;
+/** Default spawn height (world units). */
+const EMIT_HEIGHT_DEFAULT_U = 5.5;
 /** Continuous fall speed toward contact (world units / second). */
 const GRAVITY = 28;
 /**
@@ -141,6 +146,8 @@ let circleWasDown = false;
 let pointerPouring = false;
 let emitAcc = 0;
 let emitting = false;
+/** Spawn height above ground in world units (slider-controlled). */
+let emitHeightU = EMIT_HEIGHT_DEFAULT_U;
 /** Last cell poured while dragging — used to fill trail between pulses. */
 let lastPourIx = -1;
 let lastPourIz = -1;
@@ -692,10 +699,6 @@ function readRightTrigger(pad) {
   return Math.max(fromCore, fromPad);
 }
 
-function emitWorldY() {
-  return (EMIT_Y + 0.5) * atomSize;
-}
-
 function emitterBoxSize() {
   // Flat brush footprint (Sand1-style array), thin so it reads as a field.
   return {
@@ -861,6 +864,55 @@ function bindClearUi() {
   });
 }
 
+function clampEmitHeightU(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return EMIT_HEIGHT_DEFAULT_U;
+  return Math.min(EMIT_HEIGHT_MAX_U, Math.max(EMIT_HEIGHT_MIN_U, n));
+}
+
+/** Discrete spawn row for the current emit height. */
+function emitY() {
+  const row = Math.round(emitHeightU / atomSize - 0.5);
+  return Math.min(MAX_Y - 1, Math.max(0, row));
+}
+
+function emitWorldY() {
+  return emitHeightU;
+}
+
+function syncEmitHeightUi() {
+  const input = document.querySelector("[data-falling-emit-height]");
+  const label = document.querySelector("[data-falling-emit-height-val]");
+  if (input instanceof HTMLInputElement) {
+    input.min = String(EMIT_HEIGHT_MIN_U);
+    input.max = String(EMIT_HEIGHT_MAX_U);
+    input.step = String(atomSize);
+    input.value = String(emitHeightU);
+  }
+  if (label) label.textContent = `${emitHeightU.toFixed(1)}u`;
+}
+
+function setEmitHeight(value) {
+  emitHeightU = clampEmitHeightU(value);
+  // Snap to the slider step so 12.0 is reachable exactly.
+  const step = atomSize > 1e-9 ? atomSize : 0.25;
+  emitHeightU = Math.round(emitHeightU / step) * step;
+  emitHeightU = clampEmitHeightU(emitHeightU);
+  syncEmitHeightUi();
+  syncEmitter();
+}
+
+function bindEmitHeightUi() {
+  const input = document.querySelector("[data-falling-emit-height]");
+  if (!(input instanceof HTMLInputElement)) return;
+  syncEmitHeightUi();
+  if (input.dataset.bound === "1") return;
+  input.dataset.bound = "1";
+  const onChange = () => setEmitHeight(input.value);
+  input.addEventListener("input", onChange);
+  input.addEventListener("change", onChange);
+}
+
 function applyController(dt) {
   if (!camera || dt <= 0) return;
 
@@ -939,7 +991,7 @@ function pourBrush(ix, iz) {
   if (!matIndex) return;
 
   const half = (BRUSH - 1) >> 1;
-  const y = EMIT_Y;
+  const y = emitY();
   if (y < 0 || y >= MAX_Y) return;
   let placed = 0;
 
@@ -1437,6 +1489,7 @@ function runRules() {
   const occupiedList = collectOccupied();
   const { splashes: splashCells, moves } = stepWorld(gridApi, occupiedList, catalog);
   const culledShuffle = cullShuffling(moves);
+  refreshFloorAgeOnMerge(moves);
 
   consumeOutOfBounds();
   reconcileMeshes();
@@ -1449,6 +1502,35 @@ function runRules() {
     spawnSplash(cell.x, cell.y, cell.z);
   }
   return culledShuffle;
+}
+
+/**
+ * Unbounded water that gains same-material contacts (a merge) gets a fresh
+ * floorAbsorb lifespan.
+ * @param {{ from: { x: number, y: number, z: number }, to: { x: number, y: number, z: number }, mat: number }[]} moves
+ */
+function refreshFloorAgeOnMerge(moves) {
+  if (!catalog || !floorAges || !moves?.length) return;
+  for (const move of moves) {
+    const id = catalog.idByIndex[move.mat];
+    const def = id ? catalog.byId.get(id) : null;
+    if (!def?.floorAbsorb) continue;
+    if (gridApi.get(move.to.x, move.to.y, move.to.z) !== move.mat) continue;
+    // Origin is empty now; counting same-mat around it recovers pre-move contacts.
+    const before = countSameNeighbors(move.from.x, move.from.y, move.from.z, move.mat);
+    const after = countSameNeighbors(move.to.x, move.to.y, move.to.z, move.mat);
+    if (after > before) {
+      setFloorAge(move.to.x, move.to.y, move.to.z, 0);
+      // Refresh the water it just touched too.
+      for (const [dx, dy, dz] of FACE_DIRS) {
+        const nx = move.to.x + dx;
+        const ny = move.to.y + dy;
+        const nz = move.to.z + dz;
+        if (!inBounds(nx, ny, nz)) continue;
+        if (getCell(nx, ny, nz) === move.mat) setFloorAge(nx, ny, nz, 0);
+      }
+    }
+  }
 }
 
 /**
@@ -1529,10 +1611,39 @@ function countSameNeighbors(x, y, z, matIndex) {
   return n;
 }
 
+/** True when resting on a solid or touching a solid wall (a basin / container). */
+function isInBoundedCatchment(x, y, z) {
+  if (!catalog) return false;
+  if (y > 0) {
+    const below = getCell(x, y - 1, z);
+    if (below > 0) {
+      const id = catalog.idByIndex[below];
+      const def = id ? catalog.byId.get(id) : null;
+      if (def?.surface === "solid") return true;
+    }
+  }
+  for (const [dx, , dz] of [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+  ]) {
+    const nx = x + dx;
+    const ny = y;
+    const nz = z + dz;
+    if (!inBounds(nx, ny, nz)) continue;
+    const nmat = getCell(nx, ny, nz);
+    if (nmat <= 0) continue;
+    const id = catalog.idByIndex[nmat];
+    const def = id ? catalog.byId.get(id) : null;
+    if (def?.surface === "solid") return true;
+  }
+  return false;
+}
+
 /**
- * Absorb under-connected grains.
- * On the liquid world floor, strays soak even if they still have empty neighbors
- * (otherwise open-ground water sheets forever). Elsewhere, only soak when boxed in.
+ * Absorb under-connected grains, and dry unbounded floorAbsorb liquids.
+ * Contained water (solid basin / wall contact) is exempt from floorAbsorb.
  * @param {number} dt
  * @returns {boolean}
  */
@@ -1548,28 +1659,42 @@ function absorbSparseAndFloor(dt) {
     const id = catalog.idByIndex[mat];
     const def = id ? catalog.byId.get(id) : null;
     if (!def) continue;
+    const { x, y, z } = decodeCell(i);
+
     const minN = def.minNeighbors || 0;
     const sparseLimit = def.sparseAbsorb || 0;
-    if (minN <= 0 || sparseLimit <= 0) {
+    if (minN > 0 && sparseLimit > 0) {
+      if (countSameNeighbors(x, y, z, mat) < minN) {
+        const onOpenFloor = catalog.floor === "liquid" && y === 0;
+        if (!onOpenFloor && hasEmptyFaceNeighbor(x, y, z)) {
+          sparseAges[i] = 0;
+        } else {
+          sparseAges[i] += dt;
+          if (sparseAges[i] >= sparseLimit) {
+            doomed.push(i);
+            continue;
+          }
+        }
+      } else {
+        sparseAges[i] = 0;
+      }
+    } else if (sparseAges) {
       sparseAges[i] = 0;
-      continue;
     }
 
-    const { x, y, z } = decodeCell(i);
-    if (countSameNeighbors(x, y, z, mat) >= minN) {
-      sparseAges[i] = 0;
+    const floorLimit = def.floorAbsorb || 0;
+    if (!floorAges || floorLimit <= 0) {
+      if (floorAges) floorAges[i] = 0;
       continue;
     }
-
-    const onOpenFloor = catalog.floor === "liquid" && y === 0;
-    // Open floor: soak lonely grains. Elsewhere: only if they can't move.
-    if (!onOpenFloor && hasEmptyFaceNeighbor(x, y, z)) {
-      sparseAges[i] = 0;
+    // Contained in a solid catchment — keep forever.
+    if (isInBoundedCatchment(x, y, z)) {
+      floorAges[i] = 0;
       continue;
     }
-
-    sparseAges[i] += dt;
-    if (sparseAges[i] >= sparseLimit) doomed.push(i);
+    // Unbounded: dry up after floorAbsorb seconds unless a merge resets the age.
+    floorAges[i] += dt;
+    if (floorAges[i] >= floorLimit) doomed.push(i);
   }
   if (!doomed.length) return false;
   for (const i of doomed) {
@@ -1746,13 +1871,13 @@ function onWheel(event) {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=46`);
+  const res = await fetch(`/materials.json?v=50`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(await res.json());
   activeMaterialId = catalog.byId.has(prev)
     ? prev
-    : catalog.defaultId || catalog.list[0]?.id || "sand";
+    : catalog.defaultId || catalog.list[0]?.id || "block";
   buildPalette();
 }
 
@@ -1878,6 +2003,7 @@ export async function showFallingBlocks(nextCanvas) {
       fpsLastAt = 0;
     }
     bindClearUi();
+    bindEmitHeightUi();
     running = true;
     sizeTries = 0;
     startRenderLoop();

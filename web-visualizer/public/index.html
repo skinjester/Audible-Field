@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape mixer</title>
-    <link rel="stylesheet" href="/styles.css?v=121" />
+    <link rel="stylesheet" href="/styles.css?v=122" />
     <script type="importmap">
       {
         "imports": {
@@ -350,6 +350,19 @@
             <canvas data-falling-canvas aria-label="Falling Blocks playfield"></canvas>
             <p class="viz-error" data-falling-error hidden></p>
             <div class="falling-hud">
+              <label class="falling-atom-size">
+                Emit height
+                <input
+                  type="range"
+                  data-falling-emit-height
+                  min="0.5"
+                  max="12"
+                  value="5.5"
+                  step="0.25"
+                  aria-valuetext="Emit height above ground"
+                />
+                <span data-falling-emit-height-val>5.5u</span>
+              </label>
               <div class="falling-palette-row">
                 <div class="falling-palette" data-falling-palette role="group" aria-label="Material"></div>
                 <button type="button" class="falling-clear" data-falling-clear title="Clear board (Circle)">
@@ -365,6 +378,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=178"></script>
+    <script type="module" src="/app.js?v=183"></script>
   </body>
 </html>
