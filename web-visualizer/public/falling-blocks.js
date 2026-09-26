@@ -53,8 +53,9 @@ const EMIT_HEIGHT_DEFAULT_U = 5.5;
 /** Continuous fall speed toward contact (world units / second). */
 const GRAVITY = 28;
 /**
- * When a column has 2+ blocks, the bottom one despawns after the block
- * material's `lifetime` seconds under the stack. Other materials accumulate.
+ * Block `lifetime` drives two cases:
+ * - Lone on the ground → shrink / erode away.
+ * - Bottom of a 2+ stack → despawn after the same duration (top drops).
  */
 
 let canvas = null;
@@ -146,11 +147,18 @@ let aimZ = 0;
 let l1WasDown = false;
 let r1WasDown = false;
 let circleWasDown = false;
+let triangleWasDown = false;
 let pointerPouring = false;
+/** RMB hold: force a 1×1 single-stream pour. */
+let pointerSingleStream = false;
+/** Keyboard X / pad Cross hold: digital emit. */
+let keyEmitDown = false;
 let emitAcc = 0;
 let emitting = false;
 /** Current emit / preview brush edge length (odd, 1…BRUSH_MAX). */
 let brushN = 1;
+/** When true, RT pressure maps large→small (mirrored curve). */
+let brushCurveInvert = false;
 /** Spawn height above ground in world units (slider-controlled). */
 let emitHeightU = EMIT_HEIGHT_DEFAULT_U;
 /** Last cell poured while dragging — used to fill trail between pulses. */
@@ -708,14 +716,25 @@ function readRightTrigger(pad) {
  * Map RT 0…1 → odd brush edge 1…BRUSH_MAX.
  * Below RT_PRESS stays at 1×1; a gamma curve + floor bands keep the
  * single-stream zone wide — max field only near full squeeze.
+ * With brushCurveInvert, the size ladder is mirrored (light → wide).
  */
 function brushSizeFromTrigger(rt) {
   const span = 1 - RT_PRESS;
   const linear = span > 0 ? clamp01((clamp01(rt) - RT_PRESS) / span) : 1;
   const t = Math.pow(linear, BRUSH_RT_GAMMA);
   const steps = ((BRUSH_MAX - 1) >> 1) + 1;
-  const i = Math.min(steps - 1, Math.floor(t * steps));
+  let i = Math.min(steps - 1, Math.floor(t * steps));
+  if (brushCurveInvert) i = steps - 1 - i;
   return 1 + i * 2;
+}
+
+export function toggleBrushCurveInvert() {
+  brushCurveInvert = !brushCurveInvert;
+  return brushCurveInvert;
+}
+
+export function getBrushCurveInvert() {
+  return brushCurveInvert;
 }
 
 function setBrushN(n) {
@@ -876,6 +895,8 @@ export function clearBoard() {
   emitting = false;
   emitAcc = 0;
   pointerPouring = false;
+  pointerSingleStream = false;
+  keyEmitDown = false;
   setAimFromWorld();
   syncEmitter();
   reconcileMeshes();
@@ -960,8 +981,16 @@ function applyController(dt) {
   const pressed = (i) => !!(buttons[i] && (buttons[i].pressed || buttons[i].value > 0.5));
 
   const rt = readRightTrigger(pad);
-  const pouring = rt >= RT_PRESS || pointerPouring;
-  setBrushN(pointerPouring ? BRUSH_MAX : brushSizeFromTrigger(rt));
+  // Standard mapping: 0 = A / Cross (X)
+  const crossEmit = pressed(0) || keyEmitDown;
+  const pouring =
+    rt >= RT_PRESS || pointerPouring || pointerSingleStream || crossEmit;
+  // LMB / Cross = full field; RMB = single stream; RT = pressure curve.
+  let nextBrush;
+  if (pointerSingleStream) nextBrush = 1;
+  else if (pointerPouring || (crossEmit && rt < RT_PRESS)) nextBrush = BRUSH_MAX;
+  else nextBrush = brushSizeFromTrigger(rt);
+  setBrushN(nextBrush);
   updateEmitStream(dt, pouring);
 
   const l1Down = !!(controller.l1 || pressed(4));
@@ -972,10 +1001,14 @@ function applyController(dt) {
   if (r1Down && !r1WasDown) cycleMaterial(1);
   r1WasDown = r1Down;
 
-  // Standard mapping: 1 = B / Circle
+  // Standard mapping: 1 = B / Circle, 3 = Y / Triangle
   const circleDown = pressed(1);
   if (circleDown && !circleWasDown) clearBoard();
   circleWasDown = circleDown;
+
+  const triangleDown = pressed(3);
+  if (triangleDown && !triangleWasDown) toggleBrushCurveInvert();
+  triangleWasDown = triangleDown;
 }
 
 function updateEmitStream(dt, active) {
@@ -1188,8 +1221,7 @@ function infectErodeContacts() {
 
 /**
  * Age materials with a lifetime; shrink visually and despawn when expired.
- * Block uses `lifetime` for stack-crush only (see crushStackBottoms), so it
- * is skipped here — lone blocks do not age out.
+ * Block only ages while alone on the world floor (no stack above).
  * @returns {boolean} true if meshes need a refresh
  */
 function ageAtoms(dt) {
@@ -1200,7 +1232,15 @@ function ageAtoms(dt) {
   for (const i of occupied) {
     const mat = cells[i];
     if (mat <= 0) continue;
-    if (catalog.idByIndex[mat] === "block") continue;
+    if (catalog.idByIndex[mat] === "block") {
+      if (!isLoneGroundBlock(i)) {
+        if (ages[i] !== 0) {
+          ages[i] = 0;
+          dirty = true;
+        }
+        continue;
+      }
+    }
     const life = cellLifetime(i, mat);
     if (life <= 0) continue;
     ages[i] += dt;
@@ -1212,6 +1252,99 @@ function ageAtoms(dt) {
     setCell(x, y, z, 0);
   }
   return dirty || doomed.length > 0;
+}
+
+/** True when an atom's underside is on the world floor (not atop another atom). */
+function isRestingOnGround(cellIndex) {
+  if (!posY || cellIndex < 0) return false;
+  const size = cellAtomSize(cellIndex);
+  // settleGravity pins floor-resting centers at size/2.
+  return (posY[cellIndex] || 0) <= size * 0.5 + 0.05;
+}
+
+/** True when another atom in the same column sits above this one. */
+function hasAtomStackedAbove(cellIndex) {
+  if (!cells || !posY || cellIndex < 0) return false;
+  const x = cellIndex % GRID_MAX;
+  const rest = (cellIndex / GRID_MAX) | 0;
+  const z = rest % GRID_MAX;
+  const myTop = (posY[cellIndex] || 0) + cellAtomSize(cellIndex) * 0.5 - 0.02;
+  for (const i of occupied) {
+    if (i === cellIndex || cells[i] <= 0) continue;
+    const ix = i % GRID_MAX;
+    const irest = (i / GRID_MAX) | 0;
+    const iz = irest % GRID_MAX;
+    if (ix !== x || iz !== z) continue;
+    if ((posY[i] || 0) > myTop) return true;
+  }
+  return false;
+}
+
+/** Ground-erode candidate: on the floor with nothing stacked on top. */
+function isLoneGroundBlock(cellIndex) {
+  return isRestingOnGround(cellIndex) && !hasAtomStackedAbove(cellIndex);
+}
+
+/**
+ * Bottom block of a 2+ stack despawns after the block material's `lifetime`
+ * under the pile so the upper block falls to the ground.
+ * @returns {boolean}
+ */
+function crushStackBottoms(dt) {
+  if (!cells || !stackCrushAge || !catalog || dt <= 0 || occupied.size === 0) {
+    return false;
+  }
+
+  const blockIndex = catalog.indexById.get("block") || 0;
+  if (blockIndex <= 0) return false;
+  const crushTime = materialLifetime(blockIndex);
+  if (crushTime <= 0) return false;
+
+  /** @type {Map<number, number[]>} */
+  const columns = new Map();
+  for (const i of occupied) {
+    if (cells[i] <= 0) continue;
+    const x = i % GRID_MAX;
+    const rest = (i / GRID_MAX) | 0;
+    const z = rest % GRID_MAX;
+    const key = z * GRID_MAX + x;
+    let list = columns.get(key);
+    if (!list) {
+      list = [];
+      columns.set(key, list);
+    }
+    list.push(i);
+  }
+
+  /** @type {number[]} */
+  const doomed = [];
+
+  for (const list of columns.values()) {
+    list.sort((a, b) => {
+      const ay = posY?.[a] || 0;
+      const by = posY?.[b] || 0;
+      if (ay !== by) return ay - by;
+      return a - b;
+    });
+
+    const bottom = list[0];
+    for (const i of list) {
+      if (i !== bottom || list.length < 2 || cells[i] !== blockIndex) {
+        stackCrushAge[i] = 0;
+        continue;
+      }
+      stackCrushAge[i] += dt;
+      if (stackCrushAge[i] >= crushTime) doomed.push(i);
+    }
+  }
+
+  if (!doomed.length) return false;
+  for (const i of doomed) {
+    if (cells[i] <= 0) continue;
+    const { x, y, z } = decodeCell(i);
+    setCell(x, y, z, 0);
+  }
+  return true;
 }
 
 /**
@@ -1279,72 +1412,11 @@ function settleGravity(dt) {
   return moved;
 }
 
-/**
- * Bottom block of a 2+ stack despawns after the block material's `lifetime`
- * under the pile. Sand, water, and other materials accumulate without crushing.
- * @returns {boolean}
- */
-function crushStackBottoms(dt) {
-  if (!cells || !stackCrushAge || !catalog || dt <= 0 || occupied.size === 0) {
-    return false;
-  }
-
-  const blockIndex = catalog.indexById.get("block") || 0;
-  if (blockIndex <= 0) return false;
-  const crushTime = materialLifetime(blockIndex);
-  if (crushTime <= 0) return false;
-
-  /** @type {Map<number, number[]>} */
-  const columns = new Map();
-  for (const i of occupied) {
-    if (cells[i] <= 0) continue;
-    const x = i % GRID_MAX;
-    const rest = (i / GRID_MAX) | 0;
-    const z = rest % GRID_MAX;
-    const key = z * GRID_MAX + x;
-    let list = columns.get(key);
-    if (!list) {
-      list = [];
-      columns.set(key, list);
-    }
-    list.push(i);
-  }
-
-  /** @type {number[]} */
-  const doomed = [];
-
-  for (const list of columns.values()) {
-    list.sort((a, b) => {
-      const ay = posY?.[a] || 0;
-      const by = posY?.[b] || 0;
-      if (ay !== by) return ay - by;
-      return a - b;
-    });
-
-    const bottom = list[0];
-    for (const i of list) {
-      if (i !== bottom || list.length < 2 || cells[i] !== blockIndex) {
-        stackCrushAge[i] = 0;
-        continue;
-      }
-      stackCrushAge[i] += dt;
-      if (stackCrushAge[i] >= crushTime) doomed.push(i);
-    }
-  }
-
-  if (!doomed.length) return false;
-  for (const i of doomed) {
-    if (cells[i] <= 0) continue;
-    const { x, y, z } = decodeCell(i);
-    setCell(x, y, z, 0);
-  }
-  return true;
-}
-
 /** True when a cell is actively shrinking (native lifetime or erode infection). */
 function isShrinking(cellIndex, matIndex) {
-  // Block lifetime drives stack-crush, not visual shrink / lateral freeze.
-  if (catalog?.idByIndex[matIndex] === "block") return false;
+  if (catalog?.idByIndex[matIndex] === "block") {
+    return isLoneGroundBlock(cellIndex) && materialLifetime(matIndex) > 0;
+  }
   return cellLifetime(cellIndex, matIndex) > 0;
 }
 
@@ -1866,12 +1938,21 @@ function onPointerMove(event) {
     rotateSurface(-event.movementX * 0.005);
     return;
   }
-  if (pointerPouring) aimFromEvent(event);
+  if (pointerPouring || pointerSingleStream) aimFromEvent(event);
 }
 
 function onPointerDown(event) {
-  if (event.button === 2) {
+  // Middle button, or Alt+LMB: orbit the playfield (wheel still zooms).
+  if (event.button === 1 || (event.button === 0 && event.altKey)) {
     rotatingSurface = true;
+    canvas.setPointerCapture(event.pointerId);
+    return;
+  }
+  if (event.button === 2) {
+    // RMB: hold for a single-atom stream (triangle still toggles RT curve).
+    press = { x: event.clientX, y: event.clientY, id: event.pointerId };
+    aimFromEvent(event);
+    pointerSingleStream = true;
     canvas.setPointerCapture(event.pointerId);
     return;
   }
@@ -1882,8 +1963,13 @@ function onPointerDown(event) {
 }
 
 function onPointerUp(event) {
-  if (event.button === 2) {
+  if (rotatingSurface) {
     rotatingSurface = false;
+    return;
+  }
+  if (event.button === 2) {
+    pointerSingleStream = false;
+    press = null;
     return;
   }
   if (event.button !== 0) return;
@@ -1895,10 +1981,25 @@ function onPointerCancel() {
   rotatingSurface = false;
   press = null;
   pointerPouring = false;
+  pointerSingleStream = false;
 }
 
 function onContextMenu(event) {
   event.preventDefault();
+}
+
+function onKeyDown(event) {
+  if (event.code !== "KeyX" || event.repeat) return;
+  if (event.target && /^(INPUT|TEXTAREA|SELECT)$/i.test(event.target.tagName)) {
+    return;
+  }
+  keyEmitDown = true;
+  event.preventDefault();
+}
+
+function onKeyUp(event) {
+  if (event.code !== "KeyX") return;
+  keyEmitDown = false;
 }
 
 function onWheel(event) {
@@ -2043,6 +2144,8 @@ export async function showFallingBlocks(nextCanvas) {
     bindEmitHeightUi();
     running = true;
     sizeTries = 0;
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
     startRenderLoop();
   } catch (err) {
     console.error("EchoScape falling blocks init failed:", err);
@@ -2055,9 +2158,13 @@ export function hideFallingBlocks() {
   rotatingSurface = false;
   press = null;
   pointerPouring = false;
+  pointerSingleStream = false;
+  keyEmitDown = false;
   emitting = false;
   emitAcc = 0;
   circleWasDown = false;
+  window.removeEventListener("keydown", onKeyDown);
+  window.removeEventListener("keyup", onKeyUp);
   if (rafId) window.cancelAnimationFrame(rafId);
   rafId = 0;
   fpsFrames = 0;
