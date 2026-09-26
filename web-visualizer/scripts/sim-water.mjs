@@ -11,7 +11,7 @@ const root = join(__dirname, "..");
 const materialsPath = join(root, "public", "materials.json");
 const ruleEngineUrl = pathToFileURL(join(root, "public", "rule-engine.js")).href;
 
-const { compileMaterials, stepWorld } = await import(ruleEngineUrl);
+const { compileMaterials, parseMaterialsJson, stepWorld } = await import(ruleEngineUrl);
 
 const RULE_HZ = 22;
 const DT = 1 / RULE_HZ;
@@ -349,7 +349,7 @@ function score(results) {
   };
 }
 
-const baseMaterials = JSON.parse(readFileSync(materialsPath, "utf8"));
+const baseMaterials = parseMaterialsJson(readFileSync(materialsPath, "utf8"));
 
 function buildFlatPuddle(world, _sand, water) {
   // Irregular flat sheet on the liquid floor — the jitter case.

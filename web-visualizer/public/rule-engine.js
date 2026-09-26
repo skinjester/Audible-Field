@@ -82,6 +82,19 @@ const ROTATIONS_XZ = [
  */
 
 /**
+ * materials.json allows block comments so unused materials can be
+ * commented out in-place. Strip them (and // line comments) before parse.
+ * @param {string} text
+ * @returns {unknown}
+ */
+export function parseMaterialsJson(text) {
+  const stripped = String(text || "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  return JSON.parse(stripped);
+}
+
+/**
  * @param {unknown} raw
  * @returns {MaterialCatalog}
  */
@@ -97,7 +110,6 @@ export function compileMaterials(raw) {
 
   for (const item of list) {
     if (!item || typeof item.id !== "string" || !item.id) continue;
-    if (item.enabled === false) continue;
     const surface = item.surface === "liquid" ? "liquid" : "solid";
     const pushPower = Math.max(0, Math.floor(Number(item.pushPower) || 0));
     const lifetimeRaw = Number(item.lifetime);

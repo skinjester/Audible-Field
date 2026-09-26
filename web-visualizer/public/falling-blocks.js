@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { controller } from "./mixer-core.js?v=65";
-import { compileMaterials, stepWorld } from "./rule-engine.js?v=34";
+import { compileMaterials, parseMaterialsJson, stepWorld } from "./rule-engine.js?v=35";
 
 /**
  * Fixed atom pitch. Smaller than the old default so the playfield holds a
@@ -48,11 +48,9 @@ const EMIT_HEIGHT_DEFAULT_U = 5.5;
 /** Continuous fall speed toward contact (world units / second). */
 const GRAVITY = 28;
 /**
- * When a column has 2+ blocks, the bottom one despawns after this many
- * seconds under the stack; atoms above then settle. Sand and other
- * materials are not crushed and may accumulate.
+ * When a column has 2+ blocks, the bottom one despawns after the block
+ * material's `lifetime` seconds under the stack. Other materials accumulate.
  */
-const STACK_CRUSH_TIME = 3.5;
 
 let canvas = null;
 let wrap = null;
@@ -1157,6 +1155,8 @@ function infectErodeContacts() {
 
 /**
  * Age materials with a lifetime; shrink visually and despawn when expired.
+ * Block uses `lifetime` for stack-crush only (see crushStackBottoms), so it
+ * is skipped here — lone blocks do not age out.
  * @returns {boolean} true if meshes need a refresh
  */
 function ageAtoms(dt) {
@@ -1167,6 +1167,7 @@ function ageAtoms(dt) {
   for (const i of occupied) {
     const mat = cells[i];
     if (mat <= 0) continue;
+    if (catalog.idByIndex[mat] === "block") continue;
     const life = cellLifetime(i, mat);
     if (life <= 0) continue;
     ages[i] += dt;
@@ -1246,9 +1247,8 @@ function settleGravity(dt) {
 }
 
 /**
- * Bottom block of a 2+ stack despawns after STACK_CRUSH_TIME under the pile.
- * Only applies to "block" (which has no lifetime of its own). Sand, water,
- * and other materials accumulate without crushing.
+ * Bottom block of a 2+ stack despawns after the block material's `lifetime`
+ * under the pile. Sand, water, and other materials accumulate without crushing.
  * @returns {boolean}
  */
 function crushStackBottoms(dt) {
@@ -1258,6 +1258,8 @@ function crushStackBottoms(dt) {
 
   const blockIndex = catalog.indexById.get("block") || 0;
   if (blockIndex <= 0) return false;
+  const crushTime = materialLifetime(blockIndex);
+  if (crushTime <= 0) return false;
 
   /** @type {Map<number, number[]>} */
   const columns = new Map();
@@ -1293,7 +1295,7 @@ function crushStackBottoms(dt) {
         continue;
       }
       stackCrushAge[i] += dt;
-      if (stackCrushAge[i] >= STACK_CRUSH_TIME) doomed.push(i);
+      if (stackCrushAge[i] >= crushTime) doomed.push(i);
     }
   }
 
@@ -1308,6 +1310,8 @@ function crushStackBottoms(dt) {
 
 /** True when a cell is actively shrinking (native lifetime or erode infection). */
 function isShrinking(cellIndex, matIndex) {
+  // Block lifetime drives stack-crush, not visual shrink / lateral freeze.
+  if (catalog?.idByIndex[matIndex] === "block") return false;
   return cellLifetime(cellIndex, matIndex) > 0;
 }
 
@@ -1871,10 +1875,10 @@ function onWheel(event) {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=50`);
+  const res = await fetch(`/materials.json?v=52`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
-  catalog = compileMaterials(await res.json());
+  catalog = compileMaterials(parseMaterialsJson(await res.text()));
   activeMaterialId = catalog.byId.has(prev)
     ? prev
     : catalog.defaultId || catalog.list[0]?.id || "block";

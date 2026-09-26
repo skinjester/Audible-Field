@@ -7,6 +7,7 @@
       "label": "Block",
       "color": "#c4624e",
       "surface": "solid",
+      "lifetime": 3.5,
       "rules": [
         {
           "name": "fall",
@@ -14,11 +15,12 @@
           "result": ["_", "@"]
         }
       ]
-    },
+    }
+    /*
+    ,
     {
       "id": "sand",
       "label": "Sand",
-      "enabled": false,
       "color": "#e0a84a",
       "surface": "solid",
       "rules": [
@@ -38,7 +40,6 @@
     {
       "id": "erode",
       "label": "Erode",
-      "enabled": false,
       "color": "#7a9e6a",
       "surface": "solid",
       "lifetime": 10,
@@ -60,7 +61,6 @@
     {
       "id": "etch",
       "label": "Etch",
-      "enabled": false,
       "color": "#3d9b8f",
       "surface": "solid",
       "rules": [
@@ -91,7 +91,6 @@
     {
       "id": "water",
       "label": "Water",
-      "enabled": false,
       "color": "#add8e6",
       "opacity": 0.35,
       "surface": "liquid",
@@ -128,5 +127,6 @@
         }
       ]
     }
+    */
   ]
 }
