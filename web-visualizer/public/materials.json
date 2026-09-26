@@ -91,9 +91,9 @@
       "color": "#4a8fc7",
       "opacity": 0.38,
       "surface": "liquid",
-      "pathBias": 0.1,
-      "minNeighbors": 1,
-      "sparseAbsorb": 0.9,
+      "pathBias": 0.2,
+      "minNeighbors": 2,
+      "sparseAbsorb": 0.7,
       "rules": [
         {
           "name": "fall",
@@ -117,13 +117,26 @@
           "symbols": { "w": "water" }
         },
         {
+          "name": "coalesce",
+          "match": ["@_"],
+          "result": ["_@"],
+          "rotations": "xz",
+          "pick": "one",
+          "openAbove": true,
+          "supportUnderDest": true,
+          "seekTouch": true,
+          "seekTouchMin": 2,
+          "belowBottom": "liquid"
+        },
+        {
           "name": "flow",
           "match": ["@_"],
           "result": ["_@"],
           "rotations": "xz",
           "pick": "one",
-          "chance": 0.55,
-          "requireAbove": true
+          "chance": 0.45,
+          "requireAbove": true,
+          "supportUnderDest": true
         }
       ]
     }

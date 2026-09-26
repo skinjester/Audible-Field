@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { controller } from "./mixer-core.js?v=65";
-import { compileMaterials, stepWorld } from "./rule-engine.js?v=29";
+import { compileMaterials, stepWorld } from "./rule-engine.js?v=32";
 
 const MAX_Y = 12;
 /**
@@ -1530,9 +1530,9 @@ function countSameNeighbors(x, y, z, matIndex) {
 }
 
 /**
- * Absorb grains that stay under minNeighbors for sparseAbsorb seconds
- * (e.g. lone water with nowhere left to flow). Grains that still face an
- * empty cell are treated as spilling/spreading and are not absorbed.
+ * Absorb under-connected grains.
+ * On the liquid world floor, strays soak even if they still have empty neighbors
+ * (otherwise open-ground water sheets forever). Elsewhere, only soak when boxed in.
  * @param {number} dt
  * @returns {boolean}
  */
@@ -1556,17 +1556,20 @@ function absorbSparseAndFloor(dt) {
     }
 
     const { x, y, z } = decodeCell(i);
-    if (countSameNeighbors(x, y, z, mat) < minN) {
-      // Still has room to move — let it spill instead of soaking mid-stream.
-      if (hasEmptyFaceNeighbor(x, y, z)) {
-        sparseAges[i] = 0;
-        continue;
-      }
-      sparseAges[i] += dt;
-      if (sparseAges[i] >= sparseLimit) doomed.push(i);
-    } else {
+    if (countSameNeighbors(x, y, z, mat) >= minN) {
       sparseAges[i] = 0;
+      continue;
     }
+
+    const onOpenFloor = catalog.floor === "liquid" && y === 0;
+    // Open floor: soak lonely grains. Elsewhere: only if they can't move.
+    if (!onOpenFloor && hasEmptyFaceNeighbor(x, y, z)) {
+      sparseAges[i] = 0;
+      continue;
+    }
+
+    sparseAges[i] += dt;
+    if (sparseAges[i] >= sparseLimit) doomed.push(i);
   }
   if (!doomed.length) return false;
   for (const i of doomed) {
@@ -1743,7 +1746,7 @@ function onWheel(event) {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=42`);
+  const res = await fetch(`/materials.json?v=46`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(await res.json());

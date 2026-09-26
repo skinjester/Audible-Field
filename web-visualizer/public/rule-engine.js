@@ -21,11 +21,16 @@
  *   chance: 0..1        — probability this rule is attempted (SpaceTode maybe)
  *   requireAbove        — only when cell above @ is occupied (pressure / stacked)
  *   openAbove           — only when cell above @ is empty (free surface / leveling)
+ *   supportUnderDest    — destination must have support underneath
+ *   seekTouch           — destination must already touch other same-material (cohesion)
+ *   gainTouch           — only move if same-material contacts after >= before
+ *   onlySparse          — only when this grain has fewer than material.minNeighbors contacts
  *   belowBottom: "liquid" — only fire when support under the bottom row is liquid
  *   symbols: { w: "water" } — named material letters in match/result
  *
  * Material fields:
  *   pathBias: 0..1 — how often to prefer last travel dir (0 = random spread, 1 = linear streams)
+ *   minNeighbors / sparseAbsorb — soak under-connected grains after N seconds
  */
 
 const ROTATIONS_XZ = [
@@ -198,6 +203,20 @@ function normalizeRule(rule) {
     openAbove: rule.openAbove === true,
     /** Only fire when the cell above @ is occupied (pressure / stacked). */
     requireAbove: rule.requireAbove === true,
+    /** Destination must have support underneath (occupied cell or world floor). */
+    supportUnderDest: rule.supportUnderDest === true,
+    /** Destination must already face-touch same material other than @ (pull into clumps). */
+    seekTouch: rule.seekTouch === true,
+    /** Require at least this many same-material touches at dest (2 = fill gaps, not expand rim). */
+    seekTouchMin: (() => {
+      const n = Number(rule.seekTouchMin);
+      if (Number.isFinite(n) && n > 0) return Math.floor(n);
+      return rule.seekTouch === true ? 1 : 0;
+    })(),
+    /** Only move when same-material face contacts after >= before (don't fray clumps). */
+    gainTouch: rule.gainTouch === true,
+    /** Only fire while this grain is under material.minNeighbors (seek friends, then stop). */
+    onlySparse: rule.onlySparse === true,
     /** Try one random/preferred xz facing ("one") or all until one fits ("all"). */
     pick: rule.pick === "one" ? "one" : "all",
     /** SpaceTode-style maybe(): probability of attempting this rule (default 1). */
@@ -562,6 +581,31 @@ function facingIsOpen(grid, x, y, z, rule, dx, dz, matIndex, catalog) {
     const ay = y + 1;
     if (grid.inBounds(x, ay, z) && grid.get(x, ay, z) > 0) return false;
   }
+  if (rule.onlySparse && catalog) {
+    const id = catalog.idByIndex[matIndex];
+    const def = id ? catalog.byId.get(id) : null;
+    const minN = def?.minNeighbors || 0;
+    if (minN > 0 && countSameTouches(grid, x, y, z, matIndex) >= minN) return false;
+  }
+
+  /** @type {{ x: number, y: number, z: number } | null} */
+  let dest = null;
+  for (let ly = 0; ly < rule.height; ly += 1) {
+    for (let lx = 0; lx < rule.width; lx += 1) {
+      if (rule.result[ly][lx] !== "@") continue;
+      const off = worldOffset(lx, ly, dx, dz);
+      dest = { x: x + off.x, y: y + off.y, z: z + off.z };
+    }
+  }
+  if (dest && (dest.x !== x || dest.y !== y || dest.z !== z)) {
+    if (rule.supportUnderDest && !hasSupportBelow(grid, dest.x, dest.y, dest.z)) return false;
+    if (rule.seekTouch && !destinationSeeksTouch(grid, x, y, z, dest.x, dest.y, dest.z, matIndex, rule.seekTouchMin || 1)) {
+      return false;
+    }
+    if (rule.gainTouch && !moveGainsOrKeepsTouch(grid, x, y, z, dest.x, dest.y, dest.z, matIndex)) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -645,6 +689,45 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
     if (grid.inBounds(x, ay, z) && grid.get(x, ay, z) > 0) return null;
   }
 
+  if (rule.onlySparse && catalog) {
+    const id = catalog.idByIndex[matIndex];
+    const def = id ? catalog.byId.get(id) : null;
+    const minN = def?.minNeighbors || 0;
+    if (minN > 0 && countSameTouches(grid, x, y, z, matIndex) >= minN) return null;
+  }
+
+  /** @type {CellPos | null} */
+  let dest = null;
+  for (let ly = 0; ly < rule.height; ly += 1) {
+    for (let lx = 0; lx < rule.width; lx += 1) {
+      if (rule.result[ly][lx] !== "@") continue;
+      const off = worldOffset(lx, ly, dx, dz);
+      dest = { x: x + off.x, y: y + off.y, z: z + off.z };
+    }
+  }
+
+  if (rule.supportUnderDest && dest && (dest.x !== x || dest.y !== y || dest.z !== z)) {
+    if (!hasSupportBelow(grid, dest.x, dest.y, dest.z)) return null;
+  }
+
+  if (
+    rule.seekTouch &&
+    dest &&
+    (dest.x !== x || dest.y !== y || dest.z !== z) &&
+    !destinationSeeksTouch(grid, x, y, z, dest.x, dest.y, dest.z, matIndex, rule.seekTouchMin || 1)
+  ) {
+    return null;
+  }
+
+  if (
+    rule.gainTouch &&
+    dest &&
+    (dest.x !== x || dest.y !== y || dest.z !== z) &&
+    !moveGainsOrKeepsTouch(grid, x, y, z, dest.x, dest.y, dest.z, matIndex)
+  ) {
+    return null;
+  }
+
   /** @type {number[]} */
   const before = [];
   for (const site of sites) before.push(grid.get(site.x, site.y, site.z));
@@ -700,6 +783,65 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
   }
   // Applied with no @ in result (e.g. etch consumes self + neighbor).
   return { x, y, z };
+}
+
+function hasSupportBelow(grid, x, y, z) {
+  if (y <= 0) return true;
+  if (!grid.inBounds(x, y - 1, z)) return true;
+  return grid.get(x, y - 1, z) > 0;
+}
+
+const TOUCH_DIRS = [
+  [1, 0, 0],
+  [-1, 0, 0],
+  [0, 1, 0],
+  [0, -1, 0],
+  [0, 0, 1],
+  [0, 0, -1],
+];
+
+function destinationTouchCount(grid, _ox, _oy, _oz, tx, ty, tz, matIndex) {
+  // Count water already adjacent to dest *before* the move (includes the mover
+  // at origin when adjacent). Gap between two bodies → 2; open perimeter → 1.
+  let n = 0;
+  for (const [dx, dy, dz] of TOUCH_DIRS) {
+    const nx = tx + dx;
+    const ny = ty + dy;
+    const nz = tz + dz;
+    if (!grid.inBounds(nx, ny, nz)) continue;
+    if (grid.get(nx, ny, nz) === matIndex) n += 1;
+  }
+  return n;
+}
+
+function destinationSeeksTouch(grid, ox, oy, oz, tx, ty, tz, matIndex, minTouches = 1) {
+  return destinationTouchCount(grid, ox, oy, oz, tx, ty, tz, matIndex) >= minTouches;
+}
+
+function countSameTouches(grid, x, y, z, matIndex) {
+  let n = 0;
+  for (const [dx, dy, dz] of TOUCH_DIRS) {
+    const nx = x + dx;
+    const ny = y + dy;
+    const nz = z + dz;
+    if (!grid.inBounds(nx, ny, nz)) continue;
+    if (grid.get(nx, ny, nz) === matIndex) n += 1;
+  }
+  return n;
+}
+
+function moveGainsOrKeepsTouch(grid, ox, oy, oz, tx, ty, tz, matIndex) {
+  const before = countSameTouches(grid, ox, oy, oz, matIndex);
+  let after = 0;
+  for (const [dx, dy, dz] of TOUCH_DIRS) {
+    const nx = tx + dx;
+    const ny = ty + dy;
+    const nz = tz + dz;
+    if (nx === ox && ny === oy && nz === oz) continue;
+    if (!grid.inBounds(nx, ny, nz)) continue;
+    if (grid.get(nx, ny, nz) === matIndex) after += 1;
+  }
+  return after >= before;
 }
 
 function clearCellMeta(grid, x, y, z) {
