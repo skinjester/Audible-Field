@@ -635,20 +635,24 @@ function syncSceneBackground() {
   renderer?.setClearColor(scratchBg, 1);
 }
 
-/** World XZ → surface-local XZ (inverse of surface yaw). */
+/**
+ * World XZ → surface-local XZ.
+ * Inverse of Three.js Y rotation: local (lx, lz) becomes
+ * world (cos θ · lx + sin θ · lz, −sin θ · lx + cos θ · lz).
+ */
 function worldToSurfaceXZ(wx, wz) {
   const sy = surface ? surface.rotation.y : 0;
-  const c = Math.cos(-sy);
-  const s = Math.sin(-sy);
+  const c = Math.cos(sy);
+  const s = Math.sin(sy);
   return { x: c * wx - s * wz, z: s * wx + c * wz };
 }
 
-/** Surface-local XZ → world XZ. */
+/** Surface-local XZ → world XZ (same Y rotation as the playfield group). */
 function surfaceToWorldXZ(lx, lz) {
   const sy = surface ? surface.rotation.y : 0;
   const c = Math.cos(sy);
   const s = Math.sin(sy);
-  return { x: c * lx - s * lz, z: s * lx + c * lz };
+  return { x: c * lx + s * lz, z: -s * lx + c * lz };
 }
 
 /**
@@ -792,6 +796,8 @@ function rebuildEmitterGeometry() {
 function syncEmitter() {
   if (!emitter) return;
   emitter.position.set(aimWorldX, emitWorldY(), aimWorldZ);
+  // Footprint follows the grid yaw so the box covers the cells pourBrush fills.
+  emitter.rotation.y = surface ? surface.rotation.y : 0;
   const matIndex = catalog?.indexById.get(activeMaterialId) || 0;
   emitter.material.color.set(materialColor(matIndex));
   emitter.material.opacity = emitting ? 0.72 : 0.45;
