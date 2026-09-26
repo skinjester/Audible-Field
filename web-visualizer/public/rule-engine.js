@@ -2,9 +2,10 @@
  * Tiny SandPond / SpaceTode-style rule runner.
  * Materials declare diagram rules; the world only supplies get/set occupancy.
  *
- * Rule diagrams put => on every row. Spaces separate symbols; they are not cells.
- *   diagram: ["@ => _", "_ => @"]
- *   diagram: ["@ . => _ .", "x _ => x @"]
+ * Rule diagrams put => on every row. Each symbol is a quoted token.
+ * Spaces outside quotes only separate tokens.
+ *   diagram: ["@" => "_", "_" => "@"]
+ *   diagram: ["@" "." => "_" ".", "x" "_" => "x" "@"]
  * Symbols (match / result, top → bottom, left → right):
  *   @  this grain
  *   _  empty
@@ -81,6 +82,8 @@ const ROTATIONS_XZ = [
 /**
  * materials.json allows block comments so unused materials can be
  * commented out in-place. Strip them (and // line comments) before parse.
+ * Diagram rows are written as `"@" => "_"`, which is not JSON, so those
+ * rows are wrapped into JSON strings before parse.
  * @param {string} text
  * @returns {unknown}
  */
@@ -88,7 +91,11 @@ export function parseMaterialsJson(text) {
   const stripped = String(text || "")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
-  return JSON.parse(stripped);
+  const json = stripped.replace(
+    /(?:"(?:\\.|[^"\\])*"\s*)+=>\s*(?:"(?:\\.|[^"\\])*"\s*)+/g,
+    (row) => JSON.stringify(row.trim()),
+  );
+  return JSON.parse(json);
 }
 
 /**
@@ -276,9 +283,9 @@ function isXzRotationHint(value) {
 
 /**
  * Parse diagram lines into match/result char grids.
- * Every row has its own `=>`. Spaces separate symbols and are not cells:
- *   ["@ => _", "_ => @"]
- *   ["@ . => _ .", "x _ => x @"]
+ * Every row has its own `=>`. Each symbol is a quoted token:
+ *   ['"@" => "_"', '"_" => "@"']
+ *   ['"@" "." => "_" "."', '"x" "_" => "x" "@"']
  * @param {unknown} diagram
  * @returns {{ match: string[][], result: string[][] } | null}
  */
@@ -305,7 +312,7 @@ function parseDiagram(diagram) {
     if (idx < 0) return null;
     const left = patternCells(line.slice(0, idx));
     const right = patternCells(line.slice(idx + 2));
-    if (!left.length || left.length !== right.length) return null;
+    if (!left || !right || !left.length || left.length !== right.length) return null;
     match.push(left);
     result.push(right);
   }
@@ -315,9 +322,26 @@ function parseDiagram(diagram) {
   return { match, result };
 }
 
-/** Drop whitespace. Each remaining character is one cell. */
+/**
+ * Quoted tokens are cells. Anything outside quotes rejects the side.
+ * @param {string} s
+ * @returns {string[] | null}
+ */
 function patternCells(s) {
-  return [...String(s || "").replace(/\s+/g, "")];
+  /** @type {string[]} */
+  const cells = [];
+  const re = /"((?:\\.|[^"\\])*)"/g;
+  let last = 0;
+  let found;
+  while ((found = re.exec(s))) {
+    if (s.slice(last, found.index).trim() !== "") return null;
+    const symbol = found[1].replace(/\\(.)/g, "$1");
+    if (!symbol) return null;
+    cells.push(symbol);
+    last = found.index + found[0].length;
+  }
+  if (!cells.length || s.slice(last).trim() !== "") return null;
+  return cells;
 }
 
 function parseRows(rows) {
