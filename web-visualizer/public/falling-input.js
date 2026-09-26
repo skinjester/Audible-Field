@@ -2,9 +2,9 @@
  * Falling Blocks — mouse & controller bindings (edit here, not the sim).
  *
  * Mouse (default):
- *   move           → aim emitter
+ *   move           → aim emitter (world / screen space)
  *   LMB hold       → emit
- *   RMB drag       → orbit camera / playfield yaw
+ *   RMB drag       → yaw the playfield surface (grid); emitter stays put
  *   wheel          → zoom
  *
  * Gamepad / keys stay configurable below; the engine only consumes
@@ -26,6 +26,7 @@ export const fallingBindings = {
     /** Pointer move always aims the emitter (unless orbiting). */
     moveAimsEmitter: true,
     wheelZooms: true,
+    /** RMB drag: radians of surface yaw per pixel (grid rotates under emitter). */
     orbitRadiansPerPx: 0.005,
     wheelZoomExp: 0.0012,
     /** Brush when emitting via mouse button. */
@@ -47,7 +48,7 @@ export const fallingBindings = {
     cyclePrevButton: 4, // L1
     cycleNextButton: 5, // R1
     stickDeadzone: 0.12,
-    /** Right-stick X → yaw rate (rad/s at full deflection). */
+    /** Right-stick X → surface yaw rate (rad/s at full deflection). */
     orbitStickRate: 1.15,
     /** Right-stick Y → zoom exp rate. */
     zoomStickRate: 1.15,

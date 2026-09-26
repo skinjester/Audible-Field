@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { controller, mix } from "./mixer-core.js?v=66";
 import { compileMaterials, parseMaterialsJson, stepWorld } from "./rule-engine.js?v=36";
-import { fallingBindings, fallingInput } from "./falling-input.js?v=3";
+import { fallingBindings, fallingInput } from "./falling-input.js?v=4";
 
 /**
  * Fixed atom pitch. Smaller than the old default so the playfield holds a
@@ -148,8 +148,9 @@ const matCache = new Map();
 let splashes = [];
 /** @type {{ ix: number, iz: number } | null} */
 let aim = null;
-let aimX = 0;
-let aimZ = 0;
+/** Emitter aim in world XZ (decoupled from rotating surface / grid). */
+let aimWorldX = 0;
+let aimWorldZ = 0;
 let emitAcc = 0;
 let emitting = false;
 /** Current emit / preview brush edge length (odd, 1…BRUSH_MAX). */
@@ -589,10 +590,13 @@ function zoomCamera(factor) {
   return setCameraDist(cameraDist * factor);
 }
 
-/** Yaw the playfield in place (stays centered). */
+/** Yaw the playfield / grid; emitter stays fixed in world space. */
 function rotateSurface(deltaYaw) {
   if (!surface || !deltaYaw) return;
   surface.rotation.y += deltaYaw;
+  // Grid spun under the fixed world aim — refresh which cell is targeted.
+  setAimFromWorld();
+  syncEmitter();
   syncSceneBackground();
 }
 
@@ -629,21 +633,46 @@ function syncSceneBackground() {
   renderer?.setClearColor(scratchBg, 1);
 }
 
-/** Clamp continuous aim to the fixed playfield; snap to atom-pitch cells. */
+/** World XZ → surface-local XZ (inverse of surface yaw). */
+function worldToSurfaceXZ(wx, wz) {
+  const sy = surface ? surface.rotation.y : 0;
+  const c = Math.cos(-sy);
+  const s = Math.sin(-sy);
+  return { x: c * wx - s * wz, z: s * wx + c * wz };
+}
+
+/** Surface-local XZ → world XZ. */
+function surfaceToWorldXZ(lx, lz) {
+  const sy = surface ? surface.rotation.y : 0;
+  const c = Math.cos(sy);
+  const s = Math.sin(sy);
+  return { x: c * lx - s * lz, z: s * lx + c * lz };
+}
+
+/**
+ * Resolve world aim → playfield cell. Emitter stays in world space; the
+ * rotating surface only affects which grid cell sits under it.
+ */
 function setAimFromWorld() {
   const limit = PLAYFIELD_HALF - 0.001;
-  aimX = Math.min(limit, Math.max(-limit, aimX));
-  aimZ = Math.min(limit, Math.max(-limit, aimZ));
-  // Map playfield XZ onto however many cells fit at the current atom size.
-  let ix = Math.floor((aimX + PLAYFIELD_HALF) / atomSize);
-  let iz = Math.floor((aimZ + PLAYFIELD_HALF) / atomSize);
+  let { x: lx, z: lz } = worldToSurfaceXZ(aimWorldX, aimWorldZ);
+  // Keep the emitter over the square playfield when it would drift off.
+  if (Math.abs(lx) > limit || Math.abs(lz) > limit) {
+    lx = Math.min(limit, Math.max(-limit, lx));
+    lz = Math.min(limit, Math.max(-limit, lz));
+    const world = surfaceToWorldXZ(lx, lz);
+    aimWorldX = world.x;
+    aimWorldZ = world.z;
+  }
+  let ix = Math.floor((lx + PLAYFIELD_HALF) / atomSize);
+  let iz = Math.floor((lz + PLAYFIELD_HALF) / atomSize);
   ix = Math.min(gridXZ - 1, Math.max(0, ix));
   iz = Math.min(gridXZ - 1, Math.max(0, iz));
   aim = { ix, iz };
 }
 
 /**
- * Move the emitter on the playfield (XZ only) in screen-relative directions.
+ * Move the emitter in screen-relative world XZ (not glued to the grid).
  * Stick/D-pad: +lx = right on screen, +ly = up on screen.
  */
 function moveAim(lx, ly, dt) {
@@ -651,15 +680,8 @@ function moveAim(lx, ly, dt) {
   const camSin = Math.sin(CAMERA_YAW);
   const camCos = Math.cos(CAMERA_YAW);
   const step = AIM_SPEED * dt;
-  // Camera-relative ground axes (fixed view looking toward origin).
-  const wx = (camCos * lx - camSin * ly) * step;
-  const wz = (-camSin * lx - camCos * ly) * step;
-  // World → surface-local (inverse of surface yaw).
-  const sy = surface ? surface.rotation.y : 0;
-  const c = Math.cos(sy);
-  const s = Math.sin(sy);
-  aimX += c * wx - s * wz;
-  aimZ += s * wx + c * wz;
+  aimWorldX += (camCos * lx - camSin * ly) * step;
+  aimWorldZ += (-camSin * lx - camCos * ly) * step;
   setAimFromWorld();
   syncEmitter();
 }
@@ -672,10 +694,9 @@ function aimFromClient(clientX, clientY) {
   pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointerNdc, camera);
   if (!raycaster.ray.intersectPlane(groundPlane, hitPoint)) return;
-  surface.updateMatrixWorld(true);
-  surface.worldToLocal(hitPoint);
-  aimX = hitPoint.x;
-  aimZ = hitPoint.z;
+  // Store world hit — do not bake into surface-local (decoupled from grid yaw).
+  aimWorldX = hitPoint.x;
+  aimWorldZ = hitPoint.z;
   setAimFromWorld();
   syncEmitter();
 }
@@ -768,7 +789,7 @@ function rebuildEmitterGeometry() {
 
 function syncEmitter() {
   if (!emitter) return;
-  emitter.position.set(aimX, emitWorldY(), aimZ);
+  emitter.position.set(aimWorldX, emitWorldY(), aimWorldZ);
   const matIndex = catalog?.indexById.get(activeMaterialId) || 0;
   emitter.material.color.set(materialColor(matIndex));
   emitter.material.opacity = emitting ? 0.72 : 0.45;
@@ -891,8 +912,8 @@ export function clearBoard() {
     surface.rotation.set(0, 0, 0);
   }
 
-  aimX = 0;
-  aimZ = 0;
+  aimWorldX = 0;
+  aimWorldZ = 0;
   emitting = false;
   emitAcc = 0;
   setAimFromWorld();
@@ -2004,7 +2025,8 @@ function initScene(nextCanvas) {
     }),
   );
   emitter.renderOrder = 2;
-  surface.add(emitter);
+  // World-space emitter so surface yaw spins the grid underneath it.
+  scene.add(emitter);
 
   setAimFromWorld();
   syncEmitter();
