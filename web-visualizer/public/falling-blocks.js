@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { controller, mix } from "./mixer-core.js?v=66";
-import { compileMaterials, parseMaterialsJson, stepWorld } from "./rule-engine.js?v=37";
+import { compileMaterials, parseMaterialsJson, stepWorld } from "./rule-engine.js?v=38";
 import { fallingBindings, fallingInput } from "./falling-input.js?v=4";
 
 /**
@@ -1885,7 +1885,7 @@ function startRenderLoop() {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=54`);
+  const res = await fetch(`/materials.json?v=55`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(parseMaterialsJson(await res.text()));

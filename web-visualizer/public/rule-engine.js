@@ -2,10 +2,9 @@
  * Tiny SandPond / SpaceTode-style rule runner.
  * Materials declare diagram rules; the world only supplies get/set occupancy.
  *
- * Rule diagrams put => on every row. Each symbol is a quoted token.
- * Spaces outside quotes only separate tokens.
- *   diagram: ["@" => "_", "_" => "@"]
- *   diagram: ["@" "." => "_" ".", "x" "_" => "x" "@"]
+ * Rule diagrams mirror SpaceTode. Spaces only line symbols up with =>.
+ *   diagram: ["@ => _", "_    @"]
+ *   diagram: ["@. => _.", "x_    x@"]
  * Symbols (match / result, top → bottom, left → right):
  *   @  this grain
  *   _  empty
@@ -82,8 +81,6 @@ const ROTATIONS_XZ = [
 /**
  * materials.json allows block comments so unused materials can be
  * commented out in-place. Strip them (and // line comments) before parse.
- * Diagram rows are written as `"@" => "_"`, which is not JSON, so those
- * rows are wrapped into JSON strings before parse.
  * @param {string} text
  * @returns {unknown}
  */
@@ -91,11 +88,7 @@ export function parseMaterialsJson(text) {
   const stripped = String(text || "")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
-  const json = stripped.replace(
-    /(?:"(?:\\.|[^"\\])*"\s*)+=>\s*(?:"(?:\\.|[^"\\])*"\s*)+/g,
-    (row) => JSON.stringify(row.trim()),
-  );
-  return JSON.parse(json);
+  return JSON.parse(stripped);
 }
 
 /**
@@ -282,10 +275,11 @@ function isXzRotationHint(value) {
 }
 
 /**
- * Parse diagram lines into match/result char grids.
- * Every row has its own `=>`. Each symbol is a quoted token:
- *   ['"@" => "_"', '"_" => "@"']
- *   ['"@" "." => "_" "."', '"x" "_" => "x" "@"']
+ * Parse SpaceTode diagram lines into match/result char grids.
+ * The first `=>` sets a vertical cut. Spaces are alignment only.
+ * A symbol that lands in the arrow columns rejects the diagram.
+ *   ["@ => _", "_    @"]
+ *   ["@. => _.", "x_    x@"]
  * @param {unknown} diagram
  * @returns {{ match: string[][], result: string[][] } | null}
  */
@@ -302,6 +296,17 @@ function parseDiagram(diagram) {
   lines = lines.map((l) => l.replace(/\t/g, " ")).filter((l) => l.trim().length > 0);
   if (!lines.length) return null;
 
+  let arrowAt = -1;
+  for (const line of lines) {
+    const idx = line.indexOf("=>");
+    if (idx >= 0) {
+      arrowAt = idx;
+      break;
+    }
+  }
+  if (arrowAt < 0) return null;
+  const rightStart = arrowAt + 2;
+
   /** @type {string[][]} */
   const match = [];
   /** @type {string[][]} */
@@ -309,10 +314,23 @@ function parseDiagram(diagram) {
 
   for (const line of lines) {
     const idx = line.indexOf("=>");
-    if (idx < 0) return null;
-    const left = patternCells(line.slice(0, idx));
-    const right = patternCells(line.slice(idx + 2));
-    if (!left || !right || !left.length || left.length !== right.length) return null;
+    /** @type {string} */
+    let leftSrc;
+    /** @type {string} */
+    let rightSrc;
+    if (idx >= 0) {
+      if (idx !== arrowAt) return null;
+      leftSrc = line.slice(0, idx);
+      rightSrc = line.slice(idx + 2);
+    } else {
+      const gutter = line.slice(arrowAt, Math.min(line.length, rightStart));
+      if (gutter.trim() !== "") return null;
+      leftSrc = line.slice(0, Math.min(line.length, arrowAt));
+      rightSrc = line.length > rightStart ? line.slice(rightStart) : "";
+    }
+    const left = [...leftSrc.replace(/\s+/g, "")];
+    const right = [...rightSrc.replace(/\s+/g, "")];
+    if (!left.length || left.length !== right.length) return null;
     match.push(left);
     result.push(right);
   }
@@ -320,28 +338,6 @@ function parseDiagram(diagram) {
   const width = match[0].length;
   if (match.some((row) => row.length !== width)) return null;
   return { match, result };
-}
-
-/**
- * Quoted tokens are cells. Anything outside quotes rejects the side.
- * @param {string} s
- * @returns {string[] | null}
- */
-function patternCells(s) {
-  /** @type {string[]} */
-  const cells = [];
-  const re = /"((?:\\.|[^"\\])*)"/g;
-  let last = 0;
-  let found;
-  while ((found = re.exec(s))) {
-    if (s.slice(last, found.index).trim() !== "") return null;
-    const symbol = found[1].replace(/\\(.)/g, "$1");
-    if (!symbol) return null;
-    cells.push(symbol);
-    last = found.index + found[0].length;
-  }
-  if (!cells.length || s.slice(last).trim() !== "") return null;
-  return cells;
 }
 
 function parseRows(rows) {
