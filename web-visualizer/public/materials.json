@@ -91,6 +91,9 @@
       "color": "#4a8fc7",
       "opacity": 0.38,
       "surface": "liquid",
+      "pathBias": 0.1,
+      "minNeighbors": 1,
+      "sparseAbsorb": 0.9,
       "rules": [
         {
           "name": "fall",
@@ -105,12 +108,22 @@
           "pick": "one"
         },
         {
+          "name": "level",
+          "match": ["@_", "w."],
+          "result": ["_@", "w."],
+          "rotations": "xz",
+          "pick": "one",
+          "openAbove": true,
+          "symbols": { "w": "water" }
+        },
+        {
           "name": "flow",
           "match": ["@_"],
           "result": ["_@"],
           "rotations": "xz",
           "pick": "one",
-          "chance": 0.35
+          "chance": 0.55,
+          "requireAbove": true
         }
       ]
     }

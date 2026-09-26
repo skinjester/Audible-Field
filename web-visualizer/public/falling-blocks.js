@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { controller } from "./mixer-core.js?v=65";
-import { compileMaterials, stepWorld } from "./rule-engine.js?v=25";
+import { compileMaterials, stepWorld } from "./rule-engine.js?v=29";
 
 const MAX_Y = 12;
 /**
@@ -1529,40 +1529,10 @@ function countSameNeighbors(x, y, z, matIndex) {
   return n;
 }
 
-/** True when resting on a solid grain (basin floor) or touching a solid wall. */
-function isInBoundedCatchment(x, y, z) {
-  if (!catalog) return false;
-  if (y > 0) {
-    const below = getCell(x, y - 1, z);
-    if (below > 0) {
-      const id = catalog.idByIndex[below];
-      const def = id ? catalog.byId.get(id) : null;
-      if (def?.surface === "solid") return true;
-    }
-  }
-  const sides = [
-    [1, 0, 0],
-    [-1, 0, 0],
-    [0, 0, 1],
-    [0, 0, -1],
-  ];
-  for (const [dx, dy, dz] of sides) {
-    const nx = x + dx;
-    const ny = y + dy;
-    const nz = z + dz;
-    if (!inBounds(nx, ny, nz)) continue;
-    const nmat = getCell(nx, ny, nz);
-    if (nmat <= 0) continue;
-    const id = catalog.idByIndex[nmat];
-    const def = id ? catalog.byId.get(id) : null;
-    if (def?.surface === "solid") return true;
-  }
-  return false;
-}
-
 /**
- * Absorb sparse grains only when they have nowhere to collect (open floor,
- * not in a solid basin). Pooling on/against solids is left alone.
+ * Absorb grains that stay under minNeighbors for sparseAbsorb seconds
+ * (e.g. lone water with nowhere left to flow). Grains that still face an
+ * empty cell are treated as spilling/spreading and are not absorbed.
  * @param {number} dt
  * @returns {boolean}
  */
@@ -1586,14 +1556,12 @@ function absorbSparseAndFloor(dt) {
     }
 
     const { x, y, z } = decodeCell(i);
-    // Bounded catchments (solid floor or walls) may pool freely.
-    if (isInBoundedCatchment(x, y, z)) {
-      sparseAges[i] = 0;
-      if (floorAges) floorAges[i] = 0;
-      continue;
-    }
-
     if (countSameNeighbors(x, y, z, mat) < minN) {
+      // Still has room to move — let it spill instead of soaking mid-stream.
+      if (hasEmptyFaceNeighbor(x, y, z)) {
+        sparseAges[i] = 0;
+        continue;
+      }
       sparseAges[i] += dt;
       if (sparseAges[i] >= sparseLimit) doomed.push(i);
     } else {
@@ -1607,6 +1575,17 @@ function absorbSparseAndFloor(dt) {
     setCell(x, y, z, 0);
   }
   return true;
+}
+
+function hasEmptyFaceNeighbor(x, y, z) {
+  for (const [dx, dy, dz] of FACE_DIRS) {
+    const nx = x + dx;
+    const ny = y + dy;
+    const nz = z + dz;
+    if (!inBounds(nx, ny, nz)) continue;
+    if (getCell(nx, ny, nz) === 0) return true;
+  }
+  return false;
 }
 
 function step(dt) {
@@ -1764,7 +1743,7 @@ function onWheel(event) {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=36`);
+  const res = await fetch(`/materials.json?v=42`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(await res.json());

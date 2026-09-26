@@ -19,8 +19,13 @@
  *   rotations: "xz"     — try horizontal facings (SandPond for/any(xz.rotations))
  *   pick: "one"         — try one facing per tick (SandPond any / Water8); default all
  *   chance: 0..1        — probability this rule is attempted (SpaceTode maybe)
+ *   requireAbove        — only when cell above @ is occupied (pressure / stacked)
+ *   openAbove           — only when cell above @ is empty (free surface / leveling)
  *   belowBottom: "liquid" — only fire when support under the bottom row is liquid
  *   symbols: { w: "water" } — named material letters in match/result
+ *
+ * Material fields:
+ *   pathBias: 0..1 — how often to prefer last travel dir (0 = random spread, 1 = linear streams)
  */
 
 const ROTATIONS_XZ = [
@@ -189,6 +194,10 @@ function normalizeRule(rule) {
         ? { ...rule.symbols }
         : null,
     belowBottom: rule.belowBottom === "liquid" ? "liquid" : null,
+    /** Only fire when the cell above @ is empty / out of bounds (free surface). */
+    openAbove: rule.openAbove === true,
+    /** Only fire when the cell above @ is occupied (pressure / stacked). */
+    requireAbove: rule.requireAbove === true,
     /** Try one random/preferred xz facing ("one") or all until one fits ("all"). */
     pick: rule.pick === "one" ? "one" : "all",
     /** SpaceTode-style maybe(): probability of attempting this rule (default 1). */
@@ -296,13 +305,31 @@ export function tryMaterialRules(grid, x, y, z, matIndex, material, catalog = nu
       const prefDx = usePath ? grid.getFlowDx?.(x, y, z) ?? 0 : 0;
       const prefDz = usePath ? grid.getFlowDz?.(x, y, z) ?? 0 : 0;
       const order = preferRotation(prefDx, prefDz);
-      const faces = rule.pick === "one" ? order.slice(0, 1) : order;
-      for (const rot of faces) {
-        const to = applyOrientedRule(grid, x, y, z, matIndex, rule, rot.dx, rot.dz, catalog);
-        if (to) {
-          rememberFlowDir(grid, x, y, z, to.x, to.y, to.z);
-          const splash = shouldSplashMove(grid, from, to, matIndex, catalog);
-          return { moved: true, from, to, splash };
+      if (rule.pick === "one") {
+        // Prefer a facing that can actually move (breach / open side), else one random try.
+        const open = [];
+        for (const rot of order) {
+          if (facingIsOpen(grid, x, y, z, rule, rot.dx, rot.dz, matIndex, catalog)) {
+            open.push(rot);
+          }
+        }
+        const faces = open.length ? open.slice(0, 1) : order.slice(0, 1);
+        for (const rot of faces) {
+          const to = applyOrientedRule(grid, x, y, z, matIndex, rule, rot.dx, rot.dz, catalog);
+          if (to) {
+            rememberFlowDir(grid, x, y, z, to.x, to.y, to.z);
+            const splash = shouldSplashMove(grid, from, to, matIndex, catalog);
+            return { moved: true, from, to, splash };
+          }
+        }
+      } else {
+        for (const rot of order) {
+          const to = applyOrientedRule(grid, x, y, z, matIndex, rule, rot.dx, rot.dz, catalog);
+          if (to) {
+            rememberFlowDir(grid, x, y, z, to.x, to.y, to.z);
+            const splash = shouldSplashMove(grid, from, to, matIndex, catalog);
+            return { moved: true, from, to, splash };
+          }
         }
       }
       continue;
@@ -477,6 +504,67 @@ function rememberFlowDir(grid, fromX, fromY, fromZ, toX, toY, toZ) {
   grid.setFlowDz?.(toX, toY, toZ, sz);
 }
 
+/** True when this oriented diagram would match (no mutation). Used to pick open facings. */
+function facingIsOpen(grid, x, y, z, rule, dx, dz, matIndex, catalog) {
+  let atX = 0;
+  let atY = 0;
+  let atZ = 0;
+  let foundAt = false;
+  /** @type {{ x: number, y: number, z: number, want: string }[]} */
+  const sites = [];
+  for (let ly = 0; ly < rule.height; ly += 1) {
+    for (let lx = 0; lx < rule.width; lx += 1) {
+      const sym = rule.match[ly][lx];
+      const off = worldOffset(lx, ly, dx, dz);
+      const wx = x + off.x;
+      const wy = y + off.y;
+      const wz = z + off.z;
+      if (sym === "@") {
+        if (foundAt) return false;
+        if (off.x !== 0 || off.y !== 0 || off.z !== 0) return false;
+        foundAt = true;
+        atX = wx;
+        atY = wy;
+        atZ = wz;
+      }
+      sites.push({ x: wx, y: wy, z: wz, want: sym });
+    }
+  }
+  if (!foundAt) return false;
+  for (const site of sites) {
+    if (!grid.inBounds(site.x, site.y, site.z)) return false;
+    const value = grid.get(site.x, site.y, site.z);
+    if (
+      !matchSymbol(
+        site.want,
+        value,
+        matIndex,
+        site.x === atX && site.y === atY && site.z === atZ,
+        rule,
+        catalog,
+      )
+    ) {
+      return false;
+    }
+  }
+  if (rule.belowBottom === "liquid") {
+    if (!catalog) return false;
+    for (let lx = 0; lx < rule.width; lx += 1) {
+      const off = worldOffset(lx, rule.height - 1, dx, dz);
+      if (!isLiquidSupport(grid, x + off.x, y + off.y, z + off.z, catalog)) return false;
+    }
+  }
+  if (rule.requireAbove) {
+    const ay = y + 1;
+    if (!grid.inBounds(x, ay, z) || grid.get(x, ay, z) <= 0) return false;
+  }
+  if (rule.openAbove) {
+    const ay = y + 1;
+    if (grid.inBounds(x, ay, z) && grid.get(x, ay, z) > 0) return false;
+  }
+  return true;
+}
+
 /**
  * Map local (lx, ly) with lx along "right" (dx,dz) and ly down in world -Y.
  */
@@ -545,6 +633,16 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
       const bz = z + off.z;
       if (!isLiquidSupport(grid, bx, by, bz, catalog)) return null;
     }
+  }
+
+  if (rule.requireAbove) {
+    const ay = y + 1;
+    if (!grid.inBounds(x, ay, z) || grid.get(x, ay, z) <= 0) return null;
+  }
+
+  if (rule.openAbove) {
+    const ay = y + 1;
+    if (grid.inBounds(x, ay, z) && grid.get(x, ay, z) > 0) return null;
   }
 
   /** @type {number[]} */
