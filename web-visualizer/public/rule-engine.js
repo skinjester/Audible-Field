@@ -1,38 +1,34 @@
 /**
- * Tiny SandPond-style rule runner.
+ * Tiny SandPond / SpaceTode-style rule runner.
  * Materials declare diagram rules; the world only supplies get/set occupancy.
  *
- * Symbols in match / result rows (top → bottom, left → right):
+ * Rule diagrams (preferred) mirror SpaceTode:
+ *   diagram: ["@ => _", "_    @"]
+ * Symbols (match / result, top → bottom, left → right):
  *   @  this grain
  *   _  empty
  *   x  occupied (any material)
  *   .  anything (keep / ignore)
  *
  * A result with no @ clears this grain (consume-in-place), e.g. etch.
+ * Legacy match/result string arrays still compile.
  *
  * Surfaces (material.surface):
  *   solid   — no splash when something rests on it
  *   liquid  — splash when a grain lands or shifts onto it
  * World floor uses catalog.floor ("liquid" | "solid").
  *
- * Optional rule fields:
- *   rotations: "xz"     — try horizontal facings (SandPond for/any(xz.rotations))
- *   pick: "one"         — try one facing per tick (SandPond any / Water8); default all
- *   chance: 0..1        — probability this rule is attempted (SpaceTode maybe)
- *   requireAbove        — only when cell above @ is occupied (pressure / stacked)
- *   openAbove           — only when cell above @ is empty (free surface / leveling)
- *   supportUnderDest    — destination must have support underneath
- *   seekTouch           — destination must already touch other same-material (cohesion)
- *   gainTouch           — only move if same-material contacts after >= before
- *   gainTouchStrict     — only move if same-material contacts after > before (contract)
- *   onlySparse          — only when contacts < material.restNeighbors (or minNeighbors)
- *   belowBottom: "liquid" — only fire when support under the bottom row is liquid
- *   symbols: { w: "water" } — named material letters in match/result
+ * SpaceTode-ish rule fields (aliases accepted):
+ *   for: "xz.rotations" / rotations: "xz" — try all horizontal facings
+ *   any: "xz.rotations"                  — try one facing per tick (pick: "one")
+ *   maybe: 0..1 / chance: 0..1           — probability this rule is attempted
  *
- * Material fields:
- *   pathBias: 0..1 — how often to prefer last travel dir (0 = random spread, 1 = linear streams)
- *   floorAbsorb         — seconds unbounded (no solid catchment) before dry-up; merge resets
- *   restNeighbors — onlySparse stops seeking once contacts reach this (defaults to minNeighbors)
+ * Optional condition fields (extensible — add more without changing diagram syntax):
+ *   requireAbove, openAbove, supportUnderDest, seekTouch, seekTouchMin,
+ *   gainTouch, gainTouchStrict, onlySparse, belowBottom, symbols
+ *
+ * Material fields (siblings of rules — lifetime, erode, etc. live here):
+ *   lifetime, erode, floorAbsorb, pathBias, minNeighbors, restNeighbors, …
  */
 
 const ROTATIONS_XZ = [
@@ -180,6 +176,9 @@ export function compileMaterials(raw) {
 }
 
 function normalizeRule(rule) {
+  if (typeof rule === "string") {
+    return normalizeRule({ diagram: rule });
+  }
   if (!rule || typeof rule !== "object") return null;
 
   if (rule.type === "push") {
@@ -199,13 +198,35 @@ function normalizeRule(rule) {
     };
   }
 
-  const match = parseRows(rule.match);
-  const result = parseRows(rule.result);
+  let match = null;
+  let result = null;
+  if (rule.diagram != null) {
+    const parsed = parseDiagram(rule.diagram);
+    if (!parsed) return null;
+    match = parsed.match;
+    result = parsed.result;
+  } else {
+    match = parseRows(rule.match);
+    result = parseRows(rule.result);
+  }
   if (!match || !result) return null;
   if (match.length !== result.length) return null;
   const width = match[0].length;
   for (const row of match) if (row.length !== width) return null;
   for (const row of result) if (row.length !== width) return null;
+
+  const xzAny = isXzRotationHint(rule.any);
+  const xzFor = isXzRotationHint(rule.for) || rule.rotations === "xz";
+  const rotations = xzAny || xzFor ? "xz" : null;
+  /** Try one random/preferred xz facing ("one") or all until one fits ("all"). */
+  let pick = "all";
+  if (rule.pick === "one" || xzAny) pick = "one";
+  else if (rule.pick === "all" || xzFor) pick = "all";
+
+  const chanceRaw = rule.maybe != null ? Number(rule.maybe) : Number(rule.chance);
+  const chance = Number.isFinite(chanceRaw)
+    ? Math.min(1, Math.max(0, chanceRaw))
+    : 1;
 
   return {
     name: String(rule.name || "rule"),
@@ -214,7 +235,7 @@ function normalizeRule(rule) {
     result,
     height: match.length,
     width,
-    rotations: rule.rotations === "xz" ? "xz" : null,
+    rotations,
     symbols:
       rule.symbols && typeof rule.symbols === "object" && !Array.isArray(rule.symbols)
         ? { ...rule.symbols }
@@ -240,15 +261,93 @@ function normalizeRule(rule) {
     gainTouchStrict: rule.gainTouchStrict === true,
     /** Only fire while this grain is under material.minNeighbors (seek friends, then stop). */
     onlySparse: rule.onlySparse === true,
-    /** Try one random/preferred xz facing ("one") or all until one fits ("all"). */
-    pick: rule.pick === "one" ? "one" : "all",
+    pick,
     /** SpaceTode-style maybe(): probability of attempting this rule (default 1). */
-    chance: (() => {
-      const c = Number(rule.chance);
-      if (!Number.isFinite(c)) return 1;
-      return Math.min(1, Math.max(0, c));
-    })(),
+    chance,
   };
+}
+
+function isXzRotationHint(value) {
+  if (value === true || value === "xz") return true;
+  const s = String(value || "").toLowerCase();
+  return s === "xz.rotations" || s === "xz.directions";
+}
+
+/**
+ * Parse SpaceTode-style diagram lines into match/result char grids.
+ * Accepts a multiline string or an array of rows, e.g.:
+ *   ["@ => _", "_    @"]
+ *   ["@_ => _@", "_ ."]
+ * @param {unknown} diagram
+ * @returns {{ match: string[][], result: string[][] } | null}
+ */
+function parseDiagram(diagram) {
+  /** @type {string[]} */
+  let lines = [];
+  if (typeof diagram === "string") {
+    lines = diagram.split(/\r?\n/);
+  } else if (Array.isArray(diagram)) {
+    lines = diagram.map((row) => String(row ?? ""));
+  } else {
+    return null;
+  }
+  lines = lines.map((l) => l.replace(/\t/g, " ")).filter((l) => l.trim().length > 0);
+  if (!lines.length) return null;
+
+  let arrowAt = -1;
+  for (const line of lines) {
+    const idx = line.indexOf("=>");
+    if (idx >= 0) {
+      arrowAt = idx;
+      break;
+    }
+  }
+  if (arrowAt < 0) return null;
+
+  const rightStart = arrowAt + 2;
+  /** @type {string[]} */
+  const leftRows = [];
+  /** @type {string[]} */
+  const rightRows = [];
+
+  for (const line of lines) {
+    const idx = line.indexOf("=>");
+    let left;
+    let right;
+    if (idx >= 0) {
+      left = line.slice(0, idx);
+      right = line.slice(idx + 2);
+    } else {
+      left = line.length >= arrowAt ? line.slice(0, arrowAt) : line;
+      right = line.length > rightStart ? line.slice(rightStart) : "";
+    }
+    leftRows.push(trimPatternEdge(left));
+    rightRows.push(trimPatternEdge(right));
+  }
+
+  const width = Math.max(
+    0,
+    ...leftRows.map((r) => r.length),
+    ...rightRows.map((r) => r.length),
+  );
+  if (!width) return null;
+
+  const match = leftRows.map((r) => padPattern(r, width));
+  const result = rightRows.map((r) => padPattern(r, width));
+  return { match, result };
+}
+
+/** Strip one padding space often written after `=>`, keep internal cells. */
+function trimPatternEdge(s) {
+  return String(s || "")
+    .replace(/^\s/, "")
+    .replace(/\s+$/g, "");
+}
+
+function padPattern(row, width) {
+  const cells = [...row];
+  while (cells.length < width) cells.push(".");
+  return cells.slice(0, width);
 }
 
 function parseRows(rows) {

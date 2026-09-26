@@ -11,8 +11,10 @@
       "rules": [
         {
           "name": "fall",
-          "match": ["@", "_"],
-          "result": ["_", "@"]
+          "diagram": [
+            "@ => _",
+            "_    @"
+          ]
         }
       ]
     }
@@ -26,14 +28,18 @@
       "rules": [
         {
           "name": "fall",
-          "match": ["@", "_"],
-          "result": ["_", "@"]
+          "diagram": [
+            "@ => _",
+            "_    @"
+          ]
         },
         {
           "name": "slide",
-          "match": ["@.", "x_"],
-          "result": ["_.", "x@"],
-          "rotations": "xz"
+          "any": "xz.rotations",
+          "diagram": [
+            "@. => _.",
+            "x_    x@"
+          ]
         }
       ]
     },
@@ -47,14 +53,18 @@
       "rules": [
         {
           "name": "fall",
-          "match": ["@", "_"],
-          "result": ["_", "@"]
+          "diagram": [
+            "@ => _",
+            "_    @"
+          ]
         },
         {
           "name": "slide",
-          "match": ["@.", "x_"],
-          "result": ["_.", "x@"],
-          "rotations": "xz"
+          "any": "xz.rotations",
+          "diagram": [
+            "@. => _.",
+            "x_    x@"
+          ]
         }
       ]
     },
@@ -66,25 +76,27 @@
       "rules": [
         {
           "name": "etch-down",
-          "match": ["@", "x"],
-          "result": ["_", "_"]
+          "diagram": [
+            "@ => _",
+            "x    _"
+          ]
         },
         {
           "name": "etch-side",
-          "match": ["@x"],
-          "result": ["__"],
-          "rotations": "xz"
+          "for": "xz.rotations",
+          "diagram": ["@x => __"]
         },
         {
           "name": "fall",
-          "match": ["@", "_"],
-          "result": ["_", "@"]
+          "diagram": [
+            "@ => _",
+            "_    @"
+          ]
         },
         {
           "name": "dissolve",
-          "match": ["@"],
-          "result": ["_"],
-          "belowBottom": "liquid"
+          "belowBottom": "liquid",
+          "diagram": ["@ => _"]
         }
       ]
     },
@@ -98,32 +110,33 @@
       "rules": [
         {
           "name": "fall",
-          "match": ["@", "_"],
-          "result": ["_", "@"]
+          "diagram": [
+            "@ => _",
+            "_    @"
+          ]
         },
         {
           "name": "slide",
-          "match": ["@.", "x_"],
-          "result": ["_.", "x@"],
-          "rotations": "xz"
+          "for": "xz.rotations",
+          "diagram": [
+            "@. => _.",
+            "x_    x@"
+          ]
         },
         {
           "name": "seek",
-          "match": ["@_"],
-          "result": ["_@"],
-          "rotations": "xz",
-          "pick": "one",
+          "any": "xz.rotations",
           "supportUnderDest": true,
           "seekTouch": true,
           "seekTouchMin": 1,
           "gainTouchStrict": true,
-          "belowBottom": "liquid"
+          "belowBottom": "liquid",
+          "diagram": ["@_ => _@"]
         },
         {
           "name": "flow",
-          "match": ["@_"],
-          "result": ["_@"],
-          "rotations": "xz"
+          "for": "xz.rotations",
+          "diagram": ["@_ => _@"]
         }
       ]
     }

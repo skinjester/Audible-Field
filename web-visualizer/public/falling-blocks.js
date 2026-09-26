@@ -1,6 +1,7 @@
 import * as THREE from "three";
-import { controller } from "./mixer-core.js?v=65";
-import { compileMaterials, parseMaterialsJson, stepWorld } from "./rule-engine.js?v=35";
+import { controller, mix } from "./mixer-core.js?v=66";
+import { compileMaterials, parseMaterialsJson, stepWorld } from "./rule-engine.js?v=36";
+import { fallingBindings, fallingInput } from "./falling-input.js?v=3";
 
 /**
  * Fixed atom pitch. Smaller than the old default so the playfield holds a
@@ -18,7 +19,19 @@ const GROUND_PLANE_SIZE = PLAYFIELD_SPAN + 2;
 /** Cells across the playfield at the fixed atom pitch. */
 const GRID_XZ = Math.max(1, Math.floor(PLAYFIELD_SPAN / ATOM_SIZE + 1e-9));
 const GRID_MAX = GRID_XZ;
-const SCENE_BG = 0x000000;
+/**
+ * Falling-blocks sky / clear color by yaw quadrant.
+ * Muted primaries (not the Max pad greys) so blends read while orbiting.
+ *   tl red · tr yellow · bl blue · br green
+ */
+const QUAD_COLORS = {
+  tl: new THREE.Color(0x8f4a4a),
+  tr: new THREE.Color(0x8f7e3d),
+  bl: new THREE.Color(0x3d5f8f),
+  br: new THREE.Color(0x3d7a55),
+};
+const SCENE_BG = QUAD_COLORS.tl.getHex();
+const scratchBg = new THREE.Color();
 const SPLASH_LIFE = 0.42;
 const CLICK_SLOP = 6;
 const RULE_HZ = 22;
@@ -29,11 +42,7 @@ const CAMERA_YAW = Math.PI / 4;
 const CAMERA_DIST_DEFAULT = 30;
 const CAMERA_DIST_MIN = 10;
 const CAMERA_DIST_MAX = 60;
-const CAMERA_ZOOM_RATE = 1.15;
-const STICK_DEADZONE = 0.12;
 const AIM_SPEED = 9;
-const SURFACE_YAW_RATE = 1.15;
-const RT_PRESS = 0.08;
 /**
  * Max Sand1-style brush edge (odd). RT pressure maps 1×1 → this N×N field;
  * each cell rolls a chance so atoms cascade instead of dropping as a slab.
@@ -82,7 +91,6 @@ let running = false;
 let rafId = 0;
 let sizeTries = 0;
 let lastNow = 0;
-let rotatingSurface = false;
 let ruleAcc = 0;
 let cameraDist = CAMERA_DIST_DEFAULT;
 
@@ -140,19 +148,8 @@ const matCache = new Map();
 let splashes = [];
 /** @type {{ ix: number, iz: number } | null} */
 let aim = null;
-/** @type {{ x: number, y: number, id: number } | null} */
-let press = null;
 let aimX = 0;
 let aimZ = 0;
-let l1WasDown = false;
-let r1WasDown = false;
-let circleWasDown = false;
-let triangleWasDown = false;
-let pointerPouring = false;
-/** RMB hold: force a 1×1 single-stream pour. */
-let pointerSingleStream = false;
-/** Keyboard X / pad Cross hold: digital emit. */
-let keyEmitDown = false;
 let emitAcc = 0;
 let emitting = false;
 /** Current emit / preview brush edge length (odd, 1…BRUSH_MAX). */
@@ -596,6 +593,40 @@ function zoomCamera(factor) {
 function rotateSurface(deltaYaw) {
   if (!surface || !deltaYaw) return;
   surface.rotation.y += deltaYaw;
+  syncSceneBackground();
+}
+
+/**
+ * Map surface yaw → pad x/y so cardinals land on quadrant corners
+ * (same bilinear blend as the Max / visualize mixer).
+ */
+function padFromYaw(yaw) {
+  // Amplitude √2/2 puts the four π/4 offsets on the square corners.
+  const x = clamp01(0.5 + Math.sin(yaw) * Math.SQRT1_2);
+  const y = clamp01(0.5 - Math.cos(yaw) * Math.SQRT1_2);
+  return { x, y };
+}
+
+function blendQuadColor(weights, target) {
+  target.setRGB(0, 0, 0);
+  for (const key of Object.keys(QUAD_COLORS)) {
+    const w = weights[key] || 0;
+    if (w <= 0) continue;
+    const part = QUAD_COLORS[key];
+    target.r += part.r * w;
+    target.g += part.g * w;
+    target.b += part.b * w;
+  }
+  return target;
+}
+
+function syncSceneBackground() {
+  if (!scene) return;
+  const yaw = surface ? surface.rotation.y : 0;
+  const { x, y } = padFromYaw(yaw);
+  blendQuadColor(mix(x, y), scratchBg);
+  scene.background.copy(scratchBg);
+  renderer?.setClearColor(scratchBg, 1);
 }
 
 /** Clamp continuous aim to the fixed playfield; snap to atom-pitch cells. */
@@ -633,28 +664,12 @@ function moveAim(lx, ly, dt) {
   syncEmitter();
 }
 
-/** Digital aim from D-pad (−1 / 0 / +1), diagonals normalized. */
-function dpadAimAxes() {
-  const dpad = controller.dpad;
-  let lx = 0;
-  let ly = 0;
-  if (dpad.left) lx -= 1;
-  if (dpad.right) lx += 1;
-  if (dpad.up) ly += 1;
-  if (dpad.down) ly -= 1;
-  if (lx && ly) {
-    lx *= Math.SQRT1_2;
-    ly *= Math.SQRT1_2;
-  }
-  return { lx, ly };
-}
-
-function aimFromEvent(event) {
+function aimFromClient(clientX, clientY) {
   if (!canvas || !camera || !surface) return;
   const rect = canvas.getBoundingClientRect();
   if (rect.width < 1 || rect.height < 1) return;
-  pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-  pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointerNdc, camera);
   if (!raycaster.ray.intersectPlane(groundPlane, hitPoint)) return;
   surface.updateMatrixWorld(true);
@@ -689,43 +704,29 @@ function resizeCanvas() {
   return true;
 }
 
-function stickAxis(value) {
-  const n = Number(value) || 0;
-  return Math.abs(n) < STICK_DEADZONE ? 0 : n;
-}
-
 function clamp01(n) {
   if (!Number.isFinite(n)) return 0;
   return Math.min(1, Math.max(0, n));
 }
 
-function readRightTrigger(pad) {
-  const fromCore = clamp01(Number(controller.rt) || 0);
-  const btn = pad?.buttons?.[7];
-  const fromPad = btn
-    ? Number.isFinite(btn.value)
-      ? clamp01(btn.value)
-      : btn.pressed
-        ? 1
-        : 0
-    : 0;
-  return Math.max(fromCore, fromPad);
-}
-
 /**
- * Map RT 0…1 → odd brush edge 1…BRUSH_MAX.
- * Below RT_PRESS stays at 1×1; a gamma curve + floor bands keep the
- * single-stream zone wide — max field only near full squeeze.
- * With brushCurveInvert, the size ladder is mirrored (light → wide).
+ * Map analog 0…1 → odd brush edge 1…BRUSH_MAX (pressure curve).
  */
 function brushSizeFromTrigger(rt) {
-  const span = 1 - RT_PRESS;
-  const linear = span > 0 ? clamp01((clamp01(rt) - RT_PRESS) / span) : 1;
+  const threshold = fallingBindings.gamepad.emitAnalogThreshold ?? 0.08;
+  const span = 1 - threshold;
+  const linear = span > 0 ? clamp01((clamp01(rt) - threshold) / span) : 1;
   const t = Math.pow(linear, BRUSH_RT_GAMMA);
   const steps = ((BRUSH_MAX - 1) >> 1) + 1;
   let i = Math.min(steps - 1, Math.floor(t * steps));
   if (brushCurveInvert) i = steps - 1 - i;
   return 1 + i * 2;
+}
+
+function brushSizeFromMode(mode, analog) {
+  if (mode === "single") return 1;
+  if (mode === "max") return BRUSH_MAX;
+  return brushSizeFromTrigger(analog);
 }
 
 export function toggleBrushCurveInvert() {
@@ -894,11 +895,9 @@ export function clearBoard() {
   aimZ = 0;
   emitting = false;
   emitAcc = 0;
-  pointerPouring = false;
-  pointerSingleStream = false;
-  keyEmitDown = false;
   setAimFromWorld();
   syncEmitter();
+  syncSceneBackground();
   reconcileMeshes();
 }
 
@@ -961,54 +960,25 @@ function bindEmitHeightUi() {
   input.addEventListener("change", onChange);
 }
 
-function applyController(dt) {
+function applyInput(dt) {
   if (!camera || dt <= 0) return;
 
-  const stickX = stickAxis(controller.rawX);
-  const stickY = stickAxis(controller.rawY);
-  const dpad = dpadAimAxes();
-  const lx = Math.max(-1, Math.min(1, stickX + dpad.lx));
-  const ly = Math.max(-1, Math.min(1, stickY + dpad.ly));
-  const rx = stickAxis(controller.rightX);
-  const ry = stickAxis(controller.rightY);
+  const frame = fallingInput.sample(dt, controller, connectedPad());
 
-  if (rx) rotateSurface(-rx * SURFACE_YAW_RATE * dt);
-  if (lx || ly) moveAim(lx, ly, dt);
-  if (ry) zoomCamera(Math.exp(-ry * CAMERA_ZOOM_RATE * dt));
+  // Mouse / pad / keys are additive — none blocks the others.
+  if (frame.pointer) aimFromClient(frame.pointer.x, frame.pointer.y);
+  if (frame.aimStickX || frame.aimStickY) {
+    moveAim(frame.aimStickX, frame.aimStickY, dt);
+  }
+  if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
+  if (frame.zoomFactor !== 1) zoomCamera(frame.zoomFactor);
 
-  const pad = connectedPad();
-  const buttons = pad?.buttons || [];
-  const pressed = (i) => !!(buttons[i] && (buttons[i].pressed || buttons[i].value > 0.5));
+  setBrushN(brushSizeFromMode(frame.brushMode, frame.analog));
+  updateEmitStream(dt, frame.emit);
 
-  const rt = readRightTrigger(pad);
-  // Standard mapping: 0 = A / Cross (X)
-  const crossEmit = pressed(0) || keyEmitDown;
-  const pouring =
-    rt >= RT_PRESS || pointerPouring || pointerSingleStream || crossEmit;
-  // LMB / Cross = full field; RMB = single stream; RT = pressure curve.
-  let nextBrush;
-  if (pointerSingleStream) nextBrush = 1;
-  else if (pointerPouring || (crossEmit && rt < RT_PRESS)) nextBrush = BRUSH_MAX;
-  else nextBrush = brushSizeFromTrigger(rt);
-  setBrushN(nextBrush);
-  updateEmitStream(dt, pouring);
-
-  const l1Down = !!(controller.l1 || pressed(4));
-  if (l1Down && !l1WasDown) cycleMaterial(-1);
-  l1WasDown = l1Down;
-
-  const r1Down = !!(controller.r1 || pressed(5));
-  if (r1Down && !r1WasDown) cycleMaterial(1);
-  r1WasDown = r1Down;
-
-  // Standard mapping: 1 = B / Circle, 3 = Y / Triangle
-  const circleDown = pressed(1);
-  if (circleDown && !circleWasDown) clearBoard();
-  circleWasDown = circleDown;
-
-  const triangleDown = pressed(3);
-  if (triangleDown && !triangleWasDown) toggleBrushCurveInvert();
-  triangleWasDown = triangleDown;
+  if (frame.cycleDelta) cycleMaterial(frame.cycleDelta);
+  if (frame.clearEdge) clearBoard();
+  if (frame.invertEdge) toggleBrushCurveInvert();
 }
 
 function updateEmitStream(dt, active) {
@@ -1826,7 +1796,7 @@ function hasEmptyFaceNeighbor(x, y, z) {
 }
 
 function step(dt) {
-  applyController(dt);
+  applyInput(dt);
 
   // Infect solids before rules; liquids are not tagged (they spill into gaps).
   let infected = infectErodeContacts();
@@ -1933,83 +1903,8 @@ function startRenderLoop() {
   renderFrame(performance.now());
 }
 
-function onPointerMove(event) {
-  if (rotatingSurface) {
-    rotateSurface(-event.movementX * 0.005);
-    return;
-  }
-  if (pointerPouring || pointerSingleStream) aimFromEvent(event);
-}
-
-function onPointerDown(event) {
-  // Middle button, or Alt+LMB: orbit the playfield (wheel still zooms).
-  if (event.button === 1 || (event.button === 0 && event.altKey)) {
-    rotatingSurface = true;
-    canvas.setPointerCapture(event.pointerId);
-    return;
-  }
-  if (event.button === 2) {
-    // RMB: hold for a single-atom stream (triangle still toggles RT curve).
-    press = { x: event.clientX, y: event.clientY, id: event.pointerId };
-    aimFromEvent(event);
-    pointerSingleStream = true;
-    canvas.setPointerCapture(event.pointerId);
-    return;
-  }
-  if (event.button !== 0) return;
-  press = { x: event.clientX, y: event.clientY, id: event.pointerId };
-  aimFromEvent(event);
-  pointerPouring = true;
-}
-
-function onPointerUp(event) {
-  if (rotatingSurface) {
-    rotatingSurface = false;
-    return;
-  }
-  if (event.button === 2) {
-    pointerSingleStream = false;
-    press = null;
-    return;
-  }
-  if (event.button !== 0) return;
-  press = null;
-  pointerPouring = false;
-}
-
-function onPointerCancel() {
-  rotatingSurface = false;
-  press = null;
-  pointerPouring = false;
-  pointerSingleStream = false;
-}
-
-function onContextMenu(event) {
-  event.preventDefault();
-}
-
-function onKeyDown(event) {
-  if (event.code !== "KeyX" || event.repeat) return;
-  if (event.target && /^(INPUT|TEXTAREA|SELECT)$/i.test(event.target.tagName)) {
-    return;
-  }
-  keyEmitDown = true;
-  event.preventDefault();
-}
-
-function onKeyUp(event) {
-  if (event.code !== "KeyX") return;
-  keyEmitDown = false;
-}
-
-function onWheel(event) {
-  event.preventDefault();
-  // Scroll up → zoom in (closer), scroll down → zoom out.
-  zoomCamera(Math.exp(event.deltaY * 0.0012));
-}
-
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=52`);
+  const res = await fetch(`/materials.json?v=53`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(parseMaterialsJson(await res.text()));
@@ -2071,6 +1966,7 @@ function initScene(nextCanvas) {
   });
   renderer.setClearColor(SCENE_BG, 1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  syncSceneBackground();
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.38));
   scene.add(new THREE.HemisphereLight(0xc5d0d8, 0x3a2e28, 0.42));
@@ -2113,13 +2009,6 @@ function initScene(nextCanvas) {
   setAimFromWorld();
   syncEmitter();
 
-  canvas.addEventListener("pointermove", onPointerMove);
-  canvas.addEventListener("pointerdown", onPointerDown);
-  canvas.addEventListener("pointerup", onPointerUp);
-  canvas.addEventListener("pointercancel", onPointerCancel);
-  canvas.addEventListener("wheel", onWheel, { passive: false });
-  canvas.addEventListener("contextmenu", onContextMenu);
-
   resizeObserver = new ResizeObserver(() => {
     resizeCanvas();
   });
@@ -2133,6 +2022,8 @@ export async function showFallingBlocks(nextCanvas) {
     await loadCatalog();
     if (!scene) initScene(nextCanvas);
     else {
+      canvas = nextCanvas;
+      wrap = canvas.parentElement;
       buildPalette();
       fpsEl = document.querySelector("[data-falling-fps]");
       atomsEl = document.querySelector("[data-falling-atoms]");
@@ -2142,10 +2033,9 @@ export async function showFallingBlocks(nextCanvas) {
     }
     bindClearUi();
     bindEmitHeightUi();
+    fallingInput.attach(canvas);
     running = true;
     sizeTries = 0;
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
     startRenderLoop();
   } catch (err) {
     console.error("EchoScape falling blocks init failed:", err);
@@ -2155,16 +2045,9 @@ export async function showFallingBlocks(nextCanvas) {
 
 export function hideFallingBlocks() {
   running = false;
-  rotatingSurface = false;
-  press = null;
-  pointerPouring = false;
-  pointerSingleStream = false;
-  keyEmitDown = false;
+  fallingInput.detach();
   emitting = false;
   emitAcc = 0;
-  circleWasDown = false;
-  window.removeEventListener("keydown", onKeyDown);
-  window.removeEventListener("keyup", onKeyUp);
   if (rafId) window.cancelAnimationFrame(rafId);
   rafId = 0;
   fpsFrames = 0;
