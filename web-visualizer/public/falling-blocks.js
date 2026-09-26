@@ -62,9 +62,10 @@ const EMIT_HEIGHT_DEFAULT_U = 5.5;
 /** Continuous fall speed toward contact (world units / second). */
 const GRAVITY = 28;
 /**
- * Block `lifetime` drives two cases:
- * - Lone on the ground → shrink / erode away.
- * - Bottom of a 2+ stack → despawn after the same duration (top drops).
+ * Block `lifetime` is an erosion clock for a resting block with no other
+ * block above it. The clock stays at zero while a block is stacked on top
+ * and starts the moment that cover is gone, so the block shrinks over
+ * `lifetime` instead of vanishing as soon as it is uncovered.
  */
 
 let canvas = null;
@@ -115,9 +116,12 @@ let posZ = null;
 /** Edge length baked at emit time (existing atoms keep their size). */
 /** @type {Float32Array | null} */
 let emitSizes = null;
-/** Seconds the cell has been the bottom of a 2+ stack (crush timer). */
-/** @type {Float32Array | null} */
-let stackCrushAge = null;
+/**
+ * 1 when a resting block has no other block above it.
+ * Rebuilt each step; the erosion clock runs only while this is set.
+ */
+/** @type {Uint8Array | null} */
+let exposedBlocks = null;
 /** Consecutive same-height hops (shuffle detection). */
 /** @type {Uint8Array | null} */
 let shuffleCounts = null;
@@ -289,7 +293,6 @@ function setCell(x, y, z, value) {
     if (posX) posX[i] = 0;
     if (posZ) posZ[i] = 0;
     if (emitSizes) emitSizes[i] = 0;
-    if (stackCrushAge) stackCrushAge[i] = 0;
     if (shuffleCounts) shuffleCounts[i] = 0;
     if (shuffleOriginX) shuffleOriginX[i] = 0;
     if (shuffleOriginZ) shuffleOriginZ[i] = 0;
@@ -303,7 +306,6 @@ function setCell(x, y, z, value) {
     if (ages) ages[i] = 0;
     if (erodeLives) erodeLives[i] = 0;
     if (emitSizes) emitSizes[i] = atomSize;
-    if (stackCrushAge) stackCrushAge[i] = 0;
     if (shuffleCounts) shuffleCounts[i] = 0;
     if (shuffleOriginX) shuffleOriginX[i] = 0;
     if (shuffleOriginZ) shuffleOriginZ[i] = 0;
@@ -886,7 +888,7 @@ export function clearBoard() {
   if (posX) posX.fill(0);
   if (posZ) posZ.fill(0);
   if (emitSizes) emitSizes.fill(0);
-  if (stackCrushAge) stackCrushAge.fill(0);
+  if (exposedBlocks) exposedBlocks.fill(0);
   if (shuffleCounts) shuffleCounts.fill(0);
   if (shuffleOriginX) shuffleOriginX.fill(0);
   if (shuffleOriginZ) shuffleOriginZ.fill(0);
@@ -1211,85 +1213,15 @@ function infectErodeContacts() {
 }
 
 /**
- * Age materials with a lifetime; shrink visually and despawn when expired.
- * Block only ages while alone on the world floor (no stack above).
- * @returns {boolean} true if meshes need a refresh
+ * Mark resting blocks that have no other block above them.
+ * Buried blocks stay unmarked so their erosion clock does not run.
  */
-function ageAtoms(dt) {
-  if (!cells || !ages || !catalog || dt <= 0 || occupied.size === 0) return false;
-  let dirty = false;
-
-  const doomed = [];
-  for (const i of occupied) {
-    const mat = cells[i];
-    if (mat <= 0) continue;
-    if (catalog.idByIndex[mat] === "block") {
-      if (!isLoneGroundBlock(i)) {
-        if (ages[i] !== 0) {
-          ages[i] = 0;
-          dirty = true;
-        }
-        continue;
-      }
-    }
-    const life = cellLifetime(i, mat);
-    if (life <= 0) continue;
-    ages[i] += dt;
-    dirty = true;
-    if (ages[i] >= life) doomed.push(i);
-  }
-  for (const i of doomed) {
-    const { x, y, z } = decodeCell(i);
-    setCell(x, y, z, 0);
-  }
-  return dirty || doomed.length > 0;
-}
-
-/** True when an atom's underside is on the world floor (not atop another atom). */
-function isRestingOnGround(cellIndex) {
-  if (!posY || cellIndex < 0) return false;
-  const size = cellAtomSize(cellIndex);
-  // settleGravity pins floor-resting centers at size/2.
-  return (posY[cellIndex] || 0) <= size * 0.5 + 0.05;
-}
-
-/** True when another atom in the same column sits above this one. */
-function hasAtomStackedAbove(cellIndex) {
-  if (!cells || !posY || cellIndex < 0) return false;
-  const x = cellIndex % GRID_MAX;
-  const rest = (cellIndex / GRID_MAX) | 0;
-  const z = rest % GRID_MAX;
-  const myTop = (posY[cellIndex] || 0) + cellAtomSize(cellIndex) * 0.5 - 0.02;
-  for (const i of occupied) {
-    if (i === cellIndex || cells[i] <= 0) continue;
-    const ix = i % GRID_MAX;
-    const irest = (i / GRID_MAX) | 0;
-    const iz = irest % GRID_MAX;
-    if (ix !== x || iz !== z) continue;
-    if ((posY[i] || 0) > myTop) return true;
-  }
-  return false;
-}
-
-/** Ground-erode candidate: on the floor with nothing stacked on top. */
-function isLoneGroundBlock(cellIndex) {
-  return isRestingOnGround(cellIndex) && !hasAtomStackedAbove(cellIndex);
-}
-
-/**
- * Bottom block of a 2+ stack despawns after the block material's `lifetime`
- * under the pile so the upper block falls to the ground.
- * @returns {boolean}
- */
-function crushStackBottoms(dt) {
-  if (!cells || !stackCrushAge || !catalog || dt <= 0 || occupied.size === 0) {
-    return false;
-  }
-
+function refreshExposedBlocks() {
+  if (!exposedBlocks) return;
+  exposedBlocks.fill(0);
+  if (!cells || !posY || !catalog || occupied.size === 0) return;
   const blockIndex = catalog.indexById.get("block") || 0;
-  if (blockIndex <= 0) return false;
-  const crushTime = materialLifetime(blockIndex);
-  if (crushTime <= 0) return false;
+  if (blockIndex <= 0 || materialLifetime(blockIndex) <= 0) return;
 
   /** @type {Map<number, number[]>} */
   const columns = new Map();
@@ -1307,35 +1239,63 @@ function crushStackBottoms(dt) {
     list.push(i);
   }
 
-  /** @type {number[]} */
-  const doomed = [];
-
   for (const list of columns.values()) {
-    list.sort((a, b) => {
-      const ay = posY?.[a] || 0;
-      const by = posY?.[b] || 0;
-      if (ay !== by) return ay - by;
-      return a - b;
-    });
-
-    const bottom = list[0];
-    for (const i of list) {
-      if (i !== bottom || list.length < 2 || cells[i] !== blockIndex) {
-        stackCrushAge[i] = 0;
-        continue;
+    list.sort((a, b) => (posY[a] || 0) - (posY[b] || 0) || a - b);
+    let floorTop = 0;
+    for (let n = 0; n < list.length; n += 1) {
+      const i = list[n];
+      const { x, y, z } = decodeCell(i);
+      const mat = cells[i];
+      const size = atomExtent(x, y, z, mat);
+      const restCenter = floorTop + size * 0.5;
+      const yCenter = posY[i] > 0 ? posY[i] : restCenter;
+      const resting = yCenter <= restCenter + 0.05;
+      let blockAbove = false;
+      for (let k = n + 1; k < list.length; k += 1) {
+        if (cells[list[k]] === blockIndex) {
+          blockAbove = true;
+          break;
+        }
       }
-      stackCrushAge[i] += dt;
-      if (stackCrushAge[i] >= crushTime) doomed.push(i);
+      if (mat === blockIndex && resting && !blockAbove) exposedBlocks[i] = 1;
+      const placed = yCenter > restCenter + 1e-4 ? yCenter : restCenter;
+      floorTop = placed + size * 0.5;
     }
   }
+}
 
-  if (!doomed.length) return false;
+/**
+ * Age materials with a lifetime; shrink visually and despawn when expired.
+ * A block's clock stays at zero until it is resting with no block above it,
+ * then starts from that moment.
+ * @returns {boolean} true if meshes need a refresh
+ */
+function ageAtoms(dt) {
+  if (!cells || !ages || !catalog || dt <= 0 || occupied.size === 0) return false;
+  let dirty = false;
+
+  const doomed = [];
+  for (const i of occupied) {
+    const mat = cells[i];
+    if (mat <= 0) continue;
+    if (catalog.idByIndex[mat] === "block" && !exposedBlocks?.[i]) {
+      if (ages[i] !== 0) {
+        ages[i] = 0;
+        dirty = true;
+      }
+      continue;
+    }
+    const life = cellLifetime(i, mat);
+    if (life <= 0) continue;
+    ages[i] += dt;
+    dirty = true;
+    if (ages[i] >= life) doomed.push(i);
+  }
   for (const i of doomed) {
-    if (cells[i] <= 0) continue;
     const { x, y, z } = decodeCell(i);
     setCell(x, y, z, 0);
   }
-  return true;
+  return dirty || doomed.length > 0;
 }
 
 /**
@@ -1406,7 +1366,7 @@ function settleGravity(dt) {
 /** True when a cell is actively shrinking (native lifetime or erode infection). */
 function isShrinking(cellIndex, matIndex) {
   if (catalog?.idByIndex[matIndex] === "block") {
-    return isLoneGroundBlock(cellIndex) && materialLifetime(matIndex) > 0;
+    return exposedBlocks?.[cellIndex] === 1;
   }
   return cellLifetime(cellIndex, matIndex) > 0;
 }
@@ -1832,14 +1792,14 @@ function step(dt) {
   // Catch solids/liquids that fell or slid into contact during the rule pass.
   infected = infectErodeContacts() || infected;
 
+  refreshExposedBlocks();
   const aged = ageAtoms(dt);
   const absorbed = absorbSparseAndFloor(dt);
-  const crushed = crushStackBottoms(dt);
   const settled = settleGravity(dt);
   const lateral = settleLateral(dt);
   const packed = packStickTogether();
   const culled = consumeOutOfBounds();
-  if (infected || aged || absorbed || crushed || settled || lateral || packed || culled) {
+  if (infected || aged || absorbed || settled || lateral || packed || culled) {
     reconcileMeshes();
   }
 
@@ -1954,7 +1914,7 @@ function initScene(nextCanvas) {
   posX = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   posZ = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   emitSizes = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
-  stackCrushAge = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
+  exposedBlocks = new Uint8Array(GRID_MAX * GRID_MAX * MAX_Y);
   shuffleCounts = new Uint8Array(GRID_MAX * GRID_MAX * MAX_Y);
   shuffleOriginX = new Uint16Array(GRID_MAX * GRID_MAX * MAX_Y);
   shuffleOriginZ = new Uint16Array(GRID_MAX * GRID_MAX * MAX_Y);

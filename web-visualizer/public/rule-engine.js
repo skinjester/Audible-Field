@@ -2,8 +2,9 @@
  * Tiny SandPond / SpaceTode-style rule runner.
  * Materials declare diagram rules; the world only supplies get/set occupancy.
  *
- * Rule diagrams (preferred) mirror SpaceTode:
- *   diagram: ["@ => _", "_    @"]
+ * Rule diagrams put => on every row. Spaces separate symbols; they are not cells.
+ *   diagram: ["@ => _", "_ => @"]
+ *   diagram: ["@ . => _ .", "x _ => x @"]
  * Symbols (match / result, top → bottom, left → right):
  *   @  this grain
  *   _  empty
@@ -274,10 +275,10 @@ function isXzRotationHint(value) {
 }
 
 /**
- * Parse SpaceTode-style diagram lines into match/result char grids.
- * Accepts a multiline string or an array of rows, e.g.:
- *   ["@ => _", "_    @"]
- *   ["@_ => _@", "_ ."]
+ * Parse diagram lines into match/result char grids.
+ * Every row has its own `=>`. Spaces separate symbols and are not cells:
+ *   ["@ => _", "_ => @"]
+ *   ["@ . => _ .", "x _ => x @"]
  * @param {unknown} diagram
  * @returns {{ match: string[][], result: string[][] } | null}
  */
@@ -294,60 +295,29 @@ function parseDiagram(diagram) {
   lines = lines.map((l) => l.replace(/\t/g, " ")).filter((l) => l.trim().length > 0);
   if (!lines.length) return null;
 
-  let arrowAt = -1;
-  for (const line of lines) {
-    const idx = line.indexOf("=>");
-    if (idx >= 0) {
-      arrowAt = idx;
-      break;
-    }
-  }
-  if (arrowAt < 0) return null;
-
-  const rightStart = arrowAt + 2;
-  /** @type {string[]} */
-  const leftRows = [];
-  /** @type {string[]} */
-  const rightRows = [];
+  /** @type {string[][]} */
+  const match = [];
+  /** @type {string[][]} */
+  const result = [];
 
   for (const line of lines) {
     const idx = line.indexOf("=>");
-    let left;
-    let right;
-    if (idx >= 0) {
-      left = line.slice(0, idx);
-      right = line.slice(idx + 2);
-    } else {
-      left = line.length >= arrowAt ? line.slice(0, arrowAt) : line;
-      right = line.length > rightStart ? line.slice(rightStart) : "";
-    }
-    leftRows.push(trimPatternEdge(left));
-    rightRows.push(trimPatternEdge(right));
+    if (idx < 0) return null;
+    const left = patternCells(line.slice(0, idx));
+    const right = patternCells(line.slice(idx + 2));
+    if (!left.length || left.length !== right.length) return null;
+    match.push(left);
+    result.push(right);
   }
 
-  const width = Math.max(
-    0,
-    ...leftRows.map((r) => r.length),
-    ...rightRows.map((r) => r.length),
-  );
-  if (!width) return null;
-
-  const match = leftRows.map((r) => padPattern(r, width));
-  const result = rightRows.map((r) => padPattern(r, width));
+  const width = match[0].length;
+  if (match.some((row) => row.length !== width)) return null;
   return { match, result };
 }
 
-/** Strip one padding space often written after `=>`, keep internal cells. */
-function trimPatternEdge(s) {
-  return String(s || "")
-    .replace(/^\s/, "")
-    .replace(/\s+$/g, "");
-}
-
-function padPattern(row, width) {
-  const cells = [...row];
-  while (cells.length < width) cells.push(".");
-  return cells.slice(0, width);
+/** Drop whitespace. Each remaining character is one cell. */
+function patternCells(s) {
+  return [...String(s || "").replace(/\s+/g, "")];
 }
 
 function parseRows(rows) {
