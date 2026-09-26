@@ -35,10 +35,15 @@ const AIM_SPEED = 9;
 const SURFACE_YAW_RATE = 1.15;
 const RT_PRESS = 0.08;
 /**
- * Sand1-style brush: emit a flat N×N field, each cell rolling a chance so
- * atoms cascade at staggered times instead of dropping as a solid slab.
+ * Max Sand1-style brush edge (odd). RT pressure maps 1×1 → this N×N field;
+ * each cell rolls a chance so atoms cascade instead of dropping as a slab.
  */
-const BRUSH = 5;
+const BRUSH_MAX = 11;
+/**
+ * RT→brush ease: >1 keeps light squeezes on a thin stream longer;
+ * only deep pressure opens the wide field.
+ */
+const BRUSH_RT_GAMMA = 2.6;
 const EMIT_INTERVAL = 1 / 40;
 const EMIT_CHANCE = 0.4;
 /** Lowest spawn height the slider can pick (world units). */
@@ -144,6 +149,8 @@ let circleWasDown = false;
 let pointerPouring = false;
 let emitAcc = 0;
 let emitting = false;
+/** Current emit / preview brush edge length (odd, 1…BRUSH_MAX). */
+let brushN = 1;
 /** Spawn height above ground in world units (slider-controlled). */
 let emitHeightU = EMIT_HEIGHT_DEFAULT_U;
 /** Last cell poured while dragging — used to fill trail between pulses. */
@@ -697,12 +704,34 @@ function readRightTrigger(pad) {
   return Math.max(fromCore, fromPad);
 }
 
+/**
+ * Map RT 0…1 → odd brush edge 1…BRUSH_MAX.
+ * Below RT_PRESS stays at 1×1; a gamma curve + floor bands keep the
+ * single-stream zone wide — max field only near full squeeze.
+ */
+function brushSizeFromTrigger(rt) {
+  const span = 1 - RT_PRESS;
+  const linear = span > 0 ? clamp01((clamp01(rt) - RT_PRESS) / span) : 1;
+  const t = Math.pow(linear, BRUSH_RT_GAMMA);
+  const steps = ((BRUSH_MAX - 1) >> 1) + 1;
+  const i = Math.min(steps - 1, Math.floor(t * steps));
+  return 1 + i * 2;
+}
+
+function setBrushN(n) {
+  const odd = Math.max(1, Math.min(BRUSH_MAX, n | 0));
+  const next = odd % 2 === 0 ? odd - 1 : odd;
+  if (next === brushN) return;
+  brushN = next;
+  rebuildEmitterGeometry();
+}
+
 function emitterBoxSize() {
   // Flat brush footprint (Sand1-style array), thin so it reads as a field.
   return {
-    x: BRUSH * atomSize,
+    x: brushN * atomSize,
     y: atomSize * 0.35,
-    z: BRUSH * atomSize,
+    z: brushN * atomSize,
   };
 }
 
@@ -931,7 +960,9 @@ function applyController(dt) {
   const pressed = (i) => !!(buttons[i] && (buttons[i].pressed || buttons[i].value > 0.5));
 
   const rt = readRightTrigger(pad);
-  updateEmitStream(dt, rt >= RT_PRESS || pointerPouring);
+  const pouring = rt >= RT_PRESS || pointerPouring;
+  setBrushN(pointerPouring ? BRUSH_MAX : brushSizeFromTrigger(rt));
+  updateEmitStream(dt, pouring);
 
   const l1Down = !!(controller.l1 || pressed(4));
   if (l1Down && !l1WasDown) cycleMaterial(-1);
@@ -982,20 +1013,22 @@ function updateEmitStream(dt, active) {
 /**
  * Sand1-style brush: scatter atoms across a flat N×N field centered on aim.
  * Each cell rolls EMIT_CHANCE so the column cascades instead of falling as one slab.
+ * Brush edge comes from RT pressure (or BRUSH_MAX for pointer pour).
  */
 function pourBrush(ix, iz) {
   if (!cells || !catalog) return;
   const matIndex = catalog.indexById.get(activeMaterialId);
   if (!matIndex) return;
 
-  const half = (BRUSH - 1) >> 1;
+  const half = (brushN - 1) >> 1;
   const y = emitY();
   if (y < 0 || y >= MAX_Y) return;
   let placed = 0;
 
   for (let dz = -half; dz <= half; dz += 1) {
     for (let dx = -half; dx <= half; dx += 1) {
-      if (Math.random() > EMIT_CHANCE) continue;
+      // Single-cell pour always places; larger fields keep staggered chance.
+      if (brushN > 1 && Math.random() > EMIT_CHANCE) continue;
       const x = ix + dx;
       const z = iz + dz;
       if (!inEmitXZ(x, z) || !inBounds(x, y, z)) continue;
