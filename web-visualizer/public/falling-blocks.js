@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { controller, mix } from "./mixer-core.js?v=66";
-import { compileMaterials, parseMaterialsJson, stepWorld } from "./rule-engine.js?v=38";
+import { applyInfect, applyPostMoves, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=40";
 import { fallingBindings, fallingInput } from "./falling-input.js?v=4";
 
 /**
@@ -15,7 +15,8 @@ const MAX_Y = Math.ceil(EMIT_HEIGHT_MAX_U / ATOM_SIZE - 0.5) + 1;
 /** Fixed ground / aim span (world units). */
 const PLAYFIELD_SPAN = 16;
 const PLAYFIELD_HALF = PLAYFIELD_SPAN / 2;
-const GROUND_PLANE_SIZE = PLAYFIELD_SPAN + 2;
+/** Same span as the playfield, so the drawn edge is the last placeable cell. */
+const GROUND_PLANE_SIZE = PLAYFIELD_SPAN;
 /** Cells across the playfield at the fixed atom pitch. */
 const GRID_XZ = Math.max(1, Math.floor(PLAYFIELD_SPAN / ATOM_SIZE + 1e-9));
 const GRID_MAX = GRID_XZ;
@@ -61,13 +62,7 @@ const EMIT_HEIGHT_MIN_U = 0.5;
 const EMIT_HEIGHT_DEFAULT_U = 5.5;
 /** Continuous fall speed toward contact (world units / second). */
 const GRAVITY = 28;
-/**
- * Block `lifetime` drives two cases:
- * - Lone on the ground → shrink / erode away.
- * - Bottom of a 2+ stack, touching the ground → despawn after the same
- *   duration so the blocks above fall into the gap.
- * Blocks stacked above another block do not erode.
- */
+/** Lone ground blocks shrink; stacked supports clear. Both are material effects. */
 
 let canvas = null;
 let wrap = null;
@@ -100,12 +95,30 @@ let cameraDist = CAMERA_DIST_DEFAULT;
 let cells = null;
 /** @type {Uint8Array | null} */
 let budgets = null;
-/** Per-cell age in seconds (for materials with lifetime). */
+/** Per compiled effect clock (age, absorb, dry). */
+/** @type {Float32Array[]} */
+let effectClocks = [];
+/** Infection duration written onto neighbors (0 = none). */
 /** @type {Float32Array | null} */
-let ages = null;
-/** Forced lifetime from contact with an eroding material (0 = none). */
+let infection = null;
+/** Age while a cell shrinks from infection with no matching age effect. */
 /** @type {Float32Array | null} */
-let erodeLives = null;
+let infectionAge = null;
+/** 1 while an effect is shrinking this cell. */
+/** @type {Uint8Array | null} */
+let shrinkFlags = null;
+/** Shrink progress 0..1 for the mesh scale. */
+/** @type {Float32Array | null} */
+let shrinkT = null;
+/** Column snapshot: resting on the atom or floor below. */
+/** @type {Uint8Array | null} */
+let restingFlags = null;
+/** Column snapshot: support surface is the world floor. */
+/** @type {Uint8Array | null} */
+let onFloorFlags = null;
+/** Column snapshot: same material exists above in this column. */
+/** @type {Uint8Array | null} */
+let sameAboveFlags = null;
 /** Continuous world-space Y of each atom center (gravity / contact). */
 /** @type {Float32Array | null} */
 let posY = null;
@@ -117,15 +130,6 @@ let posZ = null;
 /** Edge length baked at emit time (existing atoms keep their size). */
 /** @type {Float32Array | null} */
 let emitSizes = null;
-/**
- * 1 when a block is resting on the ground plane with no other block above it.
- * Rebuilt each step; the shrink clock runs only while this is set.
- */
-/** @type {Uint8Array | null} */
-let exposedBlocks = null;
-/** Seconds the cell has been the ground-touching bottom of a 2+ stack. */
-/** @type {Float32Array | null} */
-let stackCrushAge = null;
 /** Consecutive same-height hops (shuffle detection). */
 /** @type {Uint8Array | null} */
 let shuffleCounts = null;
@@ -135,12 +139,6 @@ let shuffleOriginX = null;
 /** Cell Z where the current shuffle streak began. */
 /** @type {Uint16Array | null} */
 let shuffleOriginZ = null;
-/** Seconds spent below minNeighbors (sparse absorb). */
-/** @type {Float32Array | null} */
-let sparseAges = null;
-/** Seconds spent resting on the liquid world floor. */
-/** @type {Float32Array | null} */
-let floorAges = null;
 /** Last horizontal flow facing (path follow). */
 /** @type {Int8Array | null} */
 let flowDx = null;
@@ -389,32 +387,23 @@ function setCell(x, y, z, value) {
   cells[i] = value;
   if (!value) {
     if (budgets) budgets[i] = 0;
-    if (ages) ages[i] = 0;
-    if (erodeLives) erodeLives[i] = 0;
+    clearEffectCell(i);
     if (posY) posY[i] = 0;
     if (posX) posX[i] = 0;
     if (posZ) posZ[i] = 0;
     if (emitSizes) emitSizes[i] = 0;
-    if (stackCrushAge) stackCrushAge[i] = 0;
     if (shuffleCounts) shuffleCounts[i] = 0;
     if (shuffleOriginX) shuffleOriginX[i] = 0;
     if (shuffleOriginZ) shuffleOriginZ[i] = 0;
-    if (sparseAges) sparseAges[i] = 0;
-    if (floorAges) floorAges[i] = 0;
     if (flowDx) flowDx[i] = 0;
     if (flowDz) flowDz[i] = 0;
   } else if (prev === 0) {
     // Fresh spawn: bake current atom size; pitch matches so neighbors of this size touch.
-    // Clear lifetime so rule transfers (or emit) start clean — don't inherit stale shrink.
-    if (ages) ages[i] = 0;
-    if (erodeLives) erodeLives[i] = 0;
+    clearEffectCell(i);
     if (emitSizes) emitSizes[i] = atomSize;
-    if (stackCrushAge) stackCrushAge[i] = 0;
     if (shuffleCounts) shuffleCounts[i] = 0;
     if (shuffleOriginX) shuffleOriginX[i] = 0;
     if (shuffleOriginZ) shuffleOriginZ[i] = 0;
-    if (sparseAges) sparseAges[i] = 0;
-    if (floorAges) floorAges[i] = 0;
     if (flowDx) flowDx[i] = 0;
     if (flowDz) flowDz[i] = 0;
     if (posY) posY[i] = (y + 0.5) * atomSize;
@@ -435,24 +424,96 @@ function setBudget(x, y, z, value) {
   budgets[idx(x, y, z)] = Math.max(0, value | 0);
 }
 
-function getAge(x, y, z) {
-  if (!ages || !inBounds(x, y, z)) return 0;
-  return ages[idx(x, y, z)];
+function clearEffectCell(i) {
+  for (const clocks of effectClocks) clocks[i] = 0;
+  if (infection) infection[i] = 0;
+  if (infectionAge) infectionAge[i] = 0;
+  if (shrinkFlags) shrinkFlags[i] = 0;
+  if (shrinkT) shrinkT[i] = 0;
 }
 
-function setAge(x, y, z, value) {
-  if (!ages || !inBounds(x, y, z)) return;
-  ages[idx(x, y, z)] = Math.max(0, Number(value) || 0);
+function getEffectClock(x, y, z, channel) {
+  const clocks = effectClocks[channel];
+  if (!clocks || !inBounds(x, y, z)) return 0;
+  return clocks[idx(x, y, z)];
 }
 
-function getErodeLife(x, y, z) {
-  if (!erodeLives || !inBounds(x, y, z)) return 0;
-  return erodeLives[idx(x, y, z)];
+function setEffectClock(x, y, z, channel, value) {
+  const clocks = effectClocks[channel];
+  if (!clocks || !inBounds(x, y, z)) return;
+  clocks[idx(x, y, z)] = Math.max(0, Number(value) || 0);
 }
 
-function setErodeLife(x, y, z, value) {
-  if (!erodeLives || !inBounds(x, y, z)) return;
-  erodeLives[idx(x, y, z)] = Math.max(0, Number(value) || 0);
+function getInfection(x, y, z) {
+  if (!infection || !inBounds(x, y, z)) return 0;
+  return infection[idx(x, y, z)];
+}
+
+function setInfection(x, y, z, value) {
+  if (!infection || !inBounds(x, y, z)) return;
+  infection[idx(x, y, z)] = Math.max(0, Number(value) || 0);
+}
+
+function getInfectionAge(x, y, z) {
+  if (!infectionAge || !inBounds(x, y, z)) return 0;
+  return infectionAge[idx(x, y, z)];
+}
+
+function setInfectionAge(x, y, z, value) {
+  if (!infectionAge || !inBounds(x, y, z)) return;
+  infectionAge[idx(x, y, z)] = Math.max(0, Number(value) || 0);
+}
+
+function setShrink(x, y, z, shrinking, t) {
+  if (!inBounds(x, y, z)) return;
+  const i = idx(x, y, z);
+  if (shrinkFlags) shrinkFlags[i] = shrinking ? 1 : 0;
+  if (shrinkT) shrinkT[i] = shrinking ? Math.max(0, Math.min(1, Number(t) || 0)) : 0;
+}
+
+function getShrink(x, y, z) {
+  if (!shrinkFlags || !inBounds(x, y, z)) return false;
+  return shrinkFlags[idx(x, y, z)] === 1;
+}
+
+function getShrinkT(x, y, z) {
+  if (!shrinkT || !inBounds(x, y, z)) return 0;
+  return shrinkT[idx(x, y, z)] || 0;
+}
+
+function getExtent(x, y, z) {
+  if (!inBounds(x, y, z)) return 0;
+  return atomExtent(x, y, z, getCell(x, y, z));
+}
+
+function getPitch(x, y, z) {
+  if (!inBounds(x, y, z)) return atomSize;
+  return cellAtomSize(idx(x, y, z));
+}
+
+function cellCenter(x, y, z) {
+  const pitch = getPitch(x, y, z);
+  return {
+    x: worldXForCell(x, pitch),
+    y: (y + 0.5) * pitch,
+    z: worldZForCell(z, pitch),
+  };
+}
+
+function getWorld(x, y, z) {
+  const center = cellCenter(x, y, z);
+  if (getCell(x, y, z) <= 0) return center;
+  const i = idx(x, y, z);
+  return {
+    x: posX ? posX[i] : center.x,
+    y: posY ? posY[i] : center.y,
+    z: posZ ? posZ[i] : center.z,
+  };
+}
+
+function materialSlidesOpen(matIndex) {
+  const id = catalog?.idByIndex[matIndex];
+  return !!id && catalog.byId.get(id)?.slideOpen === true;
 }
 
 function getPosY(x, y, z) {
@@ -546,36 +607,25 @@ function setFlowDz(x, y, z, value) {
   flowDz[idx(x, y, z)] = value | 0;
 }
 
-function getSparseAge(x, y, z) {
-  if (!sparseAges || !inBounds(x, y, z)) return 0;
-  return sparseAges[idx(x, y, z)];
-}
-
-function setSparseAge(x, y, z, value) {
-  if (!sparseAges || !inBounds(x, y, z)) return;
-  sparseAges[idx(x, y, z)] = Math.max(0, Number(value) || 0);
-}
-
-function getFloorAge(x, y, z) {
-  if (!floorAges || !inBounds(x, y, z)) return 0;
-  return floorAges[idx(x, y, z)];
-}
-
-function setFloorAge(x, y, z, value) {
-  if (!floorAges || !inBounds(x, y, z)) return;
-  floorAges[idx(x, y, z)] = Math.max(0, Number(value) || 0);
-}
-
 const gridApi = {
   get: getCell,
   set: setCell,
   inBounds,
   getBudget,
   setBudget,
-  getAge,
-  setAge,
-  getErodeLife,
-  setErodeLife,
+  getEffectClock,
+  setEffectClock,
+  getInfection,
+  setInfection,
+  getInfectionAge,
+  setInfectionAge,
+  setShrink,
+  getShrink,
+  getShrinkT,
+  getExtent,
+  getPitch,
+  cellCenter,
+  getWorld,
   getPosY,
   setPosY,
   getPosX,
@@ -594,44 +644,17 @@ const gridApi = {
   setFlowDx,
   getFlowDz,
   setFlowDz,
-  getSparseAge,
-  setSparseAge,
-  getFloorAge,
-  setFloorAge,
 };
-
-function materialLifetime(matIndex) {
-  if (!catalog || matIndex <= 0) return 0;
-  const id = catalog.idByIndex[matIndex];
-  const def = id ? catalog.byId.get(id) : null;
-  return def?.lifetime || 0;
-}
-
-function materialErode(matIndex) {
-  if (!catalog || matIndex <= 0) return 0;
-  const id = catalog.idByIndex[matIndex];
-  const def = id ? catalog.byId.get(id) : null;
-  return def?.erode || 0;
-}
-
-/** Effective shrink lifetime for a cell (native material life and/or erode infection). */
-function cellLifetime(cellIndex, matIndex) {
-  const native = materialLifetime(matIndex);
-  const forced = erodeLives ? erodeLives[cellIndex] || 0 : 0;
-  if (forced > 0 && native > 0) return Math.min(forced, native);
-  if (forced > 0) return forced;
-  return native;
-}
 
 function cellAtomSize(cellIndex) {
   if (emitSizes && emitSizes[cellIndex] > 0) return emitSizes[cellIndex];
   return atomSize;
 }
 
-function cellScale(x, y, z, matIndex) {
-  const life = cellLifetime(idx(x, y, z), matIndex);
-  if (life <= 0 || !ages) return 1;
-  const t = Math.min(1, Math.max(0, getAge(x, y, z) / life));
+function cellScale(x, y, z) {
+  const i = idx(x, y, z);
+  if (!shrinkFlags || shrinkFlags[i] !== 1 || !shrinkT) return 1;
+  const t = Math.min(1, Math.max(0, shrinkT[i]));
   return Math.max(0.02, 1 - t);
 }
 
@@ -1000,19 +1023,21 @@ function buildPalette() {
 export function clearBoard() {
   if (cells) cells.fill(0);
   if (budgets) budgets.fill(0);
-  if (ages) ages.fill(0);
-  if (erodeLives) erodeLives.fill(0);
+  for (const clocks of effectClocks) clocks.fill(0);
+  if (infection) infection.fill(0);
+  if (infectionAge) infectionAge.fill(0);
+  if (shrinkFlags) shrinkFlags.fill(0);
+  if (shrinkT) shrinkT.fill(0);
+  if (restingFlags) restingFlags.fill(0);
+  if (onFloorFlags) onFloorFlags.fill(0);
+  if (sameAboveFlags) sameAboveFlags.fill(0);
   if (posY) posY.fill(0);
   if (posX) posX.fill(0);
   if (posZ) posZ.fill(0);
   if (emitSizes) emitSizes.fill(0);
-  if (exposedBlocks) exposedBlocks.fill(0);
-  if (stackCrushAge) stackCrushAge.fill(0);
   if (shuffleCounts) shuffleCounts.fill(0);
   if (shuffleOriginX) shuffleOriginX.fill(0);
   if (shuffleOriginZ) shuffleOriginZ.fill(0);
-  if (sparseAges) sparseAges.fill(0);
-  if (floorAges) floorAges.fill(0);
   if (flowDx) flowDx.fill(0);
   if (flowDz) flowDz.fill(0);
   occupied.clear();
@@ -1244,7 +1269,7 @@ function collectOccupied() {
     const rest = (i / GRID_MAX) | 0;
     const z = rest % GRID_MAX;
     const y = (rest / GRID_MAX) | 0;
-    list.push({ x, y, z, mat });
+    list.push({ x, y, z, mat, i });
   }
   return list;
 }
@@ -1376,62 +1401,24 @@ function reconcileMeshes() {
   syncEmitter();
 }
 
-/**
- * Tag neighbors of eroding atoms with a forced lifetime.
- * Solids shrink/dissolve on contact; liquids are left alone so they can spill
- * into gaps instead of being pulled into the erode cluster.
- * Runs before and after rules so newly adjacent solids still get tagged.
- * @returns {boolean}
- */
-function infectErodeContacts() {
-  if (!cells || !erodeLives || !catalog || occupied.size === 0) return false;
-  let dirty = false;
-  const NEIGHBORS = [
-    [1, 0, 0],
-    [-1, 0, 0],
-    [0, 1, 0],
-    [0, -1, 0],
-    [0, 0, 1],
-    [0, 0, -1],
-  ];
+const columnQueries = {
+  resting(i) {
+    return restingFlags?.[i] === 1;
+  },
+  onFloor(i) {
+    return onFloorFlags?.[i] === 1;
+  },
+  sameAbove(i) {
+    return sameAboveFlags?.[i] === 1;
+  },
+};
 
-  for (const i of occupied) {
-    const mat = cells[i];
-    if (mat <= 0) continue;
-    const duration = materialErode(mat);
-    if (duration <= 0) continue;
-    const { x, y, z } = decodeCell(i);
-    for (const [dx, dy, dz] of NEIGHBORS) {
-      const nx = x + dx;
-      const ny = y + dy;
-      const nz = z + dz;
-      if (!inBounds(nx, ny, nz)) continue;
-      const ni = idx(nx, ny, nz);
-      const nmat = cells[ni];
-      if (nmat <= 0 || nmat === mat) continue;
-      if ((erodeLives[ni] || 0) > 0) continue;
-      const nid = catalog.idByIndex[nmat];
-      const nDef = nid ? catalog.byId.get(nid) : null;
-      // Liquids flow into openings; don't infect/shrink them toward erode.
-      if (nDef?.surface === "liquid") continue;
-      erodeLives[ni] = duration;
-      dirty = true;
-    }
-  }
-  return dirty;
-}
-
-/**
- * Mark lone blocks that sit on the ground plane with nothing above them.
- * Those are the ones that shrink. A ground block holding up a stack is
- * handled by crushStackBottoms instead, and blocks above it stay unmarked.
- */
-function refreshExposedBlocks() {
-  if (!exposedBlocks) return;
-  exposedBlocks.fill(0);
-  if (!cells || !posY || !catalog || occupied.size === 0) return;
-  const blockIndex = catalog.indexById.get("block") || 0;
-  if (blockIndex <= 0 || materialLifetime(blockIndex) <= 0) return;
+/** Resting / floor / same-material-above flags from continuous column positions. */
+function rebuildColumnFlags() {
+  if (restingFlags) restingFlags.fill(0);
+  if (onFloorFlags) onFloorFlags.fill(0);
+  if (sameAboveFlags) sameAboveFlags.fill(0);
+  if (!cells || !posY || !restingFlags || occupied.size === 0) return;
 
   /** @type {Map<number, number[]>} */
   const columns = new Map();
@@ -1461,129 +1448,21 @@ function refreshExposedBlocks() {
       const yCenter = posY[i] > 0 ? posY[i] : restCenter;
       const resting = yCenter <= restCenter + 0.05;
       const onGround = floorTop <= 1e-4;
-      let blockAbove = false;
+      let sameAbove = false;
       for (let k = n + 1; k < list.length; k += 1) {
-        if (cells[list[k]] === blockIndex) {
-          blockAbove = true;
+        if (cells[list[k]] === mat) {
+          sameAbove = true;
           break;
         }
       }
-      if (mat === blockIndex && resting && onGround && !blockAbove) exposedBlocks[i] = 1;
+      if (resting) restingFlags[i] = 1;
+      if (onGround) onFloorFlags[i] = 1;
+      if (sameAbove) sameAboveFlags[i] = 1;
       const placed = yCenter > restCenter + 1e-4 ? yCenter : restCenter;
       floorTop = placed + size * 0.5;
     }
   }
 }
-
-/**
- * Age materials with a lifetime; shrink visually and despawn when expired.
- * A block shrinks only while it is alone on the ground. Stacked blocks,
- * including the one holding the pile up, keep a zero shrink clock.
- * @returns {boolean} true if meshes need a refresh
- */
-function ageAtoms(dt) {
-  if (!cells || !ages || !catalog || dt <= 0 || occupied.size === 0) return false;
-  let dirty = false;
-
-  const doomed = [];
-  for (const i of occupied) {
-    const mat = cells[i];
-    if (mat <= 0) continue;
-    if (catalog.idByIndex[mat] === "block" && !exposedBlocks?.[i]) {
-      if (ages[i] !== 0) {
-        ages[i] = 0;
-        dirty = true;
-      }
-      continue;
-    }
-    const life = cellLifetime(i, mat);
-    if (life <= 0) continue;
-    ages[i] += dt;
-    dirty = true;
-    if (ages[i] >= life) doomed.push(i);
-  }
-  for (const i of doomed) {
-    const { x, y, z } = decodeCell(i);
-    setCell(x, y, z, 0);
-  }
-  return dirty || doomed.length > 0;
-}
-
-/**
- * The block touching the ground under a stack despawns after `lifetime`
- * seconds. Blocks above it do not age; once the support is gone they fall
- * into the opening.
- * @returns {boolean}
- */
-function crushStackBottoms(dt) {
-  if (!cells || !stackCrushAge || !posY || !catalog || dt <= 0 || occupied.size === 0) {
-    return false;
-  }
-
-  const blockIndex = catalog.indexById.get("block") || 0;
-  if (blockIndex <= 0) return false;
-  const crushTime = materialLifetime(blockIndex);
-  if (crushTime <= 0) return false;
-
-  /** @type {Map<number, number[]>} */
-  const columns = new Map();
-  for (const i of occupied) {
-    if (cells[i] <= 0) continue;
-    const x = i % GRID_MAX;
-    const rest = (i / GRID_MAX) | 0;
-    const z = rest % GRID_MAX;
-    const key = z * GRID_MAX + x;
-    let list = columns.get(key);
-    if (!list) {
-      list = [];
-      columns.set(key, list);
-    }
-    list.push(i);
-  }
-
-  /** @type {Set<number>} */
-  const ticking = new Set();
-  /** @type {number[]} */
-  const doomed = [];
-
-  for (const list of columns.values()) {
-    list.sort((a, b) => (posY[a] || 0) - (posY[b] || 0) || a - b);
-    let floorTop = 0;
-    let support = -1;
-    for (let n = 0; n < list.length; n += 1) {
-      const i = list[n];
-      const { x, y, z } = decodeCell(i);
-      const mat = cells[i];
-      const size = atomExtent(x, y, z, mat);
-      const restCenter = floorTop + size * 0.5;
-      const yCenter = posY[i] > 0 ? posY[i] : restCenter;
-      const resting = yCenter <= restCenter + 0.05;
-      const onGround = floorTop <= 1e-4;
-      if (n === 0 && mat === blockIndex && resting && onGround && list.length >= 2) {
-        support = i;
-      }
-      const placed = yCenter > restCenter + 1e-4 ? yCenter : restCenter;
-      floorTop = placed + size * 0.5;
-    }
-    if (support < 0) continue;
-    ticking.add(support);
-    stackCrushAge[support] += dt;
-    if (stackCrushAge[support] >= crushTime) doomed.push(support);
-  }
-
-  for (const i of occupied) {
-    if (!ticking.has(i) && stackCrushAge[i] !== 0) stackCrushAge[i] = 0;
-  }
-
-  if (!doomed.length) return false;
-  for (const i of doomed) {
-    if (cells[i] <= 0) continue;
-    const { x, y, z } = decodeCell(i);
-    setCell(x, y, z, 0);
-  }
-  return true;
-}
-
 /**
  * Recompute contact each tick from current atom sizes: fall until resting on
  * the ground plane or the atom below in the same column.
@@ -1649,12 +1528,9 @@ function settleGravity(dt) {
   return moved;
 }
 
-/** True when a cell is actively shrinking (native lifetime or erode infection). */
-function isShrinking(cellIndex, matIndex) {
-  if (catalog?.idByIndex[matIndex] === "block") {
-    return exposedBlocks?.[cellIndex] === 1;
-  }
-  return cellLifetime(cellIndex, matIndex) > 0;
+/** True when an effect marked this cell as shrinking. */
+function isShrinking(cellIndex) {
+  return shrinkFlags?.[cellIndex] === 1;
 }
 
 /**
@@ -1668,7 +1544,7 @@ function settleLateral(dt) {
   let moved = false;
   for (const i of occupied) {
     const mat = cells[i];
-    if (mat <= 0 || isShrinking(i, mat)) continue;
+    if (mat <= 0 || (isShrinking(i, mat) && !materialSlidesOpen(mat))) continue;
     const x = i % GRID_MAX;
     const rest = (i / GRID_MAX) | 0;
     const z = rest % GRID_MAX;
@@ -1724,7 +1600,12 @@ function packStickTogether() {
 
   for (const start of occupied) {
     const startMat = cells[start];
-    if (startMat <= 0 || visited.has(start) || !isShrinking(start, startMat)) {
+    if (
+      startMat <= 0 ||
+      visited.has(start) ||
+      !isShrinking(start, startMat) ||
+      materialSlidesOpen(startMat)
+    ) {
       continue;
     }
 
@@ -1746,7 +1627,7 @@ function packStickTogether() {
         if (!inBounds(nx, ny, nz)) continue;
         const ni = idx(nx, ny, nz);
         if (visited.has(ni) || cells[ni] <= 0) continue;
-        if (!isShrinking(ni, cells[ni])) continue;
+        if (!isShrinking(ni, cells[ni]) || materialSlidesOpen(cells[ni])) continue;
         visited.add(ni);
         queue.push(ni);
       }
@@ -1831,11 +1712,10 @@ function packStickTogether() {
 }
 
 function runRules() {
-  if (!catalog) return;
+  if (!catalog) return false;
   const occupiedList = collectOccupied();
   const { splashes: splashCells, moves } = stepWorld(gridApi, occupiedList, catalog);
-  const culledShuffle = cullShuffling(moves);
-  refreshFloorAgeOnMerge(moves);
+  const culledShuffle = applyPostMoves(gridApi, moves, catalog);
 
   consumeOutOfBounds();
   reconcileMeshes();
@@ -1850,243 +1730,28 @@ function runRules() {
   return culledShuffle;
 }
 
-/**
- * Unbounded water that gains same-material contacts (a merge) gets a fresh
- * floorAbsorb lifespan.
- * @param {{ from: { x: number, y: number, z: number }, to: { x: number, y: number, z: number }, mat: number }[]} moves
- */
-function refreshFloorAgeOnMerge(moves) {
-  if (!catalog || !floorAges || !moves?.length) return;
-  for (const move of moves) {
-    const id = catalog.idByIndex[move.mat];
-    const def = id ? catalog.byId.get(id) : null;
-    if (!def?.floorAbsorb) continue;
-    if (gridApi.get(move.to.x, move.to.y, move.to.z) !== move.mat) continue;
-    // Origin is empty now; counting same-mat around it recovers pre-move contacts.
-    const before = countSameNeighbors(move.from.x, move.from.y, move.from.z, move.mat);
-    const after = countSameNeighbors(move.to.x, move.to.y, move.to.z, move.mat);
-    if (after > before) {
-      setFloorAge(move.to.x, move.to.y, move.to.z, 0);
-      // Refresh the water it just touched too.
-      for (const [dx, dy, dz] of FACE_DIRS) {
-        const nx = move.to.x + dx;
-        const ny = move.to.y + dy;
-        const nz = move.to.z + dz;
-        if (!inBounds(nx, ny, nz)) continue;
-        if (getCell(nx, ny, nz) === move.mat) setFloorAge(nx, ny, nz, 0);
-      }
-    }
-  }
-}
-
-/**
- * Track same-height hops. If a grain does many without leaving its local
- * neighborhood, treat it as shuffle thrash and delete it.
- * @param {{ from: { x: number, y: number, z: number }, to: { x: number, y: number, z: number }, mat: number }[]} moves
- * @returns {boolean}
- */
-function cullShuffling(moves) {
-  if (!catalog || !moves?.length || !shuffleCounts) return false;
-  let culled = false;
-  for (const move of moves) {
-    const id = catalog.idByIndex[move.mat];
-    const material = id ? catalog.byId.get(id) : null;
-    const limit = material?.shuffleLimit || 0;
-    if (limit <= 0) continue;
-    if (gridApi.get(move.to.x, move.to.y, move.to.z) !== move.mat) continue;
-
-    // Progress downward resets the streak.
-    if (move.to.y < move.from.y) {
-      setShuffle(move.to.x, move.to.y, move.to.z, 0);
-      setShuffleOriginX(move.to.x, move.to.y, move.to.z, 0);
-      setShuffleOriginZ(move.to.x, move.to.y, move.to.z, 0);
-      continue;
-    }
-    // Only same-height hops count as potential shuffle.
-    if (move.to.y !== move.from.y) {
-      setShuffle(move.to.x, move.to.y, move.to.z, 0);
-      continue;
-    }
-
-    let count = getShuffle(move.to.x, move.to.y, move.to.z);
-    let ox = getShuffleOriginX(move.to.x, move.to.y, move.to.z);
-    let oz = getShuffleOriginZ(move.to.x, move.to.y, move.to.z);
-    if (count <= 0) {
-      ox = move.from.x;
-      oz = move.from.z;
-      count = 0;
-    }
-    count += 1;
-    if (count >= limit) {
-      const span = Math.abs(move.to.x - ox) + Math.abs(move.to.z - oz);
-      if (span <= 2) {
-        setCell(move.to.x, move.to.y, move.to.z, 0);
-        culled = true;
-        continue;
-      }
-      // Made real travel — start a new window from here.
-      ox = move.to.x;
-      oz = move.to.z;
-      count = 1;
-    }
-    setShuffle(move.to.x, move.to.y, move.to.z, count);
-    setShuffleOriginX(move.to.x, move.to.y, move.to.z, ox);
-    setShuffleOriginZ(move.to.x, move.to.y, move.to.z, oz);
-  }
-  return culled;
-}
-
-const FACE_DIRS = [
-  [1, 0, 0],
-  [-1, 0, 0],
-  [0, 1, 0],
-  [0, -1, 0],
-  [0, 0, 1],
-  [0, 0, -1],
-];
-
-function countSameNeighbors(x, y, z, matIndex) {
-  let n = 0;
-  for (const [dx, dy, dz] of FACE_DIRS) {
-    const nx = x + dx;
-    const ny = y + dy;
-    const nz = z + dz;
-    if (!inBounds(nx, ny, nz)) continue;
-    if (getCell(nx, ny, nz) === matIndex) n += 1;
-  }
-  return n;
-}
-
-/** True when resting on a solid or touching a solid wall (a basin / container). */
-function isInBoundedCatchment(x, y, z) {
-  if (!catalog) return false;
-  if (y > 0) {
-    const below = getCell(x, y - 1, z);
-    if (below > 0) {
-      const id = catalog.idByIndex[below];
-      const def = id ? catalog.byId.get(id) : null;
-      if (def?.surface === "solid") return true;
-    }
-  }
-  for (const [dx, , dz] of [
-    [1, 0, 0],
-    [-1, 0, 0],
-    [0, 0, 1],
-    [0, 0, -1],
-  ]) {
-    const nx = x + dx;
-    const ny = y;
-    const nz = z + dz;
-    if (!inBounds(nx, ny, nz)) continue;
-    const nmat = getCell(nx, ny, nz);
-    if (nmat <= 0) continue;
-    const id = catalog.idByIndex[nmat];
-    const def = id ? catalog.byId.get(id) : null;
-    if (def?.surface === "solid") return true;
-  }
-  return false;
-}
-
-/**
- * Absorb under-connected grains, and dry unbounded floorAbsorb liquids.
- * Contained water (solid basin / wall contact) is exempt from floorAbsorb.
- * @param {number} dt
- * @returns {boolean}
- */
-function absorbSparseAndFloor(dt) {
-  if (!cells || !catalog || !sparseAges || dt <= 0 || occupied.size === 0) {
-    return false;
-  }
-  /** @type {number[]} */
-  const doomed = [];
-  for (const i of occupied) {
-    const mat = cells[i];
-    if (mat <= 0) continue;
-    const id = catalog.idByIndex[mat];
-    const def = id ? catalog.byId.get(id) : null;
-    if (!def) continue;
-    const { x, y, z } = decodeCell(i);
-
-    const minN = def.minNeighbors || 0;
-    const sparseLimit = def.sparseAbsorb || 0;
-    if (minN > 0 && sparseLimit > 0) {
-      if (countSameNeighbors(x, y, z, mat) < minN) {
-        const onOpenFloor = catalog.floor === "liquid" && y === 0;
-        if (!onOpenFloor && hasEmptyFaceNeighbor(x, y, z)) {
-          sparseAges[i] = 0;
-        } else {
-          sparseAges[i] += dt;
-          if (sparseAges[i] >= sparseLimit) {
-            doomed.push(i);
-            continue;
-          }
-        }
-      } else {
-        sparseAges[i] = 0;
-      }
-    } else if (sparseAges) {
-      sparseAges[i] = 0;
-    }
-
-    const floorLimit = def.floorAbsorb || 0;
-    if (!floorAges || floorLimit <= 0) {
-      if (floorAges) floorAges[i] = 0;
-      continue;
-    }
-    // Contained in a solid catchment — keep forever.
-    if (isInBoundedCatchment(x, y, z)) {
-      floorAges[i] = 0;
-      continue;
-    }
-    // Unbounded: dry up after floorAbsorb seconds unless a merge resets the age.
-    floorAges[i] += dt;
-    if (floorAges[i] >= floorLimit) doomed.push(i);
-  }
-  if (!doomed.length) return false;
-  for (const i of doomed) {
-    if (cells[i] <= 0) continue;
-    const { x, y, z } = decodeCell(i);
-    setCell(x, y, z, 0);
-  }
-  return true;
-}
-
-function hasEmptyFaceNeighbor(x, y, z) {
-  for (const [dx, dy, dz] of FACE_DIRS) {
-    const nx = x + dx;
-    const ny = y + dy;
-    const nz = z + dz;
-    if (!inBounds(nx, ny, nz)) continue;
-    if (getCell(nx, ny, nz) === 0) return true;
-  }
-  return false;
-}
-
 function step(dt) {
   applyInput(dt);
 
-  // Infect solids before rules; liquids are not tagged (they spill into gaps).
-  let infected = infectErodeContacts();
+  let infected = applyInfect(gridApi, collectOccupied(), catalog);
 
   ruleAcc += dt;
   const interval = 1 / RULE_HZ;
+  let ruled = false;
   while (ruleAcc >= interval) {
     ruleAcc -= interval;
-    runRules();
+    if (runRules()) ruled = true;
   }
 
-  // Catch solids/liquids that fell or slid into contact during the rule pass.
-  infected = infectErodeContacts() || infected;
+  infected = applyInfect(gridApi, collectOccupied(), catalog) || infected;
 
-  refreshExposedBlocks();
-  const aged = ageAtoms(dt);
-  const absorbed = absorbSparseAndFloor(dt);
-  const crushed = crushStackBottoms(dt);
+  rebuildColumnFlags();
+  const effected = tickEffects(gridApi, collectOccupied(), catalog, columnQueries, dt);
   const settled = settleGravity(dt);
   const lateral = settleLateral(dt);
   const packed = packStickTogether();
   const culled = consumeOutOfBounds();
-  if (infected || aged || absorbed || crushed || settled || lateral || packed || culled) {
+  if (infected || effected || ruled || settled || lateral || packed || culled) {
     reconcileMeshes();
   }
 
@@ -2173,14 +1838,28 @@ function startRenderLoop() {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=55`);
+  const res = await fetch(`/materials.json?v=57`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(parseMaterialsJson(await res.text()));
   activeMaterialId = catalog.byId.has(prev)
     ? prev
     : catalog.defaultId || catalog.list[0]?.id || "block";
+  if (cells && effectClocks.length !== (catalog?.clockCount || 0)) ensureEffectStorage();
   buildPalette();
+}
+
+function ensureEffectStorage() {
+  const n = GRID_MAX * GRID_MAX * MAX_Y;
+  const channels = catalog?.clockCount || 0;
+  effectClocks = Array.from({ length: channels }, () => new Float32Array(n));
+  infection = new Float32Array(n);
+  infectionAge = new Float32Array(n);
+  shrinkFlags = new Uint8Array(n);
+  shrinkT = new Float32Array(n);
+  restingFlags = new Uint8Array(n);
+  onFloorFlags = new Uint8Array(n);
+  sameAboveFlags = new Uint8Array(n);
 }
 
 function initScene(nextCanvas) {
@@ -2196,21 +1875,16 @@ function initScene(nextCanvas) {
 
   cells = new Uint8Array(GRID_MAX * GRID_MAX * MAX_Y);
   budgets = new Uint8Array(GRID_MAX * GRID_MAX * MAX_Y);
-  ages = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
-  erodeLives = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   posY = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   posX = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   posZ = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   emitSizes = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
-  exposedBlocks = new Uint8Array(GRID_MAX * GRID_MAX * MAX_Y);
-  stackCrushAge = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   shuffleCounts = new Uint8Array(GRID_MAX * GRID_MAX * MAX_Y);
   shuffleOriginX = new Uint16Array(GRID_MAX * GRID_MAX * MAX_Y);
   shuffleOriginZ = new Uint16Array(GRID_MAX * GRID_MAX * MAX_Y);
-  sparseAges = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
-  floorAges = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   flowDx = new Int8Array(GRID_MAX * GRID_MAX * MAX_Y);
   flowDz = new Int8Array(GRID_MAX * GRID_MAX * MAX_Y);
+  ensureEffectStorage();
   occupied.clear();
   for (const mesh of instances.values()) {
     surface?.remove(mesh);
@@ -2294,6 +1968,169 @@ function initScene(nextCanvas) {
   clearError();
 }
 
+function installSimHook() {
+  if (!new URLSearchParams(location.search).has("sim")) return;
+  window.__fallingSim = {
+    placeColumn(count) {
+      clearBoard();
+      const matIndex =
+        catalog?.indexById.get(activeMaterialId) || catalog?.indexById.get("block") || 0;
+      if (!matIndex) return;
+      const x = (GRID_MAX / 2) | 0;
+      const z = x;
+      const n = Math.max(1, count | 0);
+      for (let k = 0; k < n; k += 1) setCell(x, k, z, matIndex);
+      reconcileMeshes();
+      rebuildColumnFlags();
+    },
+    state() {
+      const samples = [];
+      for (const i of occupied) {
+        const { x, y, z } = decodeCell(i);
+        samples.push({
+          x,
+          y,
+          z,
+          scale: cellScale(x, y, z),
+          shrinking: shrinkFlags?.[i] === 1,
+          onFloor: onFloorFlags?.[i] === 1,
+          sameAbove: sameAboveFlags?.[i] === 1,
+          resting: restingFlags?.[i] === 1,
+          clocks: effectClocks.map((channel) => channel[i]),
+        });
+      }
+      samples.sort((a, b) => a.y - b.y);
+      return { atoms: occupied.size, samples };
+    },
+    clear() {
+      clearBoard();
+      reconcileMeshes();
+    },
+    infectionCase() {
+      /** @type {Map<string, number>} */
+      const occ = new Map();
+      /** @type {Map<string, number>} */
+      const infected = new Map();
+      /** @type {Map<string, number>} */
+      const infectedAge = new Map();
+      /** @type {Map<string, number>} */
+      const clocks = new Map();
+      /** @type {{ shrinking: boolean, t: number } | null} */
+      let shrink = null;
+      const key = (x, y, z) => `${x},${y},${z}`;
+      const grid = {
+        get: (x, y, z) => occ.get(key(x, y, z)) || 0,
+        set: (x, y, z, v) => {
+          if (!v) occ.delete(key(x, y, z));
+          else occ.set(key(x, y, z), v);
+        },
+        inBounds: () => true,
+        getInfection: (x, y, z) => infected.get(key(x, y, z)) || 0,
+        setInfection: (x, y, z, v) => infected.set(key(x, y, z), v),
+        getInfectionAge: (x, y, z) => infectedAge.get(key(x, y, z)) || 0,
+        setInfectionAge: (x, y, z, v) => infectedAge.set(key(x, y, z), v),
+        getEffectClock: (x, y, z, channel) => clocks.get(`${key(x, y, z)}:${channel}`) || 0,
+        setEffectClock: (x, y, z, channel, v) => clocks.set(`${key(x, y, z)}:${channel}`, v),
+        setShrink: (_x, _y, _z, shrinking, t) => {
+          shrink = { shrinking, t };
+        },
+      };
+      const catalog = {
+        floor: "liquid",
+        clockCount: 2,
+        idByIndex: ["", "block", "erode", "water"],
+        byId: new Map([
+          [
+            "block",
+            {
+              id: "block",
+              surface: "solid",
+              effects: [
+                {
+                  kind: "age",
+                  seconds: 3.5,
+                  visual: "shrink",
+                  thenClear: true,
+                  clockId: 0,
+                  when: { resting: true, onFloor: true, sameAbove: false },
+                },
+                {
+                  kind: "age",
+                  seconds: 3.5,
+                  visual: null,
+                  thenClear: true,
+                  clockId: 1,
+                  when: { resting: true, onFloor: true, sameAbove: true },
+                },
+              ],
+            },
+          ],
+          [
+            "erode",
+            {
+              id: "erode",
+              surface: "solid",
+              effects: [{ kind: "infect", seconds: 6, skipSurface: "liquid", when: {} }],
+            },
+          ],
+          ["water", { id: "water", surface: "liquid", effects: [] }],
+        ]),
+        indexById: new Map([
+          ["block", 1],
+          ["erode", 2],
+          ["water", 3],
+        ]),
+      };
+      occ.set(key(0, 0, 0), 2);
+      occ.set(key(1, 0, 0), 1);
+      occ.set(key(0, 0, 1), 3);
+      applyInfect(
+        grid,
+        [
+          { x: 0, y: 0, z: 0, mat: 2 },
+          { x: 1, y: 0, z: 0, mat: 1 },
+          { x: 0, y: 0, z: 1, mat: 3 },
+        ],
+        catalog,
+      );
+      const tagged = {
+        block: grid.getInfection(1, 0, 0),
+        water: grid.getInfection(0, 0, 1),
+        erode: grid.getInfection(0, 0, 0),
+      };
+      // Stack support matches crush (no shrink) even while infected.
+      tickEffects(
+        grid,
+        [{ x: 1, y: 0, z: 0, mat: 1, i: 0 }],
+        catalog,
+        {
+          resting: () => true,
+          onFloor: () => true,
+          sameAbove: () => true,
+        },
+        0.5,
+      );
+      const stacked = { present: grid.get(1, 0, 0), shrink };
+      // A block with no matching age rule shrinks on the infection clock.
+      shrink = null;
+      occ.set(key(2, 1, 0), 1);
+      infected.set(key(2, 1, 0), 6);
+      tickEffects(
+        grid,
+        [{ x: 2, y: 1, z: 0, mat: 1, i: 1 }],
+        catalog,
+        {
+          resting: () => false,
+          onFloor: () => false,
+          sameAbove: () => false,
+        },
+        0.5,
+      );
+      return { tagged, stacked, airborne: { present: grid.get(2, 1, 0), shrink } };
+    },
+  };
+}
+
 export async function showFallingBlocks(nextCanvas) {
   try {
     await loadCatalog();
@@ -2312,6 +2149,7 @@ export async function showFallingBlocks(nextCanvas) {
     bindEmitHeightUi();
     bindLandModeUi();
     fallingInput.attach(canvas);
+    installSimHook();
     running = true;
     sizeTries = 0;
     startRenderLoop();

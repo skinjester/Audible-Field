@@ -26,10 +26,22 @@
  *
  * Optional condition fields (extensible — add more without changing diagram syntax):
  *   requireAbove, openAbove, supportUnderDest, seekTouch, seekTouchMin,
- *   gainTouch, gainTouchStrict, onlySparse, belowBottom, symbols
+ *   gainTouch, gainTouchStrict, onlySparse (positive count), belowBottom, symbols
+ *   bias: "flow" — prefer the last horizontal facing
  *
- * Material fields (siblings of rules — lifetime, erode, etc. live here):
- *   lifetime, erode, floorAbsorb, pathBias, minNeighbors, restNeighbors, …
+ * Effect rules (no diagram) live in the same rules array. `when` is a flat
+ * predicate object (all must pass). `do` is one verb:
+ *   { age, visual?: "shrink", slide?: "closestOpen", then: "clear" }
+ * slide "closestOpen": while that shrink is active, each rule tick steps one
+ * cell toward the closest empty cell that can hold a cube of the current size.
+ *   { infect: { seconds, skipSurface?: "liquid" } }
+ *   { absorbSparse: { seconds, minNeighbors } }
+ *   { dryUnbounded: { seconds, resetOn?: "gainedTouch" } }
+ *   { cullShuffle: { hops, span } }
+ * Predicates: resting, onFloor, sameAbove, boundedCatchment, infection,
+ * belowMinNeighbors. Host column queries supply resting / onFloor / sameAbove.
+ * All matching effects run. Each age / absorb / dry rule has its own clock.
+ * One infection channel caps a matching age, or shrinks a cell that has none.
  */
 
 const ROTATIONS_XZ = [
@@ -40,7 +52,7 @@ const ROTATIONS_XZ = [
 ];
 
 /**
- * @typedef {{ id: string, label: string, color: string, opacity: number, surface: "solid" | "liquid", pushPower: number, lifetime: number, erode: number, shuffleLimit: number, floorAbsorb: number, minNeighbors: number, sparseAbsorb: number, pathBias: number, rules: object[] }} MaterialDef
+ * @typedef {{ id: string, label: string, color: string, opacity: number, surface: "solid" | "liquid", pushPower: number, slideOpen: boolean, rules: object[], effects: object[] }} MaterialDef
  * @typedef {{
  *   get: (x: number, y: number, z: number) => number,
  *   set: (x: number, y: number, z: number, v: number) => void,
@@ -73,8 +85,21 @@ const ROTATIONS_XZ = [
  *   setSparseAge?: (x: number, y: number, z: number, v: number) => void,
  *   getFloorAge?: (x: number, y: number, z: number) => number,
  *   setFloorAge?: (x: number, y: number, z: number, v: number) => void,
+ *   getEffectClock?: (x: number, y: number, z: number, channel: number) => number,
+ *   setEffectClock?: (x: number, y: number, z: number, channel: number, v: number) => void,
+ *   getInfection?: (x: number, y: number, z: number) => number,
+ *   setInfection?: (x: number, y: number, z: number, v: number) => void,
+ *   getInfectionAge?: (x: number, y: number, z: number) => number,
+ *   setInfectionAge?: (x: number, y: number, z: number, v: number) => void,
+ *   setShrink?: (x: number, y: number, z: number, shrinking: boolean, t: number) => void,
+ *   getShrink?: (x: number, y: number, z: number) => boolean,
+ *   getShrinkT?: (x: number, y: number, z: number) => number,
+ *   getExtent?: (x: number, y: number, z: number) => number,
+ *   getPitch?: (x: number, y: number, z: number) => number,
+ *   cellCenter?: (x: number, y: number, z: number) => { x: number, y: number, z: number },
+ *   getWorld?: (x: number, y: number, z: number) => { x: number, y: number, z: number },
  * }} GridApi
- * @typedef {{ defaultId: string, floor: "solid" | "liquid", list: MaterialDef[], byId: Map<string, MaterialDef>, indexById: Map<string, number>, idByIndex: string[] }} MaterialCatalog
+ * @typedef {{ defaultId: string, floor: "solid" | "liquid", clockCount: number, list: MaterialDef[], byId: Map<string, MaterialDef>, indexById: Map<string, number>, idByIndex: string[] }} MaterialCatalog
  * @typedef {{ x: number, y: number, z: number }} CellPos
  */
 
@@ -104,45 +129,40 @@ export function compileMaterials(raw) {
   const indexById = new Map();
   /** @type {string[]} */
   const idByIndex = [""];
+  let clockCount = 0;
 
   for (const item of list) {
     if (!item || typeof item.id !== "string" || !item.id) continue;
     const surface = item.surface === "liquid" ? "liquid" : "solid";
     const pushPower = Math.max(0, Math.floor(Number(item.pushPower) || 0));
-    const lifetimeRaw = Number(item.lifetime);
-    const lifetime =
-      Number.isFinite(lifetimeRaw) && lifetimeRaw > 0 ? lifetimeRaw : 0;
-    const erodeRaw = Number(item.erode);
-    const erode =
-      Number.isFinite(erodeRaw) && erodeRaw > 0 ? erodeRaw : 0;
-    const shuffleRaw = Number(item.shuffleLimit);
-    const shuffleLimit =
-      Number.isFinite(shuffleRaw) && shuffleRaw > 0 ? Math.floor(shuffleRaw) : 0;
-    const floorAbsorbRaw = Number(item.floorAbsorb);
-    const floorAbsorb =
-      Number.isFinite(floorAbsorbRaw) && floorAbsorbRaw > 0 ? floorAbsorbRaw : 0;
-    const minNeighborsRaw = Number(item.minNeighbors);
-    const minNeighbors =
-      Number.isFinite(minNeighborsRaw) && minNeighborsRaw > 0
-        ? Math.floor(minNeighborsRaw)
-        : 0;
-    const restNeighborsRaw = Number(item.restNeighbors);
-    const restNeighbors =
-      Number.isFinite(restNeighborsRaw) && restNeighborsRaw > 0
-        ? Math.floor(restNeighborsRaw)
-        : minNeighbors;
-    const sparseAbsorbRaw = Number(item.sparseAbsorb);
-    const sparseAbsorb =
-      Number.isFinite(sparseAbsorbRaw) && sparseAbsorbRaw > 0 ? sparseAbsorbRaw : 0;
     const opacityRaw = Number(item.opacity);
     const opacity =
       Number.isFinite(opacityRaw) && opacityRaw > 0 && opacityRaw < 1
         ? opacityRaw
         : 1;
-    const pathBiasRaw = Number(item.pathBias);
-    const pathBias = Number.isFinite(pathBiasRaw)
-      ? Math.min(1, Math.max(0, pathBiasRaw))
-      : 0;
+    /** @type {object[]} */
+    const rules = [];
+    /** @type {object[]} */
+    const effects = [];
+    if (Array.isArray(item.rules)) {
+      for (const raw of item.rules) {
+        const rule = normalizeRule(raw);
+        if (!rule) continue;
+        if (rule.type === "effect") {
+          if (
+            rule.kind === "age" ||
+            rule.kind === "absorbSparse" ||
+            rule.kind === "dryUnbounded"
+          ) {
+            rule.clockId = clockCount;
+            clockCount += 1;
+          }
+          effects.push(rule);
+        } else {
+          rules.push(rule);
+        }
+      }
+    }
     const def = {
       id: item.id,
       label: String(item.label || item.id),
@@ -150,15 +170,9 @@ export function compileMaterials(raw) {
       opacity,
       surface,
       pushPower,
-      lifetime,
-      erode,
-      shuffleLimit,
-      floorAbsorb,
-      minNeighbors,
-      restNeighbors,
-      sparseAbsorb,
-      pathBias,
-      rules: Array.isArray(item.rules) ? item.rules.map(normalizeRule).filter(Boolean) : [],
+      rules,
+      effects,
+      slideOpen: effects.some((effect) => effect.slide === "closestOpen"),
     };
     materials.push(def);
     byId.set(def.id, def);
@@ -173,7 +187,83 @@ export function compileMaterials(raw) {
 
   const floor = payload.floor === "solid" ? "solid" : "liquid";
 
-  return { defaultId, floor, list: materials, byId, indexById, idByIndex };
+  return { defaultId, floor, clockCount, list: materials, byId, indexById, idByIndex };
+}
+
+function normalizeWhen(when) {
+  if (!when || typeof when !== "object" || Array.isArray(when)) return {};
+  /** @type {Record<string, boolean | number>} */
+  const out = {};
+  for (const key of ["resting", "onFloor", "sameAbove", "boundedCatchment", "infection"]) {
+    if (when[key] === true || when[key] === false) out[key] = when[key];
+  }
+  const below = Number(when.belowMinNeighbors);
+  if (Number.isFinite(below) && below > 0) out.belowMinNeighbors = Math.floor(below);
+  return out;
+}
+
+function positiveSeconds(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * @param {object} rule
+ * @returns {object | null}
+ */
+function normalizeEffect(rule) {
+  const verb = rule.do;
+  if (!verb || typeof verb !== "object" || Array.isArray(verb)) return null;
+  const base = {
+    name: String(rule.name || "effect"),
+    type: "effect",
+    when: normalizeWhen(rule.when),
+    clockId: -1,
+  };
+  const age = positiveSeconds(verb.age);
+  if (age > 0) {
+    return {
+      ...base,
+      kind: "age",
+      seconds: age,
+      visual: verb.visual === "shrink" ? "shrink" : null,
+      slide: verb.visual === "shrink" && verb.slide === "closestOpen" ? "closestOpen" : null,
+      thenClear: verb.then === "clear",
+    };
+  }
+  if (verb.infect && typeof verb.infect === "object") {
+    const seconds = positiveSeconds(verb.infect.seconds);
+    if (!seconds) return null;
+    return {
+      ...base,
+      kind: "infect",
+      seconds,
+      skipSurface: verb.infect.skipSurface === "liquid" ? "liquid" : null,
+    };
+  }
+  if (verb.absorbSparse && typeof verb.absorbSparse === "object") {
+    const seconds = positiveSeconds(verb.absorbSparse.seconds);
+    const minNeighbors = Math.floor(Number(verb.absorbSparse.minNeighbors) || 0);
+    if (!seconds || minNeighbors <= 0) return null;
+    return { ...base, kind: "absorbSparse", seconds, minNeighbors };
+  }
+  if (verb.dryUnbounded && typeof verb.dryUnbounded === "object") {
+    const seconds = positiveSeconds(verb.dryUnbounded.seconds);
+    if (!seconds) return null;
+    return {
+      ...base,
+      kind: "dryUnbounded",
+      seconds,
+      resetOn: verb.dryUnbounded.resetOn === "gainedTouch" ? "gainedTouch" : null,
+    };
+  }
+  if (verb.cullShuffle && typeof verb.cullShuffle === "object") {
+    const hops = Math.floor(Number(verb.cullShuffle.hops) || 0);
+    const span = Math.floor(Number(verb.cullShuffle.span) || 0);
+    if (hops <= 0) return null;
+    return { ...base, kind: "cullShuffle", hops, span: span > 0 ? span : 2 };
+  }
+  return null;
 }
 
 function normalizeRule(rule) {
@@ -181,6 +271,9 @@ function normalizeRule(rule) {
     return normalizeRule({ diagram: rule });
   }
   if (!rule || typeof rule !== "object") return null;
+  if (rule.do && rule.diagram == null && rule.match == null && rule.type !== "push") {
+    return normalizeEffect(rule);
+  }
 
   if (rule.type === "push") {
     const target = String(rule.target || "").trim();
@@ -260,8 +353,13 @@ function normalizeRule(rule) {
     gainTouch: rule.gainTouch === true,
     /** Like gainTouch but require a strict increase (contract until resting). */
     gainTouchStrict: rule.gainTouchStrict === true,
-    /** Only fire while this grain is under material.minNeighbors (seek friends, then stop). */
-    onlySparse: rule.onlySparse === true,
+    /** Stop this diagram once same-material touches reach this count. */
+    onlySparse: (() => {
+      const n = Number(rule.onlySparse);
+      return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+    })(),
+    /** Prefer the grain's last horizontal facing when set to "flow". */
+    bias: rule.bias === "flow" ? "flow" : null,
     pick,
     /** SpaceTode-style maybe(): probability of attempting this rule (default 1). */
     chance,
@@ -431,8 +529,7 @@ export function tryMaterialRules(grid, x, y, z, matIndex, material, catalog = nu
     if (rule.chance < 1 && Math.random() >= rule.chance) continue;
 
     if (rule.rotations === "xz") {
-      const bias = material.pathBias || 0;
-      const usePath = bias > 0 && Math.random() < bias;
+      const usePath = rule.bias === "flow";
       const prefDx = usePath ? grid.getFlowDx?.(x, y, z) ?? 0 : 0;
       const prefDz = usePath ? grid.getFlowDz?.(x, y, z) ?? 0 : 0;
       const order = preferRotation(prefDx, prefDz);
@@ -503,8 +600,7 @@ function applyPushRule(grid, x, y, z, matIndex, rule, catalog) {
   if (!consumeColumnBudget(grid, x, y, z, matIndex)) return null;
 
   const remain = grid.getBudget?.(x, y, z) ?? 0;
-  const age = grid.getAge?.(x, y, z) ?? 0;
-  const erodeLife = grid.getErodeLife?.(x, y, z) ?? 0;
+  const effectState = readEffectState(grid, x, y, z, catalog);
   const posY = grid.getPosY?.(x, y, z) ?? 0;
   const posX = grid.getPosX?.(x, y, z) ?? 0;
   const posZ = grid.getPosZ?.(x, y, z) ?? 0;
@@ -513,11 +609,10 @@ function applyPushRule(grid, x, y, z, matIndex, rule, catalog) {
   const shuffleOx = grid.getShuffleOriginX?.(x, y, z) ?? 0;
   const shuffleOz = grid.getShuffleOriginZ?.(x, y, z) ?? 0;
   grid.set(x, y, z, 0);
-  clearCellMeta(grid, x, y, z);
+  clearCellMeta(grid, x, y, z, catalog);
   grid.set(x, topSandY, z, matIndex);
   grid.setBudget?.(x, topSandY, z, remain);
-  grid.setAge?.(x, topSandY, z, age);
-  grid.setErodeLife?.(x, topSandY, z, erodeLife);
+  writeEffectState(grid, x, topSandY, z, effectState);
   grid.setPosY?.(x, topSandY, z, posY);
   grid.setPosX?.(x, topSandY, z, posX);
   grid.setPosZ?.(x, topSandY, z, posZ);
@@ -556,6 +651,158 @@ function consumeColumnBudget(grid, x, y, z, matIndex) {
   return false;
 }
 
+const SLIDE_OPEN_RADIUS = 6;
+
+/**
+ * While a shrink slide is active, step one cell toward the closest empty cell
+ * that can hold a cube of the grain's current size.
+ * @returns {CellPos | null}
+ */
+function trySlideClosestOpen(grid, x, y, z, matIndex, material, catalog) {
+  if (!material?.slideOpen || grid.getShrink?.(x, y, z) !== true) return null;
+  const pitch = grid.getPitch?.(x, y, z) ?? 0;
+  const center = grid.cellCenter?.(x, y, z);
+  if (!(pitch > 0) || !center) return null;
+
+  const t = Math.min(1, Math.max(0, grid.getShrinkT?.(x, y, z) ?? 0));
+  const size = Math.max(0.02, 1 - t) * pitch;
+  const flowDx = grid.getFlowDx?.(x, y, z) ?? 0;
+  const flowDz = grid.getFlowDz?.(x, y, z) ?? 0;
+
+  /** @type {{ x: number, y: number, z: number, dist: number, align: number, dx: number, dz: number } | null} */
+  let best = null;
+  for (let dz = -SLIDE_OPEN_RADIUS; dz <= SLIDE_OPEN_RADIUS; dz += 1) {
+    for (let dx = -SLIDE_OPEN_RADIUS; dx <= SLIDE_OPEN_RADIUS; dx += 1) {
+      if (dx === 0 && dz === 0) continue;
+      const nx = x + dx;
+      const nz = z + dz;
+      if (!grid.inBounds(nx, y, nz) || grid.get(nx, y, nz) !== 0) continue;
+      const hole = grid.cellCenter(nx, y, nz);
+      const slot = closestSlotInCell(center, hole, pitch, size);
+      if (!cubeOfSizeFits(grid, nx, y, nz, slot.x, hole.y, slot.z, size, x, y, z)) continue;
+      const dist = Math.hypot(slot.x - center.x, slot.z - center.z);
+      const align =
+        (dx !== 0 && Math.sign(dx) === flowDx ? 1 : 0) +
+        (dz !== 0 && Math.sign(dz) === flowDz ? 1 : 0);
+      const next = { x: nx, y, z: nz, dist, align, dx, dz };
+      if (closerOpenSlot(next, best)) best = next;
+    }
+  }
+  if (!best) return null;
+
+  const sx = Math.sign(best.x - x);
+  const sz = Math.sign(best.z - z);
+  /** @type {{ x: number, z: number, score: number }[]} */
+  const steps = [];
+  if (sx !== 0) steps.push({ x: x + sx, z, score: Math.abs(best.x - x) });
+  if (sz !== 0) steps.push({ x, z: z + sz, score: Math.abs(best.z - z) });
+  steps.sort((a, b) => b.score - a.score);
+  for (const step of steps) {
+    if (!grid.inBounds(step.x, y, step.z) || grid.get(step.x, y, step.z) !== 0) continue;
+    const hole = grid.cellCenter(step.x, y, step.z);
+    const slot = closestSlotInCell(center, hole, pitch, size);
+    if (!cubeOfSizeFits(grid, step.x, y, step.z, slot.x, hole.y, slot.z, size, x, y, z)) continue;
+    transferGrain(grid, x, y, z, step.x, y, step.z, matIndex, catalog);
+    rememberFlowDir(grid, x, y, z, step.x, y, step.z);
+    return { x: step.x, y, z: step.z };
+  }
+  return null;
+}
+
+/**
+ * @param {{ dist: number, align: number, dx: number, dz: number } | null} next
+ * @param {{ dist: number, align: number, dx: number, dz: number } | null} best
+ */
+function closerOpenSlot(next, best) {
+  if (!best) return true;
+  const eps = 1e-4;
+  if (next.dist < best.dist - eps) return true;
+  if (next.dist > best.dist + eps) return false;
+  if (next.align !== best.align) return next.align > best.align;
+  if (next.dx !== best.dx) return next.dx > best.dx;
+  return next.dz > best.dz;
+}
+
+/**
+ * Closest center for a cube of `size` that still sits inside the empty cell.
+ * @param {{ x: number, z: number }} from
+ * @param {{ x: number, y: number, z: number }} cell
+ * @param {number} pitch
+ * @param {number} size
+ */
+function closestSlotInCell(from, cell, pitch, size) {
+  const inset = Math.max(0, (pitch - size) * 0.5);
+  return {
+    x: cell.x + Math.max(-inset, Math.min(inset, from.x - cell.x)),
+    z: cell.z + Math.max(-inset, Math.min(inset, from.z - cell.z)),
+  };
+}
+
+/**
+ * True when a cube of side `size` at this world center misses every other atom.
+ * Neighbors are scanned around the destination cell.
+ */
+function cubeOfSizeFits(grid, cx, cy, cz, wx, wy, wz, size, selfX, selfY, selfZ) {
+  if (!(size > 0)) return false;
+  const half = size * 0.5;
+  const pitch = grid.getPitch?.(cx, cy, cz) || size;
+  const reach = Math.max(2, Math.ceil((half + pitch) / Math.max(pitch, 1e-6)) + 2);
+  const eps = 1e-4;
+  for (let dy = -reach; dy <= reach; dy += 1) {
+    for (let dz = -reach; dz <= reach; dz += 1) {
+      for (let dx = -reach; dx <= reach; dx += 1) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        const nz = cz + dz;
+        if (nx === selfX && ny === selfY && nz === selfZ) continue;
+        if (!grid.inBounds(nx, ny, nz) || grid.get(nx, ny, nz) <= 0) continue;
+        const nCenter = grid.getWorld?.(nx, ny, nz);
+        if (!nCenter) continue;
+        const nHalf = (grid.getExtent?.(nx, ny, nz) || pitch) * 0.5;
+        if (
+          Math.abs(wx - nCenter.x) < half + nHalf - eps &&
+          Math.abs(wy - nCenter.y) < half + nHalf - eps &&
+          Math.abs(wz - nCenter.z) < half + nHalf - eps
+        ) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * Move one grain and its clocks, pose, and shrink onto an empty cell.
+ */
+function transferGrain(grid, x, y, z, toX, toY, toZ, matIndex, catalog) {
+  const budget = grid.getBudget?.(x, y, z) ?? 0;
+  const effectState = readEffectState(grid, x, y, z, catalog);
+  const posY = grid.getPosY?.(x, y, z) ?? 0;
+  const posX = grid.getPosX?.(x, y, z) ?? 0;
+  const posZ = grid.getPosZ?.(x, y, z) ?? 0;
+  const emitSize = grid.getEmitSize?.(x, y, z) ?? 0;
+  const shuffle = grid.getShuffle?.(x, y, z) ?? 0;
+  const shuffleOx = grid.getShuffleOriginX?.(x, y, z) ?? 0;
+  const shuffleOz = grid.getShuffleOriginZ?.(x, y, z) ?? 0;
+  const shrinking = grid.getShrink?.(x, y, z) === true;
+  const shrinkT = grid.getShrinkT?.(x, y, z) ?? 0;
+
+  grid.set(toX, toY, toZ, matIndex);
+  grid.set(x, y, z, 0);
+  clearCellMeta(grid, x, y, z, catalog);
+  grid.setBudget?.(toX, toY, toZ, budget);
+  writeEffectState(grid, toX, toY, toZ, effectState);
+  grid.setPosY?.(toX, toY, toZ, posY);
+  grid.setPosX?.(toX, toY, toZ, posX);
+  grid.setPosZ?.(toX, toY, toZ, posZ);
+  if (emitSize > 0) grid.setEmitSize?.(toX, toY, toZ, emitSize);
+  grid.setShuffle?.(toX, toY, toZ, shuffle);
+  grid.setShuffleOriginX?.(toX, toY, toZ, shuffleOx);
+  grid.setShuffleOriginZ?.(toX, toY, toZ, shuffleOz);
+  grid.setShrink?.(toX, toY, toZ, shrinking, shrinkT);
+}
+
 /**
  * One simulation tick: shuffle occupied cells, apply first matching rule each.
  * @param {GridApi} grid
@@ -582,8 +829,12 @@ export function stepWorld(grid, cells, catalog) {
     const material = id ? catalog.byId.get(id) : null;
     if (!material) continue;
 
-    const result = tryMaterialRules(grid, cell.x, cell.y, cell.z, mat, material, catalog);
-    if (!result.moved || !result.to) continue;
+    let result = tryMaterialRules(grid, cell.x, cell.y, cell.z, mat, material, catalog);
+    if (!result.moved || !result.to) {
+      const slid = trySlideClosestOpen(grid, cell.x, cell.y, cell.z, mat, material, catalog);
+      if (!slid) continue;
+      result = { moved: true, from: { x: cell.x, y: cell.y, z: cell.z }, to: slid, splash: false };
+    }
     moved += 1;
     seen.add(key);
     seen.add(`${result.to.x},${result.to.y},${result.to.z}`);
@@ -693,11 +944,8 @@ function facingIsOpen(grid, x, y, z, rule, dx, dz, matIndex, catalog) {
     const ay = y + 1;
     if (grid.inBounds(x, ay, z) && grid.get(x, ay, z) > 0) return false;
   }
-  if (rule.onlySparse && catalog) {
-    const id = catalog.idByIndex[matIndex];
-    const def = id ? catalog.byId.get(id) : null;
-    const restN = def?.restNeighbors || def?.minNeighbors || 0;
-    if (restN > 0 && countSameTouches(grid, x, y, z, matIndex) >= restN) return false;
+  if (rule.onlySparse > 0 && countSameTouches(grid, x, y, z, matIndex) >= rule.onlySparse) {
+    return false;
   }
 
   /** @type {{ x: number, y: number, z: number } | null} */
@@ -804,11 +1052,8 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
     if (grid.inBounds(x, ay, z) && grid.get(x, ay, z) > 0) return null;
   }
 
-  if (rule.onlySparse && catalog) {
-    const id = catalog.idByIndex[matIndex];
-    const def = id ? catalog.byId.get(id) : null;
-    const restN = def?.restNeighbors || def?.minNeighbors || 0;
-    if (restN > 0 && countSameTouches(grid, x, y, z, matIndex) >= restN) return null;
+  if (rule.onlySparse > 0 && countSameTouches(grid, x, y, z, matIndex) >= rule.onlySparse) {
+    return null;
   }
 
   /** @type {CellPos | null} */
@@ -856,8 +1101,7 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
   const before = [];
   for (const site of sites) before.push(grid.get(site.x, site.y, site.z));
   const budget = grid.getBudget?.(x, y, z) ?? 0;
-  const age = grid.getAge?.(x, y, z) ?? 0;
-  const erodeLife = grid.getErodeLife?.(x, y, z) ?? 0;
+  const effectState = readEffectState(grid, x, y, z, catalog);
   const posY = grid.getPosY?.(x, y, z) ?? 0;
   const posX = grid.getPosX?.(x, y, z) ?? 0;
   const posZ = grid.getPosZ?.(x, y, z) ?? 0;
@@ -865,8 +1109,6 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
   const shuffle = grid.getShuffle?.(x, y, z) ?? 0;
   const shuffleOx = grid.getShuffleOriginX?.(x, y, z) ?? 0;
   const shuffleOz = grid.getShuffleOriginZ?.(x, y, z) ?? 0;
-  const sparseAge = grid.getSparseAge?.(x, y, z) ?? 0;
-  const floorAge = grid.getFloorAge?.(x, y, z) ?? 0;
   const flowDirX = grid.getFlowDx?.(x, y, z) ?? 0;
   const flowDirZ = grid.getFlowDz?.(x, y, z) ?? 0;
 
@@ -883,15 +1125,14 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
       const next = resultValue(outSym, before[idx], matIndex, rule, catalog);
       if (next == null) continue;
       grid.set(wx, wy, wz, next);
-      if (next === 0) clearCellMeta(grid, wx, wy, wz);
+      if (next === 0) clearCellMeta(grid, wx, wy, wz, catalog);
       if (outSym === "@") to = { x: wx, y: wy, z: wz };
     }
   }
   if (to) {
-    clearCellMeta(grid, x, y, z);
+    clearCellMeta(grid, x, y, z, catalog);
     grid.setBudget?.(to.x, to.y, to.z, budget);
-    grid.setAge?.(to.x, to.y, to.z, age);
-    grid.setErodeLife?.(to.x, to.y, to.z, erodeLife);
+    writeEffectState(grid, to.x, to.y, to.z, effectState);
     grid.setPosY?.(to.x, to.y, to.z, posY);
     grid.setPosX?.(to.x, to.y, to.z, posX);
     grid.setPosZ?.(to.x, to.y, to.z, posZ);
@@ -899,8 +1140,6 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
     grid.setShuffle?.(to.x, to.y, to.z, shuffle);
     grid.setShuffleOriginX?.(to.x, to.y, to.z, shuffleOx);
     grid.setShuffleOriginZ?.(to.x, to.y, to.z, shuffleOz);
-    grid.setSparseAge?.(to.x, to.y, to.z, sparseAge);
-    grid.setFloorAge?.(to.x, to.y, to.z, floorAge);
     grid.setFlowDx?.(to.x, to.y, to.z, flowDirX);
     grid.setFlowDz?.(to.x, to.y, to.z, flowDirZ);
     return to;
@@ -978,10 +1217,37 @@ function touchDelta(grid, ox, oy, oz, tx, ty, tz, matIndex) {
   return after - before;
 }
 
-function clearCellMeta(grid, x, y, z) {
+function readEffectState(grid, x, y, z, catalog) {
+  const n = catalog?.clockCount || 0;
+  /** @type {number[]} */
+  const clocks = [];
+  for (let c = 0; c < n; c += 1) clocks.push(grid.getEffectClock?.(x, y, z, c) ?? 0);
+  return {
+    clocks,
+    infection: grid.getInfection?.(x, y, z) ?? 0,
+    infectionAge: grid.getInfectionAge?.(x, y, z) ?? 0,
+  };
+}
+
+function writeEffectState(grid, x, y, z, state) {
+  if (!state) return;
+  for (let c = 0; c < state.clocks.length; c += 1) {
+    grid.setEffectClock?.(x, y, z, c, state.clocks[c]);
+  }
+  grid.setInfection?.(x, y, z, state.infection);
+  grid.setInfectionAge?.(x, y, z, state.infectionAge);
+}
+
+function clearEffectState(grid, x, y, z, catalog) {
+  const n = catalog?.clockCount || 0;
+  for (let c = 0; c < n; c += 1) grid.setEffectClock?.(x, y, z, c, 0);
+  grid.setInfection?.(x, y, z, 0);
+  grid.setInfectionAge?.(x, y, z, 0);
+  grid.setShrink?.(x, y, z, false, 0);
+}
+
+function clearCellMeta(grid, x, y, z, catalog = null) {
   grid.setBudget?.(x, y, z, 0);
-  grid.setAge?.(x, y, z, 0);
-  grid.setErodeLife?.(x, y, z, 0);
   grid.setPosY?.(x, y, z, 0);
   grid.setPosX?.(x, y, z, 0);
   grid.setPosZ?.(x, y, z, 0);
@@ -989,10 +1255,9 @@ function clearCellMeta(grid, x, y, z) {
   grid.setShuffle?.(x, y, z, 0);
   grid.setShuffleOriginX?.(x, y, z, 0);
   grid.setShuffleOriginZ?.(x, y, z, 0);
-  grid.setSparseAge?.(x, y, z, 0);
-  grid.setFloorAge?.(x, y, z, 0);
   grid.setFlowDx?.(x, y, z, 0);
   grid.setFlowDz?.(x, y, z, 0);
+  clearEffectState(grid, x, y, z, catalog);
 }
 
 function namedMaterialIndex(sym, rule, catalog) {
@@ -1019,4 +1284,299 @@ function resultValue(sym, previous, matIndex, rule, catalog) {
   const named = namedMaterialIndex(sym, rule, catalog);
   if (named > 0) return named;
   return null;
+}
+
+const EFFECT_DIRS = [
+  [1, 0, 0],
+  [-1, 0, 0],
+  [0, 1, 0],
+  [0, -1, 0],
+  [0, 0, 1],
+  [0, 0, -1],
+];
+
+function materialByIndex(catalog, matIndex) {
+  if (!catalog || matIndex <= 0) return null;
+  const id = catalog.idByIndex[matIndex];
+  return id ? catalog.byId.get(id) : null;
+}
+
+function whenMatches(when, ctx) {
+  if (!when) return true;
+  if (when.resting != null && ctx.resting !== when.resting) return false;
+  if (when.onFloor != null && ctx.onFloor !== when.onFloor) return false;
+  if (when.sameAbove != null && ctx.sameAbove !== when.sameAbove) return false;
+  if (when.boundedCatchment != null && ctx.boundedCatchment !== when.boundedCatchment) return false;
+  if (when.infection != null && ctx.infection !== when.infection) return false;
+  if (when.belowMinNeighbors != null && !(ctx.sameNeighbors < when.belowMinNeighbors)) return false;
+  return true;
+}
+
+function effectContext(grid, cell, catalog, queries) {
+  const index = cell.i;
+  return {
+    resting: queries?.resting?.(index) === true,
+    onFloor: queries?.onFloor?.(index) === true,
+    sameAbove: queries?.sameAbove?.(index) === true,
+    boundedCatchment: isBoundedCatchment(grid, cell.x, cell.y, cell.z, catalog),
+    sameNeighbors: countSameTouches(grid, cell.x, cell.y, cell.z, cell.mat),
+    infection: (grid.getInfection?.(cell.x, cell.y, cell.z) ?? 0) > 0,
+  };
+}
+
+function isBoundedCatchment(grid, x, y, z, catalog) {
+  if (!catalog) return false;
+  if (y > 0 && grid.inBounds(x, y - 1, z)) {
+    const below = grid.get(x, y - 1, z);
+    if (below > 0 && materialByIndex(catalog, below)?.surface === "solid") return true;
+  }
+  for (const [dx, , dz] of [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+  ]) {
+    const nx = x + dx;
+    const nz = z + dz;
+    if (!grid.inBounds(nx, y, nz)) continue;
+    const nmat = grid.get(nx, y, nz);
+    if (nmat > 0 && materialByIndex(catalog, nmat)?.surface === "solid") return true;
+  }
+  return false;
+}
+
+function hasEmptyFace(grid, x, y, z) {
+  for (const [dx, dy, dz] of EFFECT_DIRS) {
+    const nx = x + dx;
+    const ny = y + dy;
+    const nz = z + dz;
+    if (!grid.inBounds(nx, ny, nz)) continue;
+    if (grid.get(nx, ny, nz) === 0) return true;
+  }
+  return false;
+}
+
+function getClock(grid, x, y, z, channel) {
+  return grid.getEffectClock?.(x, y, z, channel) ?? 0;
+}
+
+function setClock(grid, x, y, z, channel, value) {
+  grid.setEffectClock?.(x, y, z, channel, Math.max(0, Number(value) || 0));
+}
+
+/**
+ * Tag face neighbors from infect effects. Liquids are skipped when the rule says so.
+ * @param {GridApi} grid
+ * @param {{ x: number, y: number, z: number, mat: number }[]} cells
+ * @param {MaterialCatalog} catalog
+ * @returns {boolean}
+ */
+export function applyInfect(grid, cells, catalog) {
+  if (!catalog || !cells?.length) return false;
+  let dirty = false;
+  for (const cell of cells) {
+    if (grid.get(cell.x, cell.y, cell.z) !== cell.mat) continue;
+    const material = materialByIndex(catalog, cell.mat);
+    if (!material?.effects?.length) continue;
+    for (const effect of material.effects) {
+      if (effect.kind !== "infect") continue;
+      if (!whenMatches(effect.when, effectContext(grid, cell, catalog, null))) continue;
+      for (const [dx, dy, dz] of EFFECT_DIRS) {
+        const nx = cell.x + dx;
+        const ny = cell.y + dy;
+        const nz = cell.z + dz;
+        if (!grid.inBounds(nx, ny, nz)) continue;
+        const nmat = grid.get(nx, ny, nz);
+        if (nmat <= 0 || nmat === cell.mat) continue;
+        if ((grid.getInfection?.(nx, ny, nz) ?? 0) > 0) continue;
+        const neighbor = materialByIndex(catalog, nmat);
+        if (effect.skipSurface && neighbor?.surface === effect.skipSurface) continue;
+        grid.setInfection?.(nx, ny, nz, effect.seconds);
+        dirty = true;
+      }
+    }
+  }
+  return dirty;
+}
+
+/**
+ * Shuffle cull and dry-clock reset from the diagram move list.
+ * @param {GridApi} grid
+ * @param {{ from: CellPos, to: CellPos, mat: number }[]} moves
+ * @param {MaterialCatalog} catalog
+ * @returns {boolean}
+ */
+export function applyPostMoves(grid, moves, catalog) {
+  if (!catalog || !moves?.length) return false;
+  let culled = false;
+  for (const move of moves) {
+    if (grid.get(move.to.x, move.to.y, move.to.z) !== move.mat) continue;
+    const material = materialByIndex(catalog, move.mat);
+    if (!material?.effects?.length) continue;
+    for (const effect of material.effects) {
+      if (effect.kind === "cullShuffle") {
+        if (move.to.y < move.from.y) {
+          grid.setShuffle?.(move.to.x, move.to.y, move.to.z, 0);
+          grid.setShuffleOriginX?.(move.to.x, move.to.y, move.to.z, 0);
+          grid.setShuffleOriginZ?.(move.to.x, move.to.y, move.to.z, 0);
+        } else if (move.to.y !== move.from.y) {
+          grid.setShuffle?.(move.to.x, move.to.y, move.to.z, 0);
+        } else {
+          let count = grid.getShuffle?.(move.to.x, move.to.y, move.to.z) ?? 0;
+          let ox = grid.getShuffleOriginX?.(move.to.x, move.to.y, move.to.z) ?? 0;
+          let oz = grid.getShuffleOriginZ?.(move.to.x, move.to.y, move.to.z) ?? 0;
+          if (count <= 0) {
+            ox = move.from.x;
+            oz = move.from.z;
+            count = 0;
+          }
+          count += 1;
+          if (count >= effect.hops) {
+            const span = Math.abs(move.to.x - ox) + Math.abs(move.to.z - oz);
+            if (span <= effect.span) {
+              grid.set(move.to.x, move.to.y, move.to.z, 0);
+              clearCellMeta(grid, move.to.x, move.to.y, move.to.z, catalog);
+              culled = true;
+              break;
+            }
+            ox = move.to.x;
+            oz = move.to.z;
+            count = 1;
+          }
+          grid.setShuffle?.(move.to.x, move.to.y, move.to.z, count);
+          grid.setShuffleOriginX?.(move.to.x, move.to.y, move.to.z, ox);
+          grid.setShuffleOriginZ?.(move.to.x, move.to.y, move.to.z, oz);
+        }
+      } else if (effect.kind === "dryUnbounded" && effect.resetOn === "gainedTouch") {
+        const before = countSameTouches(grid, move.from.x, move.from.y, move.from.z, move.mat);
+        const after = countSameTouches(grid, move.to.x, move.to.y, move.to.z, move.mat);
+        if (after > before) {
+          setClock(grid, move.to.x, move.to.y, move.to.z, effect.clockId, 0);
+          for (const [dx, dy, dz] of EFFECT_DIRS) {
+            const nx = move.to.x + dx;
+            const ny = move.to.y + dy;
+            const nz = move.to.z + dz;
+            if (!grid.inBounds(nx, ny, nz)) continue;
+            if (grid.get(nx, ny, nz) === move.mat) setClock(grid, nx, ny, nz, effect.clockId, 0);
+          }
+        }
+      }
+    }
+  }
+  return culled;
+}
+
+/**
+ * Tick age, sparse absorb, and unbounded drying. Writes the shrink flag.
+ * @param {GridApi} grid
+ * @param {{ x: number, y: number, z: number, mat: number, i?: number }[]} cells
+ * @param {MaterialCatalog} catalog
+ * @param {{ resting?: (i: number) => boolean, onFloor?: (i: number) => boolean, sameAbove?: (i: number) => boolean }} queries
+ * @param {number} dt
+ * @returns {boolean}
+ */
+export function tickEffects(grid, cells, catalog, queries, dt) {
+  if (!catalog || !(dt > 0) || !cells?.length) return false;
+  let dirty = false;
+  /** @type {{ x: number, y: number, z: number }[]} */
+  const doomed = [];
+
+  for (const cell of cells) {
+    if (grid.get(cell.x, cell.y, cell.z) !== cell.mat) continue;
+    const material = materialByIndex(catalog, cell.mat);
+    const ctx = effectContext(grid, cell, catalog, queries);
+    let matchedAge = false;
+    let shrink = false;
+    let shrinkT = 0;
+    const infection = grid.getInfection?.(cell.x, cell.y, cell.z) ?? 0;
+
+    for (const effect of material?.effects || []) {
+      if (effect.kind === "age") {
+        if (!whenMatches(effect.when, ctx)) {
+          if (getClock(grid, cell.x, cell.y, cell.z, effect.clockId) > 0) {
+            setClock(grid, cell.x, cell.y, cell.z, effect.clockId, 0);
+            dirty = true;
+          }
+          continue;
+        }
+        matchedAge = true;
+        let clock = getClock(grid, cell.x, cell.y, cell.z, effect.clockId) + dt;
+        let limit = effect.seconds;
+        if (infection > 0) limit = Math.min(limit, infection);
+        if (effect.thenClear && clock >= limit) {
+          doomed.push(cell);
+          dirty = true;
+          continue;
+        }
+        setClock(grid, cell.x, cell.y, cell.z, effect.clockId, clock);
+        if (effect.visual === "shrink") {
+          shrink = true;
+          shrinkT = Math.max(shrinkT, limit > 0 ? Math.min(1, clock / limit) : 0);
+          dirty = true;
+        }
+      } else if (effect.kind === "absorbSparse") {
+        if (!whenMatches(effect.when, ctx)) {
+          if (getClock(grid, cell.x, cell.y, cell.z, effect.clockId) > 0) {
+            setClock(grid, cell.x, cell.y, cell.z, effect.clockId, 0);
+          }
+          continue;
+        }
+        if (ctx.sameNeighbors < effect.minNeighbors) {
+          const onOpenFloor = catalog.floor === "liquid" && cell.y === 0;
+          if (!onOpenFloor && hasEmptyFace(grid, cell.x, cell.y, cell.z)) {
+            if (getClock(grid, cell.x, cell.y, cell.z, effect.clockId) > 0) {
+              setClock(grid, cell.x, cell.y, cell.z, effect.clockId, 0);
+            }
+          } else {
+            const clock = getClock(grid, cell.x, cell.y, cell.z, effect.clockId) + dt;
+            if (clock >= effect.seconds) doomed.push(cell);
+            else setClock(grid, cell.x, cell.y, cell.z, effect.clockId, clock);
+            dirty = true;
+          }
+        } else if (getClock(grid, cell.x, cell.y, cell.z, effect.clockId) > 0) {
+          setClock(grid, cell.x, cell.y, cell.z, effect.clockId, 0);
+        }
+      } else if (effect.kind === "dryUnbounded") {
+        if (!whenMatches(effect.when, ctx) || ctx.boundedCatchment) {
+          if (getClock(grid, cell.x, cell.y, cell.z, effect.clockId) > 0) {
+            setClock(grid, cell.x, cell.y, cell.z, effect.clockId, 0);
+            dirty = true;
+          }
+          continue;
+        }
+        const clock = getClock(grid, cell.x, cell.y, cell.z, effect.clockId) + dt;
+        if (clock >= effect.seconds) {
+          doomed.push(cell);
+          dirty = true;
+        } else {
+          setClock(grid, cell.x, cell.y, cell.z, effect.clockId, clock);
+        }
+      }
+    }
+
+    if (!matchedAge && infection > 0) {
+      const age = (grid.getInfectionAge?.(cell.x, cell.y, cell.z) ?? 0) + dt;
+      if (age >= infection) {
+        doomed.push(cell);
+        dirty = true;
+      } else {
+        grid.setInfectionAge?.(cell.x, cell.y, cell.z, age);
+        shrink = true;
+        shrinkT = Math.max(shrinkT, infection > 0 ? Math.min(1, age / infection) : 0);
+        dirty = true;
+      }
+    } else if ((grid.getInfectionAge?.(cell.x, cell.y, cell.z) ?? 0) > 0) {
+      grid.setInfectionAge?.(cell.x, cell.y, cell.z, 0);
+    }
+
+    grid.setShrink?.(cell.x, cell.y, cell.z, shrink, shrink ? shrinkT : 0);
+  }
+
+  for (const cell of doomed) {
+    if (grid.get(cell.x, cell.y, cell.z) <= 0) continue;
+    grid.set(cell.x, cell.y, cell.z, 0);
+    clearCellMeta(grid, cell.x, cell.y, cell.z, catalog);
+    dirty = true;
+  }
+  return dirty;
 }

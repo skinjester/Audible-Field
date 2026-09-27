@@ -7,7 +7,6 @@
       "label": "Block",
       "color": "#c4624e",
       "surface": "solid",
-      "lifetime": 3.5,
       "rules": [
         {
           "name": "fall",
@@ -15,6 +14,41 @@
             "@ => _",
             "_    @"
           ]
+        },
+        {
+          "name": "lone-dissolve",
+          "when": { "resting": true, "onFloor": true, "sameAbove": false },
+          "do": { "age": 3.5, "visual": "shrink", "then": "clear" }
+        },
+        {
+          "name": "crush-support",
+          "when": { "resting": true, "onFloor": true, "sameAbove": true },
+          "do": { "age": 3.5, "then": "clear" }
+        }
+      ]
+    },
+    {
+      "id": "block-exp",
+      "label": "Block Exp",
+      "color": "#3d7ec4",
+      "surface": "solid",
+      "rules": [
+        {
+          "name": "fall",
+          "diagram": [
+            "@ => _",
+            "_    @"
+          ]
+        },
+        {
+          "name": "lone-dissolve",
+          "when": { "resting": true, "onFloor": true, "sameAbove": false },
+          "do": { "age": 3.5, "visual": "shrink", "slide": "closestOpen", "then": "clear" }
+        },
+        {
+          "name": "crush-support",
+          "when": { "resting": true, "onFloor": true, "sameAbove": true },
+          "do": { "age": 3.5, "then": "clear" }
         }
       ]
     }
@@ -48,8 +82,6 @@
       "label": "Erode",
       "color": "#7a9e6a",
       "surface": "solid",
-      "lifetime": 10,
-      "erode": 6,
       "rules": [
         {
           "name": "fall",
@@ -65,6 +97,14 @@
             "@. => _.",
             "x_    x@"
           ]
+        },
+        {
+          "name": "dissolve",
+          "do": { "age": 10, "visual": "shrink", "then": "clear" }
+        },
+        {
+          "name": "infect",
+          "do": { "infect": { "seconds": 6, "skipSurface": "liquid" } }
         }
       ]
     },
@@ -106,7 +146,6 @@
       "color": "#add8e6",
       "opacity": 0.35,
       "surface": "liquid",
-      "floorAbsorb": 5,
       "rules": [
         {
           "name": "fall",
@@ -137,6 +176,10 @@
           "name": "flow",
           "for": "xz.rotations",
           "diagram": ["@_ => _@"]
+        },
+        {
+          "name": "dry",
+          "do": { "dryUnbounded": { "seconds": 5, "resetOn": "gainedTouch" } }
         }
       ]
     }
