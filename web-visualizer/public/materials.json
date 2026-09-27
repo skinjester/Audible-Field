@@ -26,7 +26,9 @@
           "do": { "age": 3.5, "then": "clear" }
         }
       ]
-    },
+    }
+    /*
+    ,
     {
       "id": "block-exp",
       "label": "Block Exp",
@@ -43,7 +45,7 @@
         {
           "name": "lone-dissolve",
           "when": { "resting": true, "onFloor": true, "sameAbove": false },
-          "do": { "age": 3.5, "visual": "shrink", "slide": "closestOpen", "then": "clear" }
+          "do": { "age": 3.5, "visual": "shrink", "then": "clear" }
         },
         {
           "name": "crush-support",
@@ -52,6 +54,7 @@
         }
       ]
     }
+    */
     /*
     ,
     {

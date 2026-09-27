@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { controller, mix } from "./mixer-core.js?v=66";
-import { applyInfect, applyPostMoves, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=40";
-import { fallingBindings, fallingInput } from "./falling-input.js?v=4";
+import { applyInfect, applyPostMoves, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=50";
+import { fallingBindings, fallingInput } from "./falling-input.js?v=6";
+import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
  * Fixed atom pitch. Smaller than the old default so the playfield holds a
@@ -83,6 +84,9 @@ let atomsEl = null;
 let trisEl = null;
 let fpsFrames = 0;
 let fpsLastAt = 0;
+let hudFpsText = "";
+let hudAtomsText = "";
+let hudTrisText = "";
 
 let running = false;
 let rafId = 0;
@@ -151,7 +155,30 @@ const instances = new Map();
 /** In-flight atoms — same materials, but without the projected target. */
 /** @type {Map<number, THREE.InstancedMesh>} */
 const fallingInstances = new Map();
-/** @type {Map<number, THREE.MeshStandardMaterial>} */
+/** Column lists reused across flags, gravity, and mesh classify. Key is z * GRID_MAX + x. */
+/** @type {Map<number, number[]>} */
+const columns = new Map();
+/** Keys with at least one atom in the latest buildColumns(). */
+const columnKeys = [];
+/** Landed instance slot per cell, or -1. Stable so resting cubes are not reuploaded. */
+/** @type {Int32Array | null} */
+let landedSlot = null;
+/** Material that owns landedSlot[i]. */
+/** @type {Uint8Array | null} */
+let landedMatOf = null;
+/** @type {Map<number, number[]>} material → cell indices in landed instance order */
+const landedOrder = new Map();
+/** @type {Map<number, number[]>} material → x,y,z triples for the falling draw */
+const fallingBuckets = new Map();
+/** @type {Uint32Array | null} */
+let xformStamp = null;
+let xformGen = 1;
+/** @type {Uint32Array | null} */
+let classStamp = null;
+let classGen = 1;
+/** Cells drawn with a shrink scale, so the next sync can restore them when shrink ends. */
+const wasScaled = new Set();
+/** @type {Map<number, THREE.MeshPhongMaterial>} */
 const matCache = new Map();
 /** @type {{ mesh: THREE.Mesh, age: number }[]} */
 let splashes = [];
@@ -186,6 +213,10 @@ const pointerNdc = new THREE.Vector2();
 const emitterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const hitPoint = new THREE.Vector3();
 const scratchPos = new THREE.Vector3();
+/** @type {ReturnType<typeof createBlockExpSurface> | null} */
+let blockExpSurface = null;
+const blockExpPoints = [];
+const blockExpHalf = [];
 const scratchScale = new THREE.Vector3(1, 1, 1);
 const scratchQuat = new THREE.Quaternion();
 const scratchMat4 = new THREE.Matrix4();
@@ -384,6 +415,7 @@ function setCell(x, y, z, value) {
   if (!cells || !inBounds(x, y, z)) return;
   const i = idx(x, y, z);
   const prev = cells[i];
+  if (prev !== value && landedSlot && landedSlot[i] >= 0) removeLanded(i);
   cells[i] = value;
   if (!value) {
     if (budgets) budgets[i] = 0;
@@ -481,6 +513,21 @@ function getShrinkT(x, y, z) {
   return shrinkT[idx(x, y, z)] || 0;
 }
 
+function getResting(x, y, z) {
+  if (!restingFlags || !inBounds(x, y, z)) return false;
+  return restingFlags[idx(x, y, z)] === 1;
+}
+
+function getOnFloor(x, y, z) {
+  if (!onFloorFlags || !inBounds(x, y, z)) return false;
+  return onFloorFlags[idx(x, y, z)] === 1;
+}
+
+function getSameAbove(x, y, z) {
+  if (!sameAboveFlags || !inBounds(x, y, z)) return false;
+  return sameAboveFlags[idx(x, y, z)] === 1;
+}
+
 function getExtent(x, y, z) {
   if (!inBounds(x, y, z)) return 0;
   return atomExtent(x, y, z, getCell(x, y, z));
@@ -523,7 +570,9 @@ function getPosY(x, y, z) {
 
 function setPosY(x, y, z, value) {
   if (!posY || !inBounds(x, y, z)) return;
-  posY[idx(x, y, z)] = Number.isFinite(value) ? value : 0;
+  const i = idx(x, y, z);
+  posY[i] = Number.isFinite(value) ? value : 0;
+  markXform(i);
 }
 
 function getPosX(x, y, z) {
@@ -533,7 +582,9 @@ function getPosX(x, y, z) {
 
 function setPosX(x, y, z, value) {
   if (!posX || !inBounds(x, y, z)) return;
-  posX[idx(x, y, z)] = Number.isFinite(value) ? value : 0;
+  const i = idx(x, y, z);
+  posX[i] = Number.isFinite(value) ? value : 0;
+  markXform(i);
 }
 
 function getPosZ(x, y, z) {
@@ -543,7 +594,9 @@ function getPosZ(x, y, z) {
 
 function setPosZ(x, y, z, value) {
   if (!posZ || !inBounds(x, y, z)) return;
-  posZ[idx(x, y, z)] = Number.isFinite(value) ? value : 0;
+  const i = idx(x, y, z);
+  posZ[i] = Number.isFinite(value) ? value : 0;
+  markXform(i);
 }
 
 function getCellEmitSize(x, y, z) {
@@ -622,6 +675,9 @@ const gridApi = {
   setShrink,
   getShrink,
   getShrinkT,
+  getResting,
+  getOnFloor,
+  getSameAbove,
   getExtent,
   getPitch,
   cellCenter,
@@ -691,6 +747,7 @@ function rebuildAtomGeometry() {
     surface.remove(mesh);
   }
   fallingInstances.clear();
+  resetLandedTracking();
   reconcileMeshes();
 }
 
@@ -853,8 +910,7 @@ function resizeCanvas() {
   const { width, height } = measureWrap();
   if (width < 32 || height < 32) return false;
 
-  const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
-  renderer.setPixelRatio(pixelRatio);
+  renderer.setPixelRatio(1);
   renderer.setSize(width, height, false);
   canvas.style.width = `${width}px`;
   canvas.style.height = `${height}px`;
@@ -950,10 +1006,10 @@ function materialMeshMat(matIndex, receiveTarget = true) {
   const def = id ? catalog.byId.get(id) : null;
   const opacity = def?.opacity ?? 1;
   const transparent = opacity < 1;
-  mat = new THREE.MeshStandardMaterial({
+  mat = new THREE.MeshPhongMaterial({
     color: new THREE.Color(materialColor(matIndex)),
-    roughness: transparent ? 0.28 : 0.76,
-    metalness: transparent ? 0.08 : 0.02,
+    specular: 0x222222,
+    shininess: 18,
     transparent,
     opacity,
     depthWrite: !transparent,
@@ -1274,16 +1330,28 @@ function collectOccupied() {
   return list;
 }
 
-/** Cell indices whose center has reached the settled column. Falling atoms are omitted. */
-function collectLanded() {
-  /** @type {Set<number>} */
-  const landed = new Set();
-  if (!cells || !posY || occupied.size === 0) return landed;
+function markXform(i) {
+  if (xformStamp) xformStamp[i] = xformGen;
+}
 
-  /** @type {Map<number, number[]>} */
-  const columns = new Map();
+function bumpXformGen() {
+  xformGen = (xformGen + 1) >>> 0;
+  if (xformGen === 0) {
+    xformStamp?.fill(0);
+    xformGen = 1;
+  }
+}
+
+/** Group occupied cells by column and sort each column bottom-to-top once. */
+function buildColumns() {
+  columnKeys.length = 0;
+  for (const list of columns.values()) list.length = 0;
+  if (!cells || occupied.size === 0) return;
   for (const i of occupied) {
-    if (cells[i] <= 0) continue;
+    if (cells[i] <= 0) {
+      occupied.delete(i);
+      continue;
+    }
     const x = i % GRID_MAX;
     const rest = (i / GRID_MAX) | 0;
     const z = rest % GRID_MAX;
@@ -1293,26 +1361,13 @@ function collectLanded() {
       list = [];
       columns.set(key, list);
     }
+    if (list.length === 0) columnKeys.push(key);
     list.push(i);
   }
-
-  for (const list of columns.values()) {
+  for (let k = 0; k < columnKeys.length; k += 1) {
+    const list = columns.get(columnKeys[k]);
     list.sort((a, b) => (posY[a] || 0) - (posY[b] || 0) || a - b);
-    let floorTop = 0;
-    for (const i of list) {
-      const mat = cells[i];
-      const x = i % GRID_MAX;
-      const rest = (i / GRID_MAX) | 0;
-      const z = rest % GRID_MAX;
-      const y = (rest / GRID_MAX) | 0;
-      const size = atomExtent(x, y, z, mat);
-      const restCenter = floorTop + size * 0.5;
-      const yCenter = posY[i] > 0 ? posY[i] : restCenter;
-      if (yCenter <= restCenter + 1e-3) landed.add(i);
-      floorTop += size;
-    }
   }
-  return landed;
 }
 
 function ensureInstanced(matIndex, count, receiveTarget) {
@@ -1320,16 +1375,26 @@ function ensureInstanced(matIndex, count, receiveTarget) {
   let mesh = map.get(matIndex);
   const capacity = mesh ? mesh.instanceMatrix.count : 0;
   if (!mesh || capacity < count) {
-    if (mesh) {
-      surface?.remove(mesh);
-    }
     const nextCap = Math.max(count, capacity * 2 || 4096);
-    mesh = new THREE.InstancedMesh(blockGeo, materialMeshMat(matIndex, receiveTarget), nextCap);
-    mesh.frustumCulled = false;
-    mesh.castShadow = false;
-    mesh.receiveShadow = false;
-    surface.add(mesh);
-    map.set(matIndex, mesh);
+    const next = new THREE.InstancedMesh(blockGeo, materialMeshMat(matIndex, receiveTarget), nextCap);
+    next.frustumCulled = false;
+    next.castShadow = false;
+    next.receiveShadow = false;
+    if (mesh) {
+      const keep = mesh.count;
+      for (let s = 0; s < keep; s += 1) {
+        mesh.getMatrixAt(s, scratchMat4);
+        next.setMatrixAt(s, scratchMat4);
+      }
+      next.count = keep;
+      next.instanceMatrix.needsUpdate = true;
+      surface?.remove(mesh);
+    } else {
+      next.count = 0;
+    }
+    surface.add(next);
+    map.set(matIndex, next);
+    mesh = next;
   }
   return mesh;
 }
@@ -1360,45 +1425,198 @@ function fillInstanced(matIndex, coords, receiveTarget) {
   mesh.instanceMatrix.needsUpdate = true;
 }
 
-function reconcileMeshes() {
-  if (!surface || !blockGeo) return;
-
-  /** @type {Map<number, number[]>} */
-  const landedByMat = new Map();
-  /** @type {Map<number, number[]>} */
-  const fallingByMat = new Map();
-  const landed = collectLanded();
-
-  for (const i of occupied) {
-    const mat = cells[i];
-    if (mat <= 0) continue;
-    const x = i % GRID_MAX;
-    const rest = (i / GRID_MAX) | 0;
-    const z = rest % GRID_MAX;
-    const y = (rest / GRID_MAX) | 0;
-    const map = landed.has(i) ? landedByMat : fallingByMat;
-    let coords = map.get(mat);
-    if (!coords) {
-      coords = [];
-      map.set(mat, coords);
+function resetLandedTracking() {
+  wasScaled.clear();
+  for (const order of landedOrder.values()) {
+    if (landedSlot) {
+      for (const i of order) {
+        landedSlot[i] = -1;
+        if (landedMatOf) landedMatOf[i] = 0;
+      }
     }
-    coords.push(x, y, z);
+    order.length = 0;
   }
+}
 
-  for (const [mat, mesh] of instances) {
-    if (landedByMat.has(mat)) continue;
-    mesh.count = 0;
+function writeInstance(mesh, slot, i, mat) {
+  const { x, y, z } = decodeCell(i);
+  const scale = cellScale(x, y, z, mat) * cellAtomSize(i);
+  cellWorld(x, y, z, scratchPos, scale);
+  scratchScale.set(scale, scale, scale);
+  scratchMat4.compose(scratchPos, scratchQuat, scratchScale);
+  mesh.setMatrixAt(slot, scratchMat4);
+}
+
+function landedOrderFor(mat) {
+  let order = landedOrder.get(mat);
+  if (!order) {
+    order = [];
+    landedOrder.set(mat, order);
+  }
+  return order;
+}
+
+function addLanded(i, mat) {
+  const order = landedOrderFor(mat);
+  const slot = order.length;
+  order.push(i);
+  landedSlot[i] = slot;
+  landedMatOf[i] = mat;
+  const mesh = ensureInstanced(mat, slot + 1, true);
+  writeInstance(mesh, slot, i, mat);
+  mesh.count = order.length;
+  mesh.instanceMatrix.needsUpdate = true;
+}
+
+function removeLanded(i) {
+  if (!landedSlot || !landedMatOf || landedSlot[i] < 0) return;
+  const mat = landedMatOf[i];
+  const order = landedOrder.get(mat);
+  const slot = landedSlot[i];
+  if (!order || slot >= order.length || order[slot] !== i) {
+    landedSlot[i] = -1;
+    landedMatOf[i] = 0;
+    return;
+  }
+  const mesh = instances.get(mat);
+  const last = order.length - 1;
+  if (slot !== last) {
+    const moved = order[last];
+    order[slot] = moved;
+    landedSlot[moved] = slot;
+    if (mesh) writeInstance(mesh, slot, moved, mat);
+  }
+  order.pop();
+  landedSlot[i] = -1;
+  landedMatOf[i] = 0;
+  if (mesh) {
+    mesh.count = order.length;
     mesh.instanceMatrix.needsUpdate = true;
+  }
+}
+
+function refreshLanded(i, mat) {
+  const slot = landedSlot[i];
+  if (slot < 0) return;
+  const mesh = instances.get(mat);
+  if (!mesh) return;
+  writeInstance(mesh, slot, i, mat);
+  mesh.instanceMatrix.needsUpdate = true;
+}
+
+function fallingBucket(mat) {
+  let coords = fallingBuckets.get(mat);
+  if (!coords) {
+    coords = [];
+    fallingBuckets.set(mat, coords);
+  }
+  return coords;
+}
+
+function writeFallingMeshes() {
+  /** @type {Set<number>} */
+  const used = new Set();
+  for (const [mat, coords] of fallingBuckets) {
+    if (coords.length === 0) continue;
+    used.add(mat);
+    fillInstanced(mat, coords, false);
   }
   for (const [mat, mesh] of fallingInstances) {
-    if (fallingByMat.has(mat)) continue;
+    if (used.has(mat) || mesh.count === 0) continue;
     mesh.count = 0;
     mesh.instanceMatrix.needsUpdate = true;
   }
+}
 
-  for (const [mat, coords] of landedByMat) fillInstanced(mat, coords, true);
-  for (const [mat, coords] of fallingByMat) fillInstanced(mat, coords, false);
+/**
+ * Upload falling atoms every call. Landed slots change only when a cell
+ * lands, leaves, or its transform/scale was marked this frame.
+ * @param {boolean} resize
+ */
+function writeMeshesFromColumns(resize) {
+  if (!surface || !blockGeo || !landedSlot || !classStamp || !landedMatOf) return;
+
+  if (resize) {
+    for (const i of wasScaled) markXform(i);
+    wasScaled.clear();
+    for (const i of occupied) {
+      if (shrinkFlags?.[i] === 1) {
+        markXform(i);
+        wasScaled.add(i);
+      }
+    }
+  }
+
+  classGen = (classGen + 1) >>> 0;
+  if (classGen === 0) {
+    classStamp.fill(0);
+    classGen = 1;
+  }
+
+  for (const coords of fallingBuckets.values()) coords.length = 0;
+
+  for (let k = 0; k < columnKeys.length; k += 1) {
+    const list = columns.get(columnKeys[k]);
+    let floorTop = 0;
+    for (let n = 0; n < list.length; n += 1) {
+      const i = list[n];
+      if (cells[i] <= 0) continue;
+      const mat = cells[i];
+      const { x, y, z } = decodeCell(i);
+      const size = atomExtent(x, y, z, mat);
+      const restCenter = floorTop + size * 0.5;
+      const yCenter = posY[i] > 0 ? posY[i] : restCenter;
+      const landed = yCenter <= restCenter + 1e-3;
+      floorTop += size;
+      if (catalog?.idByIndex[mat] === "block-exp") continue;
+      if (landed) {
+        classStamp[i] = classGen;
+        if (landedSlot[i] >= 0 && landedMatOf[i] !== mat) removeLanded(i);
+        if (landedSlot[i] < 0) addLanded(i, mat);
+        else if (xformStamp?.[i] === xformGen) refreshLanded(i, mat);
+      } else {
+        fallingBucket(mat).push(x, y, z);
+      }
+    }
+  }
+
+  for (const order of landedOrder.values()) {
+    for (let s = 0; s < order.length; ) {
+      const i = order[s];
+      if (classStamp[i] === classGen) {
+        s += 1;
+        continue;
+      }
+      removeLanded(i);
+    }
+  }
+
+  writeFallingMeshes();
+  syncBlockExpSurface();
   syncEmitter();
+}
+
+function syncBlockExpSurface() {
+  if (!surface) return;
+  if (!blockExpSurface) blockExpSurface = createBlockExpSurface();
+  const mat = catalog?.indexById.get("block-exp") || 0;
+  blockExpPoints.length = 0;
+  blockExpHalf.length = 0;
+  if (mat > 0 && cells) {
+    for (const i of occupied) {
+      if (cells[i] !== mat) continue;
+      const { x, y, z } = decodeCell(i);
+      cellWorld(x, y, z, scratchPos);
+      blockExpPoints.push(scratchPos.x, scratchPos.y, scratchPos.z);
+      blockExpHalf.push(atomExtent(x, y, z) * 0.5);
+    }
+  }
+  blockExpSurface.update(surface, blockExpPoints, mat > 0 ? materialColor(mat) : "#3d7ec4", blockExpHalf);
+}
+
+function reconcileMeshes() {
+  buildColumns();
+  writeMeshesFromColumns(false);
 }
 
 const columnQueries = {
@@ -1420,24 +1638,8 @@ function rebuildColumnFlags() {
   if (sameAboveFlags) sameAboveFlags.fill(0);
   if (!cells || !posY || !restingFlags || occupied.size === 0) return;
 
-  /** @type {Map<number, number[]>} */
-  const columns = new Map();
-  for (const i of occupied) {
-    if (cells[i] <= 0) continue;
-    const x = i % GRID_MAX;
-    const rest = (i / GRID_MAX) | 0;
-    const z = rest % GRID_MAX;
-    const key = z * GRID_MAX + x;
-    let list = columns.get(key);
-    if (!list) {
-      list = [];
-      columns.set(key, list);
-    }
-    list.push(i);
-  }
-
-  for (const list of columns.values()) {
-    list.sort((a, b) => (posY[a] || 0) - (posY[b] || 0) || a - b);
+  for (let c = 0; c < columnKeys.length; c += 1) {
+    const list = columns.get(columnKeys[c]);
     let floorTop = 0;
     for (let n = 0; n < list.length; n += 1) {
       const i = list[n];
@@ -1471,33 +1673,11 @@ function rebuildColumnFlags() {
 function settleGravity(dt) {
   if (!cells || !posY || dt <= 0 || occupied.size === 0) return false;
 
-  /** @type {Map<number, number[]>} */
-  const columns = new Map();
-  for (const i of occupied) {
-    if (cells[i] <= 0) continue;
-    const x = i % GRID_MAX;
-    const rest = (i / GRID_MAX) | 0;
-    const z = rest % GRID_MAX;
-    const key = z * GRID_MAX + x;
-    let list = columns.get(key);
-    if (!list) {
-      list = [];
-      columns.set(key, list);
-    }
-    list.push(i);
-  }
-
   let moved = false;
   const fall = GRAVITY * dt;
 
-  for (const list of columns.values()) {
-    list.sort((a, b) => {
-      const ay = posY[a] || 0;
-      const by = posY[b] || 0;
-      if (ay !== by) return ay - by;
-      return a - b;
-    });
-
+  for (let c = 0; c < columnKeys.length; c += 1) {
+    const list = columns.get(columnKeys[c]);
     let floorTop = 0;
     for (const i of list) {
       const mat = cells[i];
@@ -1519,7 +1699,10 @@ function settleGravity(dt) {
         yCenter = restCenter;
       }
 
-      if (Math.abs(posY[i] - yCenter) > 1e-5) moved = true;
+      if (Math.abs(posY[i] - yCenter) > 1e-5) {
+        moved = true;
+        markXform(i);
+      }
       posY[i] = yCenter;
       floorTop = yCenter + size * 0.5;
     }
@@ -1561,6 +1744,7 @@ function settleLateral(dt) {
         posX[i] = tx;
         posZ[i] = tz;
         moved = true;
+        markXform(i);
       }
       continue;
     }
@@ -1575,6 +1759,7 @@ function settleLateral(dt) {
       posZ[i] = pz + dz * s;
     }
     moved = true;
+    markXform(i);
   }
   return moved;
 }
@@ -1665,6 +1850,7 @@ function packStickTogether() {
       const nz = cZ + (m.wz - cZ) * sAvg;
       if (Math.abs(posX[m.i] - nx) > 1e-5 || Math.abs(posZ[m.i] - nz) > 1e-5) {
         moved = true;
+        markXform(m.i);
       }
       posX[m.i] = nx;
       posZ[m.i] = nz;
@@ -1693,6 +1879,8 @@ function packStickTogether() {
               posX[m.i] += gap * 0.5;
               posX[ni] -= gap * 0.5;
               moved = true;
+              markXform(m.i);
+              markXform(ni);
             }
           } else {
             const sep = posZ[ni] - posZ[m.i];
@@ -1701,6 +1889,8 @@ function packStickTogether() {
               posZ[m.i] += gap * 0.5;
               posZ[ni] -= gap * 0.5;
               moved = true;
+              markXform(m.i);
+              markXform(ni);
             }
           }
         }
@@ -1731,6 +1921,7 @@ function runRules() {
 }
 
 function step(dt) {
+  bumpXformGen();
   applyInput(dt);
 
   let infected = applyInfect(gridApi, collectOccupied(), catalog);
@@ -1745,14 +1936,21 @@ function step(dt) {
 
   infected = applyInfect(gridApi, collectOccupied(), catalog) || infected;
 
+  buildColumns();
+  let columnOccupancy = occupied.size;
   rebuildColumnFlags();
   const effected = tickEffects(gridApi, collectOccupied(), catalog, columnQueries, dt);
+  if (occupied.size !== columnOccupancy) {
+    buildColumns();
+    columnOccupancy = occupied.size;
+  }
   const settled = settleGravity(dt);
   const lateral = settleLateral(dt);
   const packed = packStickTogether();
   const culled = consumeOutOfBounds();
+  if (occupied.size !== columnOccupancy) buildColumns();
   if (infected || effected || ruled || settled || lateral || packed || culled) {
-    reconcileMeshes();
+    writeMeshesFromColumns(effected);
   }
 
   for (let i = splashes.length - 1; i >= 0; i -= 1) {
@@ -1797,19 +1995,27 @@ function formatCount(n) {
   return String(n);
 }
 
+function setHudText(el, prev, text) {
+  if (prev === text) return prev;
+  el.textContent = text;
+  return text;
+}
+
 function updateHud(now) {
   if (!fpsEl || !atomsEl || !trisEl) return;
   fpsFrames += 1;
   if (!fpsLastAt) fpsLastAt = now;
   const elapsed = now - fpsLastAt;
   if (elapsed >= 500) {
-    fpsEl.textContent = String(Math.round((fpsFrames * 1000) / elapsed));
+    const fpsText = String(Math.round((fpsFrames * 1000) / elapsed));
+    hudFpsText = setHudText(fpsEl, hudFpsText, fpsText);
     fpsFrames = 0;
     fpsLastAt = now;
   }
-  atomsEl.textContent = formatCount(occupied.size);
+  hudAtomsText = setHudText(atomsEl, hudAtomsText, formatCount(occupied.size));
   const tris = renderer?.info?.render?.triangles;
-  trisEl.textContent = Number.isFinite(tris) ? formatCount(tris) : "--";
+  const trisText = Number.isFinite(tris) ? formatCount(tris) : "--";
+  hudTrisText = setHudText(trisEl, hudTrisText, trisText);
 }
 
 function startRenderLoop() {
@@ -1838,7 +2044,7 @@ function startRenderLoop() {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=57`);
+  const res = await fetch(`/materials.json?v=65`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(parseMaterialsJson(await res.text()));
@@ -1884,6 +2090,13 @@ function initScene(nextCanvas) {
   shuffleOriginZ = new Uint16Array(GRID_MAX * GRID_MAX * MAX_Y);
   flowDx = new Int8Array(GRID_MAX * GRID_MAX * MAX_Y);
   flowDz = new Int8Array(GRID_MAX * GRID_MAX * MAX_Y);
+  const gridN = GRID_MAX * GRID_MAX * MAX_Y;
+  landedSlot = new Int32Array(gridN);
+  landedSlot.fill(-1);
+  landedMatOf = new Uint8Array(gridN);
+  xformStamp = new Uint32Array(gridN);
+  classStamp = new Uint32Array(gridN);
+  resetLandedTracking();
   ensureEffectStorage();
   occupied.clear();
   for (const mesh of instances.values()) {
@@ -1983,6 +2196,15 @@ function installSimHook() {
       reconcileMeshes();
       rebuildColumnFlags();
     },
+    placeCells(list) {
+      clearBoard();
+      const matIndex =
+        catalog?.indexById.get(activeMaterialId) || catalog?.indexById.get("block") || 0;
+      if (!matIndex) return;
+      for (const p of list) setCell(p.x, p.y, p.z, matIndex);
+      reconcileMeshes();
+      rebuildColumnFlags();
+    },
     state() {
       const samples = [];
       for (const i of occupied) {
@@ -1996,6 +2218,8 @@ function installSimHook() {
           onFloor: onFloorFlags?.[i] === 1,
           sameAbove: sameAboveFlags?.[i] === 1,
           resting: restingFlags?.[i] === 1,
+          flowDx: flowDx?.[i] ?? 0,
+          flowDz: flowDz?.[i] ?? 0,
           clocks: effectClocks.map((channel) => channel[i]),
         });
       }

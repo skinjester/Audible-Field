@@ -19,7 +19,7 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { clearBoard, hideFallingBlocks, showFallingBlocks, toggleBrushCurveInvert } from "./falling-blocks.js?v=136";
+import { clearBoard, hideFallingBlocks, showFallingBlocks, toggleBrushCurveInvert } from "./falling-blocks.js?v=161";
 import { audioEngine } from "./audio-engine.js?v=20";
 import { gamepadInput } from "./gamepad-input.js?v=6";
 import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=4";
@@ -789,7 +789,7 @@ function tick(now) {
     }
     tickMixer(now, lastFrame);
     lastFrame = now;
-    renderDiagnostics();
+    if (activeTab !== "falling-blocks") renderDiagnostics();
   } catch (err) {
     console.error("EchoScape diagnostics tick failed:", err);
   }

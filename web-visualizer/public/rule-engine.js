@@ -31,14 +31,18 @@
  *
  * Effect rules (no diagram) live in the same rules array. `when` is a flat
  * predicate object (all must pass). `do` is one verb:
- *   { age, visual?: "shrink", slide?: "closestOpen", then: "clear" }
- * slide "closestOpen": while that shrink is active, each rule tick steps one
- * cell toward the closest empty cell that can hold a cube of the current size.
+ *   { age, visual?: "shrink", slideLife?: "above", then: "clear" }
+ * slideLife "above": the horizontal travel of a grain is the number of atoms
+ * stacked on it when it first slides. It despawns at that distance, stays full
+ * size while sliding, and a shorter stack means a shorter life. 0 steps keeps
+ * the full age and the shrink visual.
+ * slide "closestOpen": a resting floor block with any atom above steps one cell
+ * outward. The column above drops straight down into the cell it left.
  *   { infect: { seconds, skipSurface?: "liquid" } }
  *   { absorbSparse: { seconds, minNeighbors } }
  *   { dryUnbounded: { seconds, resetOn?: "gainedTouch" } }
  *   { cullShuffle: { hops, span } }
- * Predicates: resting, onFloor, sameAbove, boundedCatchment, infection,
+ * Predicates: resting, onFloor, sameAbove, flow, boundedCatchment, infection,
  * belowMinNeighbors. Host column queries supply resting / onFloor / sameAbove.
  * All matching effects run. Each age / absorb / dry rule has its own clock.
  * One infection channel caps a matching age, or shrinks a cell that has none.
@@ -194,7 +198,7 @@ function normalizeWhen(when) {
   if (!when || typeof when !== "object" || Array.isArray(when)) return {};
   /** @type {Record<string, boolean | number>} */
   const out = {};
-  for (const key of ["resting", "onFloor", "sameAbove", "boundedCatchment", "infection"]) {
+  for (const key of ["resting", "onFloor", "sameAbove", "boundedCatchment", "infection", "flow"]) {
     if (when[key] === true || when[key] === false) out[key] = when[key];
   }
   const below = Number(when.belowMinNeighbors);
@@ -229,6 +233,8 @@ function normalizeEffect(rule) {
       visual: verb.visual === "shrink" ? "shrink" : null,
       slide: verb.visual === "shrink" && verb.slide === "closestOpen" ? "closestOpen" : null,
       thenClear: verb.then === "clear",
+      slideUnits: Math.max(0, Math.floor(Number(verb.slideUnits) || 0)),
+      slideLifeAbove: verb.slideLife === "above",
     };
   }
   if (verb.infect && typeof verb.infect === "object") {
@@ -262,6 +268,9 @@ function normalizeEffect(rule) {
     const span = Math.floor(Number(verb.cullShuffle.span) || 0);
     if (hops <= 0) return null;
     return { ...base, kind: "cullShuffle", hops, span: span > 0 ? span : 2 };
+  }
+  if (verb.slide === "closestOpen") {
+    return { ...base, kind: "slideClosest", slide: "closestOpen" };
   }
   return null;
 }
@@ -653,22 +662,182 @@ function consumeColumnBudget(grid, x, y, z, matIndex) {
 
 const SLIDE_OPEN_RADIUS = 6;
 
+function slideOpenEffect(material) {
+  return (material?.effects || []).find((effect) => effect.slide === "closestOpen") || null;
+}
+
+function slideWhenMatches(grid, x, y, z, effect) {
+  const when = effect?.when || {};
+  if (when.resting === true && grid.getResting?.(x, y, z) !== true) return false;
+  if (when.resting === false && grid.getResting?.(x, y, z) === true) return false;
+  if (when.onFloor === true && grid.getOnFloor?.(x, y, z) !== true) return false;
+  if (when.onFloor === false && grid.getOnFloor?.(x, y, z) === true) return false;
+  if (when.sameAbove === true && grid.getSameAbove?.(x, y, z) !== true) return false;
+  if (when.sameAbove === false && grid.getSameAbove?.(x, y, z) === true) return false;
+  return true;
+}
+
+/** Drop the stack above a vacated cell straight down, one cell each. */
+function dropColumnAbove(grid, x, y, z, catalog) {
+  let gy = y + 1;
+  while (grid.inBounds(x, gy, z)) {
+    const mat = grid.get(x, gy, z);
+    if (mat <= 0) break;
+    transferGrain(grid, x, gy, z, x, gy - 1, z, mat, catalog);
+    gy += 1;
+  }
+}
+
 /**
- * While a shrink slide is active, step one cell toward the closest empty cell
- * that can hold a cube of the grain's current size.
+ * The floor grain steps one cell outward. Any atoms above it then drop into
+ * the cell it left. Its travel budget is how many atoms were above it when it
+ * first slid.
  * @returns {CellPos | null}
  */
 function trySlideClosestOpen(grid, x, y, z, matIndex, material, catalog) {
-  if (!material?.slideOpen || grid.getShrink?.(x, y, z) !== true) return null;
+  const effect = slideOpenEffect(material);
+  if (!effect || !slideWhenMatches(grid, x, y, z, effect)) return null;
+  if (grid.getOnFloor?.(x, y, z) !== true) return null;
+  if (stackAbove(grid, x, y, z) <= 0) return null;
+  const seen = new Set();
+  const to = nudgeOutOne(grid, x, y, z, matIndex, catalog, 0, 0, seen);
+  if (!to) return null;
+  dropColumnAbove(grid, x, y, z, catalog);
+  return to;
+}
+
+/** Occupied cells stacked directly above this one, of any material. */
+function stackAbove(grid, x, y, z) {
+  let n = 0;
+  let gy = y + 1;
+  while (grid.inBounds(x, gy, z) && grid.get(x, gy, z) > 0) {
+    n += 1;
+    gy += 1;
+  }
+  return n;
+}
+
+/**
+ * Move this floor block one cell outward. A neighbor already in the way slides
+ * one cell first. One call moves each block at most once.
+ * @returns {CellPos | null}
+ */
+function nudgeOutOne(grid, x, y, z, matIndex, catalog, hintDx, hintDz, seen) {
+  const here = `${x},${y},${z}`;
+  if (seen.has(here) || grid.get(x, y, z) !== matIndex) return null;
+  seen.add(here);
   const pitch = grid.getPitch?.(x, y, z) ?? 0;
   const center = grid.cellCenter?.(x, y, z);
   if (!(pitch > 0) || !center) return null;
-
-  const t = Math.min(1, Math.max(0, grid.getShrinkT?.(x, y, z) ?? 0));
-  const size = Math.max(0.02, 1 - t) * pitch;
+  const size = grid.getExtent?.(x, y, z) || pitch;
   const flowDx = grid.getFlowDx?.(x, y, z) ?? 0;
   const flowDz = grid.getFlowDz?.(x, y, z) ?? 0;
+  const preferDx = flowDx || hintDx;
+  const preferDz = flowDz || hintDz;
 
+  const line = outwardNeighbor(grid, x, y, z, matIndex);
+  if (line) {
+    const dx = Math.sign(line.x - x);
+    const dz = Math.sign(line.z - z);
+    if (nudgeOutOne(grid, line.x, y, line.z, matIndex, catalog, dx, dz, seen) && grid.get(line.x, y, line.z) === 0) {
+      if (stepInto(grid, x, y, z, line.x, y, line.z, matIndex, catalog, center, pitch, size)) {
+        return { x: line.x, y, z: line.z };
+      }
+    }
+  }
+
+  /** @type {{ x: number, z: number }[]} */
+  const steps = [];
+  if (preferDx !== 0 || preferDz !== 0) {
+    const sx = Math.sign(preferDx);
+    const sz = preferDx !== 0 ? 0 : Math.sign(preferDz);
+    steps.push({ x: x + sx, z: z + sz });
+  } else {
+    const best = closestOpenCell(grid, x, y, z, center, pitch, size);
+    if (!best) return null;
+    const sx = Math.sign(best.x - x);
+    const sz = Math.sign(best.z - z);
+    if (sx !== 0) steps.push({ x: x + sx, z });
+    if (sz !== 0) steps.push({ x, z: z + sz });
+    steps.sort(
+      (a, b) =>
+        Math.abs(best.x - a.x) + Math.abs(best.z - a.z) - (Math.abs(best.x - b.x) + Math.abs(best.z - b.z)),
+    );
+  }
+
+  for (const step of steps) {
+    if (!grid.inBounds(step.x, y, step.z)) continue;
+    const occ = grid.get(step.x, y, step.z);
+    if (occ === matIndex) {
+      const dx = Math.sign(step.x - x);
+      const dz = Math.sign(step.z - z);
+      if (!nudgeOutOne(grid, step.x, y, step.z, matIndex, catalog, dx, dz, seen)) continue;
+    }
+    if (grid.get(step.x, y, step.z) !== 0) continue;
+    if (!stepInto(grid, x, y, z, step.x, y, step.z, matIndex, catalog, center, pitch, size)) continue;
+    return { x: step.x, y, z: step.z };
+  }
+  return null;
+}
+
+/** Same-material neighbor already spreading away from this block. */
+function outwardNeighbor(grid, x, y, z, matIndex) {
+  /** @type {{ x: number, z: number, away: number, dx: number, dz: number } | null} */
+  let best = null;
+  for (const [dx, dz] of SLIDE_CARDINALS) {
+    const nx = x + dx;
+    const nz = z + dz;
+    if (!grid.inBounds(nx, y, nz) || grid.get(nx, y, nz) !== matIndex) continue;
+    const fdx = grid.getFlowDx?.(nx, y, nz) ?? 0;
+    const fdz = grid.getFlowDz?.(nx, y, nz) ?? 0;
+    const away = fdx === dx && fdz === dz && (fdx !== 0 || fdz !== 0) ? 1 : 0;
+    const next = { x: nx, z: nz, away, dx, dz };
+    if (
+      !best ||
+      next.away > best.away ||
+      (next.away === best.away && (next.dx > best.dx || (next.dx === best.dx && next.dz > best.dz)))
+    ) {
+      best = next;
+    }
+  }
+  return best;
+}
+
+/**
+ * @returns {boolean}
+ */
+function stepInto(grid, x, y, z, toX, toY, toZ, matIndex, catalog, center, pitch, size) {
+  const hole = grid.cellCenter(toX, toY, toZ);
+  const slot = closestSlotInCell(center, hole, pitch, size);
+  if (!cubeOfSizeFits(grid, toX, toY, toZ, slot.x, hole.y, slot.z, size, x, y, z)) return false;
+  const prev = grid.getShuffle?.(x, y, z) ?? 0;
+  const stored = grid.getBudget?.(x, y, z) ?? 0;
+  const cap = prev > 0 ? stored : stackAbove(grid, x, y, z);
+  transferGrain(grid, x, y, z, toX, toY, toZ, matIndex, catalog);
+  const slid = prev + 1;
+  grid.setShuffle?.(toX, toY, toZ, slid);
+  if (cap > 0) grid.setBudget?.(toX, toY, toZ, cap);
+  const sx = Math.sign(toX - x);
+  const sz = Math.sign(toZ - z);
+  if (sx !== 0) grid.setFlowDx?.(toX, toY, toZ, sx);
+  else if (sz !== 0) grid.setFlowDz?.(toX, toY, toZ, sz);
+  if (usesStackSlideLife(catalog, matIndex) && cap > 0 && slid >= cap) {
+    grid.set(toX, toY, toZ, 0);
+    clearCellMeta(grid, toX, toY, toZ, catalog);
+  }
+  return true;
+}
+
+/** True when this material's slide distance is the stack it left. */
+function usesStackSlideLife(catalog, matIndex) {
+  const material = materialByIndex(catalog, matIndex);
+  return (material?.effects || []).some((effect) => effect.kind === "age" && effect.slideLifeAbove);
+}
+
+/**
+ * @returns {{ x: number, y: number, z: number } | null}
+ */
+function closestOpenCell(grid, x, y, z, center, pitch, size) {
   /** @type {{ x: number, y: number, z: number, dist: number, align: number, dx: number, dz: number } | null} */
   let best = null;
   for (let dz = -SLIDE_OPEN_RADIUS; dz <= SLIDE_OPEN_RADIUS; dz += 1) {
@@ -681,32 +850,64 @@ function trySlideClosestOpen(grid, x, y, z, matIndex, material, catalog) {
       const slot = closestSlotInCell(center, hole, pitch, size);
       if (!cubeOfSizeFits(grid, nx, y, nz, slot.x, hole.y, slot.z, size, x, y, z)) continue;
       const dist = Math.hypot(slot.x - center.x, slot.z - center.z);
-      const align =
-        (dx !== 0 && Math.sign(dx) === flowDx ? 1 : 0) +
-        (dz !== 0 && Math.sign(dz) === flowDz ? 1 : 0);
-      const next = { x: nx, y, z: nz, dist, align, dx, dz };
+      const next = { x: nx, y, z: nz, dist, align: 0, dx, dz };
       if (closerOpenSlot(next, best)) best = next;
     }
   }
-  if (!best) return null;
+  return best;
+}
 
-  const sx = Math.sign(best.x - x);
-  const sz = Math.sign(best.z - z);
-  /** @type {{ x: number, z: number, score: number }[]} */
-  const steps = [];
-  if (sx !== 0) steps.push({ x: x + sx, z, score: Math.abs(best.x - x) });
-  if (sz !== 0) steps.push({ x, z: z + sz, score: Math.abs(best.z - z) });
-  steps.sort((a, b) => b.score - a.score);
-  for (const step of steps) {
-    if (!grid.inBounds(step.x, y, step.z) || grid.get(step.x, y, step.z) !== 0) continue;
-    const hole = grid.cellCenter(step.x, y, step.z);
-    const slot = closestSlotInCell(center, hole, pitch, size);
-    if (!cubeOfSizeFits(grid, step.x, y, step.z, slot.x, hole.y, slot.z, size, x, y, z)) continue;
-    transferGrain(grid, x, y, z, step.x, y, step.z, matIndex, catalog);
-    rememberFlowDir(grid, x, y, z, step.x, y, step.z);
-    return { x: step.x, y, z: step.z };
+const SLIDE_CARDINALS = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
+
+/**
+ * No empty cell next to this grain. Push a neighbor into an empty cell, then
+ * step into the cell that push opened.
+ * @returns {CellPos | null}
+ */
+function pushToMakeRoom(grid, x, y, z, matIndex, catalog, pitch) {
+  /** @type {{ nx: number, nz: number, ex: number, ez: number, away: number, dx: number, dz: number } | null} */
+  let best = null;
+  for (const [dx, dz] of SLIDE_CARDINALS) {
+    const nx = x + dx;
+    const nz = z + dz;
+    if (!grid.inBounds(nx, y, nz) || grid.get(nx, y, nz) <= 0) continue;
+    for (const [px, pz] of SLIDE_CARDINALS) {
+      const ex = nx + px;
+      const ez = nz + pz;
+      if ((ex === x && ez === z) || !grid.inBounds(ex, y, ez) || grid.get(ex, y, ez) !== 0) continue;
+      const nSize = grid.getExtent?.(nx, y, nz) || pitch;
+      const from = grid.cellCenter?.(nx, y, nz);
+      const hole = grid.cellCenter?.(ex, y, ez);
+      if (!from || !hole) continue;
+      const slot = closestSlotInCell(from, hole, pitch, nSize);
+      if (!cubeOfSizeFits(grid, ex, y, ez, slot.x, hole.y, slot.z, nSize, nx, y, nz)) continue;
+      const away = px === dx && pz === dz ? 1 : 0;
+      const next = { nx, nz, ex, ez, away, dx, dz };
+      if (
+        !best ||
+        next.away > best.away ||
+        (next.away === best.away && (next.dx > best.dx || (next.dx === best.dx && next.dz > best.dz)))
+      ) {
+        best = next;
+      }
+    }
   }
-  return null;
+  if (!best) return null;
+  const occ = grid.get(best.nx, y, best.nz);
+  const fdx = grid.getFlowDx?.(best.nx, y, best.nz) ?? 0;
+  const fdz = grid.getFlowDz?.(best.nx, y, best.nz) ?? 0;
+  transferGrain(grid, best.nx, y, best.nz, best.ex, y, best.ez, occ, catalog);
+  grid.setFlowDx?.(best.ex, y, best.ez, fdx);
+  grid.setFlowDz?.(best.ex, y, best.ez, fdz);
+  transferGrain(grid, x, y, z, best.nx, y, best.nz, matIndex, catalog);
+  rememberFlowDir(grid, x, y, z, best.nx, y, best.nz);
+  dropColumnAbove(grid, x, y, z, catalog);
+  return { x: best.nx, y, z: best.nz };
 }
 
 /**
@@ -1306,6 +1507,7 @@ function whenMatches(when, ctx) {
   if (when.resting != null && ctx.resting !== when.resting) return false;
   if (when.onFloor != null && ctx.onFloor !== when.onFloor) return false;
   if (when.sameAbove != null && ctx.sameAbove !== when.sameAbove) return false;
+  if (when.flow != null && ctx.flow !== when.flow) return false;
   if (when.boundedCatchment != null && ctx.boundedCatchment !== when.boundedCatchment) return false;
   if (when.infection != null && ctx.infection !== when.infection) return false;
   if (when.belowMinNeighbors != null && !(ctx.sameNeighbors < when.belowMinNeighbors)) return false;
@@ -1318,6 +1520,7 @@ function effectContext(grid, cell, catalog, queries) {
     resting: queries?.resting?.(index) === true,
     onFloor: queries?.onFloor?.(index) === true,
     sameAbove: queries?.sameAbove?.(index) === true,
+    flow: (grid.getFlowDx?.(cell.x, cell.y, cell.z) ?? 0) !== 0 || (grid.getFlowDz?.(cell.x, cell.y, cell.z) ?? 0) !== 0,
     boundedCatchment: isBoundedCatchment(grid, cell.x, cell.y, cell.z, catalog),
     sameNeighbors: countSameTouches(grid, cell.x, cell.y, cell.z, cell.mat),
     infection: (grid.getInfection?.(cell.x, cell.y, cell.z) ?? 0) > 0,
@@ -1502,6 +1705,32 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
         matchedAge = true;
         let clock = getClock(grid, cell.x, cell.y, cell.z, effect.clockId) + dt;
         let limit = effect.seconds;
+        let slid = 0;
+        if (effect.slideLifeAbove) {
+          slid = grid.getShuffle?.(cell.x, cell.y, cell.z) ?? 0;
+          const cap = grid.getBudget?.(cell.x, cell.y, cell.z) ?? 0;
+          if (slid === 0 && stackAbove(grid, cell.x, cell.y, cell.z) > 0) {
+            if (getClock(grid, cell.x, cell.y, cell.z, effect.clockId) > 0) {
+              setClock(grid, cell.x, cell.y, cell.z, effect.clockId, 0);
+              dirty = true;
+            }
+            continue;
+          }
+          if (cap > 0 && slid >= cap) {
+            doomed.push(cell);
+            dirty = true;
+            continue;
+          }
+          if (cap > 0 && slid > 0) limit *= 1 - slid / cap;
+        } else if (effect.slideUnits > 0) {
+          slid = grid.getShuffle?.(cell.x, cell.y, cell.z) ?? 0;
+          if (slid >= effect.slideUnits) {
+            doomed.push(cell);
+            dirty = true;
+            continue;
+          }
+          limit *= 1 - slid / effect.slideUnits;
+        }
         if (infection > 0) limit = Math.min(limit, infection);
         if (effect.thenClear && clock >= limit) {
           doomed.push(cell);
@@ -1509,7 +1738,7 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
           continue;
         }
         setClock(grid, cell.x, cell.y, cell.z, effect.clockId, clock);
-        if (effect.visual === "shrink") {
+        if (effect.visual === "shrink" && slid === 0) {
           shrink = true;
           shrinkT = Math.max(shrinkT, limit > 0 ? Math.min(1, clock / limit) : 0);
           dirty = true;
