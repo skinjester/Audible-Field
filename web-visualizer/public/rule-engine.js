@@ -37,7 +37,9 @@
  * (poured lifetime, or `age` when none is stored) × `lifeScale`, then clears.
  * lifeScale defaults to 1. The wait is not taken out of that lifetime. The same
  * age clock measures the wait and the climb. The lift is drawn on top of the
- * cell; the cell stays put until it clears.
+ * cell; the cell stays put until it clears. As the drawn body passes an atom
+ * to the north, south, east, or west, that atom is pushed one cell further
+ * outward. If the next cell is full, the atoms beyond it are pushed first.
  * slideLife "above": the horizontal travel of a grain is the number of atoms
  * stacked on it when it first slides. It despawns at that distance, stays full
  * size while sliding, and a shorter stack means a shorter life. 0 steps keeps
@@ -47,14 +49,17 @@
  *   { infect: { seconds, skipSurface?: "liquid" } }
  *   { vacuum: { skipSurface?: "liquid" } }
  *   vacuum clears each solid face neighbor. Every remaining face neighbor of
- *   that cell then slides one step toward the cell that was cleared.
- *   Liquids are left in place.
+ *   that cell then slides one step toward the cell that was cleared and starts
+ *   shrinking. `seconds` is how long that shrink takes. Liquids stay put.
  *   { absorbSparse: { seconds, minNeighbors } }
  *   { dryUnbounded: { seconds, resetOn?: "gainedTouch" } }
  *   { cullShuffle: { hops, span } }
- * Predicates: resting, onFloor, sameAbove, above, flow, boundedCatchment, infection,
- * belowMinNeighbors. Host column queries supply resting / onFloor / sameAbove / above.
+ * Predicates: resting, onFloor, sameAbove, above, blockAbove, flow, boundedCatchment,
+ * infection, belowMinNeighbors. Host column queries supply resting / onFloor /
+ * sameAbove / above / blockAbove.
  * `above` is any atom higher in the same column, any material.
+ * `blockAbove` is a block higher in that column. A block sitting on any atom
+ * crushes that support the same way a block crushes another block.
  * All matching effects run. Each age / absorb / dry rule has its own clock.
  * One infection channel caps a matching age, or shrinks a cell that has none.
  */
@@ -210,7 +215,7 @@ function normalizeWhen(when) {
   if (!when || typeof when !== "object" || Array.isArray(when)) return {};
   /** @type {Record<string, boolean | number>} */
   const out = {};
-  for (const key of ["resting", "onFloor", "sameAbove", "above", "boundedCatchment", "infection", "flow"]) {
+  for (const key of ["resting", "onFloor", "sameAbove", "above", "blockAbove", "boundedCatchment", "infection", "flow"]) {
     if (when[key] === true || when[key] === false) out[key] = when[key];
   }
   const below = Number(when.belowMinNeighbors);
@@ -258,6 +263,7 @@ function normalizeEffect(rule) {
     return {
       ...base,
       kind: "vacuum",
+      seconds: positiveSeconds(verb.vacuum.seconds) || 6,
       skipSurface: verb.vacuum.skipSurface === "liquid" ? "liquid" : null,
     };
   }
@@ -1017,6 +1023,9 @@ function transferGrain(grid, x, y, z, toX, toY, toZ, matIndex, catalog) {
   const shrinkT = grid.getShrinkT?.(x, y, z) ?? 0;
   const risingT = grid.getRiseT?.(x, y, z) ?? 0;
   const risingElapsed = grid.getRiseElapsed?.(x, y, z) ?? 0;
+  const riseSwept = grid.getRiseSwept?.(x, y, z) ?? 0;
+  const pullAge = grid.getPullAge?.(x, y, z) ?? 0;
+  const pullLimit = grid.getPullLimit?.(x, y, z) ?? 0;
 
   grid.set(toX, toY, toZ, matIndex);
   grid.set(x, y, z, 0);
@@ -1032,7 +1041,12 @@ function transferGrain(grid, x, y, z, toX, toY, toZ, matIndex, catalog) {
   grid.setShuffleOriginX?.(toX, toY, toZ, shuffleOx);
   grid.setShuffleOriginZ?.(toX, toY, toZ, shuffleOz);
   grid.setShrink?.(toX, toY, toZ, shrinking, shrinkT);
+  if (pullLimit > 0) {
+    grid.setPullAge?.(toX, toY, toZ, pullAge);
+    grid.setPullLimit?.(toX, toY, toZ, pullLimit);
+  }
   if (risingElapsed > 0 || risingT > 0) grid.setRise?.(toX, toY, toZ, true, risingT, risingElapsed);
+  if (riseSwept > 0) grid.setRiseSwept?.(toX, toY, toZ, riseSwept);
 }
 
 /**
@@ -1346,6 +1360,7 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
   const flowDirZ = grid.getFlowDz?.(x, y, z) ?? 0;
   const risingT = grid.getRiseT?.(x, y, z) ?? 0;
   const risingElapsed = grid.getRiseElapsed?.(x, y, z) ?? 0;
+  const riseSwept = grid.getRiseSwept?.(x, y, z) ?? 0;
 
   /** @type {CellPos | null} */
   let to = null;
@@ -1379,6 +1394,7 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
     grid.setFlowDx?.(to.x, to.y, to.z, flowDirX);
     grid.setFlowDz?.(to.x, to.y, to.z, flowDirZ);
     if (risingElapsed > 0 || risingT > 0) grid.setRise?.(to.x, to.y, to.z, true, risingT, risingElapsed);
+    if (riseSwept > 0) grid.setRiseSwept?.(to.x, to.y, to.z, riseSwept);
     return to;
   }
   // Applied with no @ in result (e.g. etch consumes self + neighbor).
@@ -1547,6 +1563,7 @@ function whenMatches(when, ctx) {
   if (when.onFloor != null && ctx.onFloor !== when.onFloor) return false;
   if (when.sameAbove != null && ctx.sameAbove !== when.sameAbove) return false;
   if (when.above != null && ctx.above !== when.above) return false;
+  if (when.blockAbove != null && ctx.blockAbove !== when.blockAbove) return false;
   if (when.flow != null && ctx.flow !== when.flow) return false;
   if (when.boundedCatchment != null && ctx.boundedCatchment !== when.boundedCatchment) return false;
   if (when.infection != null && ctx.infection !== when.infection) return false;
@@ -1561,6 +1578,7 @@ function effectContext(grid, cell, catalog, queries) {
     onFloor: queries?.onFloor?.(index) === true,
     sameAbove: queries?.sameAbove?.(index) === true,
     above: queries?.above?.(index) === true,
+    blockAbove: queries?.blockAbove?.(index) === true,
     flow: (grid.getFlowDx?.(cell.x, cell.y, cell.z) ?? 0) !== 0 || (grid.getFlowDz?.(cell.x, cell.y, cell.z) ?? 0) !== 0,
     boundedCatchment: isBoundedCatchment(grid, cell.x, cell.y, cell.z, catalog),
     sameNeighbors: countSameTouches(grid, cell.x, cell.y, cell.z, cell.mat),
@@ -1639,7 +1657,7 @@ function slideNeighborsTowardHole(grid, catalog, effect, origin, hole) {
   }
   let moved = false;
   for (const n of neighbors) {
-    grid.setPull?.(n.x, n.y, n.z, hole.x, hole.y, hole.z);
+    grid.setPull?.(n.x, n.y, n.z, hole.x, hole.y, hole.z, effect.seconds);
     moved = true;
   }
   for (const n of neighbors) {
@@ -1816,7 +1834,7 @@ export function applyPostMoves(grid, moves, catalog) {
  * @param {GridApi} grid
  * @param {{ x: number, y: number, z: number, mat: number, i?: number }[]} cells
  * @param {MaterialCatalog} catalog
- * @param {{ resting?: (i: number) => boolean, onFloor?: (i: number) => boolean, sameAbove?: (i: number) => boolean, above?: (i: number) => boolean }} queries
+ * @param {{ resting?: (i: number) => boolean, onFloor?: (i: number) => boolean, sameAbove?: (i: number) => boolean, above?: (i: number) => boolean, blockAbove?: (i: number) => boolean }} queries
  * @param {number} dt
  * @returns {boolean}
  */
@@ -1967,6 +1985,20 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
       }
     } else if ((grid.getInfectionAge?.(cell.x, cell.y, cell.z) ?? 0) > 0) {
       grid.setInfectionAge?.(cell.x, cell.y, cell.z, 0);
+    }
+
+    const pullLimit = grid.getPullLimit?.(cell.x, cell.y, cell.z) ?? 0;
+    if (pullLimit > 0) {
+      const age = (grid.getPullAge?.(cell.x, cell.y, cell.z) ?? 0) + dt;
+      if (age >= pullLimit) {
+        doomed.push(cell);
+        dirty = true;
+      } else {
+        grid.setPullAge?.(cell.x, cell.y, cell.z, age);
+        shrink = true;
+        shrinkT = Math.max(shrinkT, Math.min(1, age / pullLimit));
+        dirty = true;
+      }
     }
 
     grid.setShrink?.(cell.x, cell.y, cell.z, shrink, shrink ? shrinkT : 0);

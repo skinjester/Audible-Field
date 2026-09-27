@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=66";
-import { applyInfect, applyPostMoves, applyVacuum, compileMaterials, moveGrain, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=61";
+import { applyInfect, applyPostMoves, applyVacuum, compileMaterials, moveGrain, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=63";
 import { inputBindings } from "./input-bindings.js?v=1";
 import { fallingInput } from "./falling-input.js?v=8";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
@@ -103,6 +103,8 @@ let sizeTries = 0;
 let lastNow = 0;
 let ruleAcc = 0;
 let cameraDist = CAMERA_DIST_DEFAULT;
+/** Look-at point. Zoom shifts this so the emitter stays on the same screen pixel. */
+const cameraFocus = new THREE.Vector3(0, 0.35, 0);
 /** Frame counters for the audio snapshot. Reset after each capture. */
 let audioPour = 0;
 let audioFall = 0;
@@ -136,12 +138,21 @@ let shrinkT = null;
 /** Cell index a grain is sliding toward, or -1. */
 /** @type {Int32Array | null} */
 let pullTo = null;
+/** Seconds a vacuumed grain shrinks before it is cleared. 0 means none. */
+/** @type {Float32Array | null} */
+let pullLimit = null;
+/** Age accumulated while a pull limit is active. */
+/** @type {Float32Array | null} */
+let pullAge = null;
 /** Rise/fade progress 0..1. 0 means not rising. */
 /** @type {Float32Array | null} */
 let riseT = null;
 /** Seconds spent climbing. Lift is this times one inverse-size atomic unit. */
 /** @type {Float32Array | null} */
 let riseElapsed = null;
+/** World Y already swept by a rising grain, so each neighbor is pushed once. */
+/** @type {Float32Array | null} */
+let riseSwept = null;
 /** Column snapshot: resting on the atom or floor below. */
 /** @type {Uint8Array | null} */
 let restingFlags = null;
@@ -154,6 +165,9 @@ let sameAboveFlags = null;
 /** Column snapshot: any atom, any material, is higher in this column. */
 /** @type {Uint8Array | null} */
 let aboveFlags = null;
+/** Column snapshot: a block is higher in this column. */
+/** @type {Uint8Array | null} */
+let blockAboveFlags = null;
 /** Continuous world-space Y of each atom center (gravity / contact). */
 /** @type {Float32Array | null} */
 let posY = null;
@@ -648,7 +662,10 @@ function clearEffectCell(i) {
   if (shrinkT) shrinkT[i] = 0;
   if (riseT) riseT[i] = 0;
   if (riseElapsed) riseElapsed[i] = 0;
+  if (riseSwept) riseSwept[i] = 0;
   if (pullTo) pullTo[i] = -1;
+  if (pullLimit) pullLimit[i] = 0;
+  if (pullAge) pullAge[i] = 0;
 }
 
 function getEffectClock(x, y, z, channel) {
@@ -695,6 +712,17 @@ function setRise(x, y, z, rising, t, elapsed) {
   const i = idx(x, y, z);
   if (riseT) riseT[i] = rising ? Math.max(0, Math.min(1, Number(t) || 0)) : 0;
   if (riseElapsed) riseElapsed[i] = rising ? Math.max(0, Number(elapsed) || 0) : 0;
+  if (!rising && riseSwept) riseSwept[i] = 0;
+}
+
+function getRiseSwept(x, y, z) {
+  if (!riseSwept || !inBounds(x, y, z)) return 0;
+  return riseSwept[idx(x, y, z)] || 0;
+}
+
+function setRiseSwept(x, y, z, value) {
+  if (!riseSwept || !inBounds(x, y, z)) return;
+  riseSwept[idx(x, y, z)] = Math.max(0, Number(value) || 0);
 }
 
 function getRiseT(x, y, z) {
@@ -880,14 +908,40 @@ function setFlowDz(x, y, z, value) {
   flowDz[idx(x, y, z)] = value | 0;
 }
 
-function setPull(x, y, z, tx, ty, tz) {
+function setPull(x, y, z, tx, ty, tz, seconds) {
   if (!pullTo || !inBounds(x, y, z) || !inBounds(tx, ty, tz)) return;
-  pullTo[idx(x, y, z)] = idx(tx, ty, tz);
+  const i = idx(x, y, z);
+  pullTo[i] = idx(tx, ty, tz);
+  const limit = Math.max(0, Number(seconds) || 0);
+  if (pullLimit && limit > 0 && pullLimit[i] <= 0) pullLimit[i] = limit;
 }
 
 function clearPull(x, y, z) {
-  if (!pullTo || !inBounds(x, y, z)) return;
-  pullTo[idx(x, y, z)] = -1;
+  if (!inBounds(x, y, z)) return;
+  const i = idx(x, y, z);
+  if (pullTo) pullTo[i] = -1;
+  if (pullLimit) pullLimit[i] = 0;
+  if (pullAge) pullAge[i] = 0;
+}
+
+function getPullLimit(x, y, z) {
+  if (!pullLimit || !inBounds(x, y, z)) return 0;
+  return pullLimit[idx(x, y, z)] || 0;
+}
+
+function setPullLimit(x, y, z, value) {
+  if (!pullLimit || !inBounds(x, y, z)) return;
+  pullLimit[idx(x, y, z)] = Math.max(0, Number(value) || 0);
+}
+
+function getPullAge(x, y, z) {
+  if (!pullAge || !inBounds(x, y, z)) return 0;
+  return pullAge[idx(x, y, z)] || 0;
+}
+
+function setPullAge(x, y, z, value) {
+  if (!pullAge || !inBounds(x, y, z)) return;
+  pullAge[idx(x, y, z)] = Math.max(0, Number(value) || 0);
 }
 
 function vacuumNear(x, y, z) {
@@ -991,6 +1045,8 @@ const gridApi = {
   setRise,
   getRiseT,
   getRiseElapsed,
+  getRiseSwept,
+  setRiseSwept,
   getResting,
   getOnFloor,
   getSameAbove,
@@ -1020,6 +1076,10 @@ const gridApi = {
   setFlowDz,
   setPull,
   clearPull,
+  getPullLimit,
+  setPullLimit,
+  getPullAge,
+  setPullAge,
 };
 
 function cellAtomSize(cellIndex) {
@@ -1115,11 +1175,11 @@ function syncCamera() {
   if (!camera) return;
   const horizontal = Math.cos(CAMERA_PITCH) * cameraDist;
   camera.position.set(
-    Math.sin(CAMERA_YAW) * horizontal,
-    Math.sin(CAMERA_PITCH) * cameraDist,
-    Math.cos(CAMERA_YAW) * horizontal,
+    cameraFocus.x + Math.sin(CAMERA_YAW) * horizontal,
+    cameraFocus.y + Math.sin(CAMERA_PITCH) * cameraDist,
+    cameraFocus.z + Math.cos(CAMERA_YAW) * horizontal,
   );
-  camera.lookAt(0, 0.35, 0);
+  camera.lookAt(cameraFocus);
   syncViewBrightness();
 }
 
@@ -1145,7 +1205,19 @@ function setCameraDist(next) {
 
 function zoomCamera(factor) {
   if (!Number.isFinite(factor) || factor <= 0) return cameraDist;
-  return setCameraDist(cameraDist * factor);
+  const next = Math.min(CAMERA_DIST_MAX, Math.max(CAMERA_DIST_MIN, cameraDist * factor));
+  if (Math.abs(next - cameraDist) < 1e-6) return cameraDist;
+  // Dolly toward the emitter: scale the focus around it so that pixel stays put.
+  const k = next / cameraDist;
+  const ex = aimWorldX;
+  const ey = emitWorldY();
+  const ez = aimWorldZ;
+  cameraFocus.set(
+    ex + (cameraFocus.x - ex) * k,
+    ey + (cameraFocus.y - ey) * k,
+    ez + (cameraFocus.z - ez) * k,
+  );
+  return setCameraDist(next);
 }
 
 /** Yaw the playfield / grid; emitter stays fixed in world space. */
@@ -1454,11 +1526,15 @@ export function clearBoard() {
   if (shrinkT) shrinkT.fill(0);
   if (riseT) riseT.fill(0);
   if (riseElapsed) riseElapsed.fill(0);
+  if (riseSwept) riseSwept.fill(0);
   if (pullTo) pullTo.fill(-1);
+  if (pullLimit) pullLimit.fill(0);
+  if (pullAge) pullAge.fill(0);
   if (restingFlags) restingFlags.fill(0);
   if (onFloorFlags) onFloorFlags.fill(0);
   if (sameAboveFlags) sameAboveFlags.fill(0);
   if (aboveFlags) aboveFlags.fill(0);
+  if (blockAboveFlags) blockAboveFlags.fill(0);
   if (posY) posY.fill(0);
   if (posX) posX.fill(0);
   if (posZ) posZ.fill(0);
@@ -2066,6 +2142,9 @@ const columnQueries = {
   above(i) {
     return aboveFlags?.[i] === 1;
   },
+  blockAbove(i) {
+    return blockAboveFlags?.[i] === 1;
+  },
 };
 
 /** Resting / floor / same-material-above flags from continuous column positions. */
@@ -2074,6 +2153,7 @@ function rebuildColumnFlags() {
   if (onFloorFlags) onFloorFlags.fill(0);
   if (sameAboveFlags) sameAboveFlags.fill(0);
   if (aboveFlags) aboveFlags.fill(0);
+  if (blockAboveFlags) blockAboveFlags.fill(0);
   if (!cells || !posY || !restingFlags || occupied.size === 0) return;
 
   for (let c = 0; c < columnKeys.length; c += 1) {
@@ -2088,16 +2168,19 @@ function rebuildColumnFlags() {
       const yCenter = posY[i] > 0 ? posY[i] : restCenter;
       const resting = yCenter <= restCenter + 0.05;
       const onGround = floorTop <= 1e-4;
+      const blockMat = catalog?.indexById.get("block") || 0;
       let sameAbove = false;
+      let blockAbove = false;
       for (let k = n + 1; k < list.length; k += 1) {
-        if (cells[list[k]] === mat) {
-          sameAbove = true;
-          break;
-        }
+        const aboveMat = cells[list[k]];
+        if (aboveMat === mat) sameAbove = true;
+        if (blockMat > 0 && aboveMat === blockMat) blockAbove = true;
+        if (sameAbove && blockAbove) break;
       }
       if (resting) restingFlags[i] = 1;
       if (onGround) onFloorFlags[i] = 1;
       if (sameAbove) sameAboveFlags[i] = 1;
+      if (blockAbove && blockAboveFlags) blockAboveFlags[i] = 1;
       if (n + 1 < list.length && aboveFlags) aboveFlags[i] = 1;
       const placed = yCenter > restCenter + 1e-4 ? yCenter : restCenter;
       floorTop = placed + size * 0.5;
@@ -2228,7 +2311,8 @@ function packStickTogether() {
       startMat <= 0 ||
       visited.has(start) ||
       !isShrinking(start, startMat) ||
-      materialSlidesOpen(startMat)
+      materialSlidesOpen(startMat) ||
+      (pullLimit?.[start] || 0) > 0
     ) {
       continue;
     }
@@ -2251,7 +2335,7 @@ function packStickTogether() {
         if (!inBounds(nx, ny, nz)) continue;
         const ni = idx(nx, ny, nz);
         if (visited.has(ni) || cells[ni] <= 0) continue;
-        if (!isShrinking(ni, cells[ni]) || materialSlidesOpen(cells[ni])) continue;
+        if (!isShrinking(ni, cells[ni]) || materialSlidesOpen(cells[ni]) || (pullLimit?.[ni] || 0) > 0) continue;
         visited.add(ni);
         queue.push(ni);
       }
@@ -2365,6 +2449,78 @@ function runRules() {
   return culledShuffle || vacuumed;
 }
 
+const RISE_CARDINALS = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
+
+function atomCenterY(x, y, z) {
+  const i = idx(x, y, z);
+  if (posY && posY[i] > 0) return posY[i];
+  return (y + 0.5) * cellAtomSize(i);
+}
+
+/** Push this atom one cell along dx/dz. Occupied cells beyond it move first. */
+function shoveOutward(x, y, z, dx, dz, guard) {
+  if (guard > GRID_MAX || getCell(x, y, z) <= 0) return false;
+  const tx = x + dx;
+  const tz = z + dz;
+  if (!inBounds(tx, y, tz)) return false;
+  if (getCell(tx, y, tz) > 0 && !shoveOutward(tx, y, tz, dx, dz, guard + 1)) return false;
+  return moveGrain(gridApi, x, y, z, tx, y, tz, catalog);
+}
+
+/**
+ * A rising grain stays in its cell. Any atom its body passes in the four
+ * horizontal directions is pushed one cell further that way.
+ * @returns {boolean}
+ */
+function shoveRisingSand() {
+  if (!riseElapsed || !riseSwept || !cells || occupied.size === 0) return false;
+  const risers = [];
+  for (const i of occupied) {
+    if ((riseElapsed[i] || 0) > 0 && cells[i] > 0) risers.push(i);
+  }
+  let moved = false;
+  for (const i of risers) {
+    if (cells[i] <= 0 || (riseElapsed[i] || 0) <= 0) continue;
+    const { x, y, z } = decodeCell(i);
+    const half = atomExtent(x, y, z, cells[i]) * 0.5;
+    const rest = atomCenterY(x, y, z);
+    const curr = rest + riseOffset(x, y, z);
+    const prev = riseSwept[i] > 0 ? riseSwept[i] : rest;
+    const bottom = Math.min(prev, curr) - half;
+    const top = Math.max(prev, curr) + half;
+    riseSwept[i] = curr;
+    for (const [dx, dz] of RISE_CARDINALS) {
+      const nx = x + dx;
+      const nz = z + dz;
+      if (!inBounds(nx, 0, nz)) continue;
+      const list = columns.get(nz * GRID_MAX + nx);
+      if (!list) continue;
+      /** @type {{ x: number, y: number, z: number }[]} */
+      const hits = [];
+      for (let n = 0; n < list.length; n += 1) {
+        const ni = list[n];
+        if (cells[ni] <= 0) continue;
+        const hit = decodeCell(ni);
+        if (hit.x !== nx || hit.z !== nz) continue;
+        const nHalf = atomExtent(hit.x, hit.y, hit.z, cells[ni]) * 0.5;
+        const nCenter = atomCenterY(hit.x, hit.y, hit.z);
+        if (nCenter + nHalf <= bottom || nCenter - nHalf >= top) continue;
+        hits.push(hit);
+      }
+      for (const hit of hits) {
+        if (getCell(hit.x, hit.y, hit.z) <= 0) continue;
+        if (shoveOutward(hit.x, hit.y, hit.z, dx, dz, 0)) moved = true;
+      }
+    }
+  }
+  return moved;
+}
+
 function step(dt) {
   bumpXformGen();
   advanceEmitLife(dt);
@@ -2387,8 +2543,9 @@ function step(dt) {
   const heardBefore = countSonifying();
   rebuildColumnFlags();
   const effected = tickEffects(gridApi, collectOccupied(), catalog, columnQueries, dt);
+  const shoved = shoveRisingSand();
   audioDeath += Math.max(0, heardBefore - countSonifying());
-  if (occupied.size !== columnOccupancy) {
+  if (occupied.size !== columnOccupancy || shoved) {
     buildColumns();
     columnOccupancy = occupied.size;
   }
@@ -2398,7 +2555,7 @@ function step(dt) {
   const packed = packStickTogether();
   const culled = consumeOutOfBounds();
   if (occupied.size !== columnOccupancy) buildColumns();
-  if (infected || effected || ruled || settled || lateral || pulled || packed || culled) {
+  if (infected || effected || ruled || settled || lateral || pulled || packed || culled || shoved) {
     writeMeshesFromColumns(effected);
   }
   rebuildColumnFlags();
@@ -2496,7 +2653,7 @@ function startRenderLoop() {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=74`);
+  const res = await fetch(`/materials.json?v=75`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(parseMaterialsJson(await res.text()));
@@ -2517,12 +2674,16 @@ function ensureEffectStorage() {
   shrinkT = new Float32Array(n);
   riseT = new Float32Array(n);
   riseElapsed = new Float32Array(n);
+  riseSwept = new Float32Array(n);
   pullTo = new Int32Array(n);
   pullTo.fill(-1);
+  pullLimit = new Float32Array(n);
+  pullAge = new Float32Array(n);
   restingFlags = new Uint8Array(n);
   onFloorFlags = new Uint8Array(n);
   sameAboveFlags = new Uint8Array(n);
   aboveFlags = new Uint8Array(n);
+  blockAboveFlags = new Uint8Array(n);
 }
 
 /** Cross on the playfield: the four quadrants are the four sample beds. */

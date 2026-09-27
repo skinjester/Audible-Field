@@ -79,6 +79,11 @@
           "name": "blow",
           "when": { "resting": true, "above": false },
           "do": { "age": 4.5, "hold": 2, "lifeScale": 0.5, "visual": "rise", "then": "clear" }
+        },
+        {
+          "name": "crush-block",
+          "when": { "resting": true, "onFloor": true, "blockAbove": true },
+          "do": { "age": 3.5, "then": "clear" }
         }
       ]
     },
@@ -106,7 +111,7 @@
         },
         {
           "name": "lone-dissolve",
-          "when": { "resting": true, "onFloor": true, "sameAbove": false },
+          "when": { "resting": true, "onFloor": true, "sameAbove": false, "blockAbove": false },
           "do": { "age": 3.5, "visual": "shrink", "then": "clear" }
         },
         {
@@ -115,8 +120,13 @@
           "do": { "age": 3.5, "then": "clear" }
         },
         {
+          "name": "crush-block",
+          "when": { "resting": true, "onFloor": true, "blockAbove": true },
+          "do": { "age": 3.5, "then": "clear" }
+        },
+        {
           "name": "vacuum",
-          "do": { "vacuum": { "skipSurface": "liquid" } }
+          "do": { "vacuum": { "seconds": 6, "skipSurface": "liquid" } }
         }
       ]
     }
