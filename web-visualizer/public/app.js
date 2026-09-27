@@ -19,7 +19,7 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { clearBoard, hideFallingBlocks, readGridSnapshot, showFallingBlocks, toggleBrushCurveInvert } from "./falling-blocks.js?v=204";
+import { clearBoard, hideFallingBlocks, readGridSnapshot, showFallingBlocks, toggleBrushCurveInvert } from "./falling-blocks.js?v=208";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=14";
 import { audioEngine } from "./audio-engine.js?v=42";
 import { gamepadInput } from "./gamepad-input.js?v=7";

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=66";
-import { applyInfect, applyPostMoves, applyVacuum, compileMaterials, moveGrain, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=63";
+import { applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=67";
 import { inputBindings } from "./input-bindings.js?v=1";
 import { fallingInput } from "./falling-input.js?v=8";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
@@ -129,30 +129,21 @@ let infection = null;
 /** Age while a cell shrinks from infection with no matching age effect. */
 /** @type {Float32Array | null} */
 let infectionAge = null;
+/** 1 when a vacuumed neighbor has snapped to half size. */
+/** @type {Float32Array | null} */
+let holeShrink = null;
 /** 1 while an effect is shrinking this cell. */
 /** @type {Uint8Array | null} */
 let shrinkFlags = null;
 /** Shrink progress 0..1 for the mesh scale. */
 /** @type {Float32Array | null} */
 let shrinkT = null;
-/** Cell index a grain is sliding toward, or -1. */
-/** @type {Int32Array | null} */
-let pullTo = null;
-/** Seconds a vacuumed grain shrinks before it is cleared. 0 means none. */
-/** @type {Float32Array | null} */
-let pullLimit = null;
-/** Age accumulated while a pull limit is active. */
-/** @type {Float32Array | null} */
-let pullAge = null;
 /** Rise/fade progress 0..1. 0 means not rising. */
 /** @type {Float32Array | null} */
 let riseT = null;
 /** Seconds spent climbing. Lift is this times one inverse-size atomic unit. */
 /** @type {Float32Array | null} */
 let riseElapsed = null;
-/** World Y already swept by a rising grain, so each neighbor is pushed once. */
-/** @type {Float32Array | null} */
-let riseSwept = null;
 /** Column snapshot: resting on the atom or floor below. */
 /** @type {Uint8Array | null} */
 let restingFlags = null;
@@ -658,14 +649,11 @@ function clearEffectCell(i) {
   for (const clocks of effectClocks) clocks[i] = 0;
   if (infection) infection[i] = 0;
   if (infectionAge) infectionAge[i] = 0;
+  if (holeShrink) holeShrink[i] = 0;
   if (shrinkFlags) shrinkFlags[i] = 0;
   if (shrinkT) shrinkT[i] = 0;
   if (riseT) riseT[i] = 0;
   if (riseElapsed) riseElapsed[i] = 0;
-  if (riseSwept) riseSwept[i] = 0;
-  if (pullTo) pullTo[i] = -1;
-  if (pullLimit) pullLimit[i] = 0;
-  if (pullAge) pullAge[i] = 0;
 }
 
 function getEffectClock(x, y, z, channel) {
@@ -700,6 +688,16 @@ function setInfectionAge(x, y, z, value) {
   infectionAge[idx(x, y, z)] = Math.max(0, Number(value) || 0);
 }
 
+function getHoleShrink(x, y, z) {
+  if (!holeShrink || !inBounds(x, y, z)) return 0;
+  return holeShrink[idx(x, y, z)] || 0;
+}
+
+function setHoleShrink(x, y, z, value) {
+  if (!holeShrink || !inBounds(x, y, z)) return;
+  holeShrink[idx(x, y, z)] = Math.max(0, Number(value) || 0);
+}
+
 function setShrink(x, y, z, shrinking, t) {
   if (!inBounds(x, y, z)) return;
   const i = idx(x, y, z);
@@ -712,17 +710,6 @@ function setRise(x, y, z, rising, t, elapsed) {
   const i = idx(x, y, z);
   if (riseT) riseT[i] = rising ? Math.max(0, Math.min(1, Number(t) || 0)) : 0;
   if (riseElapsed) riseElapsed[i] = rising ? Math.max(0, Number(elapsed) || 0) : 0;
-  if (!rising && riseSwept) riseSwept[i] = 0;
-}
-
-function getRiseSwept(x, y, z) {
-  if (!riseSwept || !inBounds(x, y, z)) return 0;
-  return riseSwept[idx(x, y, z)] || 0;
-}
-
-function setRiseSwept(x, y, z, value) {
-  if (!riseSwept || !inBounds(x, y, z)) return;
-  riseSwept[idx(x, y, z)] = Math.max(0, Number(value) || 0);
 }
 
 function getRiseT(x, y, z) {
@@ -908,125 +895,6 @@ function setFlowDz(x, y, z, value) {
   flowDz[idx(x, y, z)] = value | 0;
 }
 
-function setPull(x, y, z, tx, ty, tz, seconds) {
-  if (!pullTo || !inBounds(x, y, z) || !inBounds(tx, ty, tz)) return;
-  const i = idx(x, y, z);
-  pullTo[i] = idx(tx, ty, tz);
-  const limit = Math.max(0, Number(seconds) || 0);
-  if (pullLimit && limit > 0 && pullLimit[i] <= 0) pullLimit[i] = limit;
-}
-
-function clearPull(x, y, z) {
-  if (!inBounds(x, y, z)) return;
-  const i = idx(x, y, z);
-  if (pullTo) pullTo[i] = -1;
-  if (pullLimit) pullLimit[i] = 0;
-  if (pullAge) pullAge[i] = 0;
-}
-
-function getPullLimit(x, y, z) {
-  if (!pullLimit || !inBounds(x, y, z)) return 0;
-  return pullLimit[idx(x, y, z)] || 0;
-}
-
-function setPullLimit(x, y, z, value) {
-  if (!pullLimit || !inBounds(x, y, z)) return;
-  pullLimit[idx(x, y, z)] = Math.max(0, Number(value) || 0);
-}
-
-function getPullAge(x, y, z) {
-  if (!pullAge || !inBounds(x, y, z)) return 0;
-  return pullAge[idx(x, y, z)] || 0;
-}
-
-function setPullAge(x, y, z, value) {
-  if (!pullAge || !inBounds(x, y, z)) return;
-  pullAge[idx(x, y, z)] = Math.max(0, Number(value) || 0);
-}
-
-function vacuumNear(x, y, z) {
-  if (!catalog) return false;
-  for (const [dx, dy, dz] of [
-    [1, 0, 0],
-    [-1, 0, 0],
-    [0, 1, 0],
-    [0, -1, 0],
-    [0, 0, 1],
-    [0, 0, -1],
-  ]) {
-    const nx = x + dx;
-    const ny = y + dy;
-    const nz = z + dz;
-    if (!inBounds(nx, ny, nz)) continue;
-    const mat = getCell(nx, ny, nz);
-    if (mat <= 0) continue;
-    const id = catalog.idByIndex[mat];
-    const def = id ? catalog.byId.get(id) : null;
-    if (def?.effects?.some((effect) => effect.kind === "vacuum")) return true;
-  }
-  return false;
-}
-
-/**
- * Ease every neighbor of a cleared cell toward that cell. The first to arrive
- * occupies it; the others keep sliding toward the same spot.
- * @returns {boolean}
- */
-function settlePull(dt) {
-  if (!pullTo || !posX || !posY || !posZ || !cells || dt <= 0 || occupied.size === 0) return false;
-  let moved = false;
-  /** @type {{ i: number, x: number, y: number, z: number, tx: number, ty: number, tz: number, dist: number }[]} */
-  const arrivals = [];
-  for (const i of occupied) {
-    const target = pullTo[i];
-    if (target < 0 || cells[i] <= 0) continue;
-    const tx = target % GRID_MAX;
-    const trest = (target / GRID_MAX) | 0;
-    const tz = trest % GRID_MAX;
-    const ty = (trest / GRID_MAX) | 0;
-    if (!vacuumNear(tx, ty, tz)) {
-      pullTo[i] = -1;
-      continue;
-    }
-    const pitch = cellAtomSize(i);
-    const cx = worldXForCell(tx, pitch);
-    const cy = (ty + 0.5) * pitch;
-    const cz = worldZForCell(tz, pitch);
-    const dx = cx - posX[i];
-    const dy = cy - posY[i];
-    const dz = cz - posZ[i];
-    const dist = Math.hypot(dx, dy, dz);
-    const maxStep = pitch * RULE_HZ * 0.85 * dt;
-    if (dist > 1e-5) {
-      const s = dist <= maxStep ? 1 : maxStep / dist;
-      posX[i] += dx * s;
-      posY[i] += dy * s;
-      posZ[i] += dz * s;
-      moved = true;
-      markXform(i);
-    }
-    const sx = i % GRID_MAX;
-    const srest = (i / GRID_MAX) | 0;
-    const sz = srest % GRID_MAX;
-    const sy = (srest / GRID_MAX) | 0;
-    const adjacent = Math.abs(sx - tx) + Math.abs(sy - ty) + Math.abs(sz - tz) === 1;
-    if (adjacent && getCell(tx, ty, tz) === 0 && dist <= maxStep + 1e-4) {
-      arrivals.push({ i, x: sx, y: sy, z: sz, tx, ty, tz, dist });
-    }
-  }
-  arrivals.sort((a, b) => a.dist - b.dist);
-  const taken = new Set();
-  for (const arrival of arrivals) {
-    const key = idx(arrival.tx, arrival.ty, arrival.tz);
-    if (taken.has(key) || getCell(arrival.tx, arrival.ty, arrival.tz) !== 0) continue;
-    if (moveGrain(gridApi, arrival.x, arrival.y, arrival.z, arrival.tx, arrival.ty, arrival.tz, catalog)) {
-      taken.add(key);
-      moved = true;
-    }
-  }
-  return moved;
-}
-
 const gridApi = {
   get: getCell,
   set: setCell,
@@ -1039,14 +907,14 @@ const gridApi = {
   setInfection,
   getInfectionAge,
   setInfectionAge,
+  getHoleShrink,
+  setHoleShrink,
   setShrink,
   getShrink,
   getShrinkT,
   setRise,
   getRiseT,
   getRiseElapsed,
-  getRiseSwept,
-  setRiseSwept,
   getResting,
   getOnFloor,
   getSameAbove,
@@ -1074,12 +942,6 @@ const gridApi = {
   setFlowDx,
   getFlowDz,
   setFlowDz,
-  setPull,
-  clearPull,
-  getPullLimit,
-  setPullLimit,
-  getPullAge,
-  setPullAge,
 };
 
 function cellAtomSize(cellIndex) {
@@ -1089,9 +951,13 @@ function cellAtomSize(cellIndex) {
 
 function cellScale(x, y, z) {
   const i = idx(x, y, z);
-  if (!shrinkFlags || shrinkFlags[i] !== 1 || !shrinkT) return 1;
-  const t = Math.min(1, Math.max(0, shrinkT[i]));
-  return Math.max(0.02, 1 - t);
+  let scale = 1;
+  if (shrinkFlags && shrinkFlags[i] === 1 && shrinkT) {
+    const t = Math.min(1, Math.max(0, shrinkT[i]));
+    scale = Math.max(0.02, 1 - t);
+  }
+  if (holeShrink && holeShrink[i] > 0) scale *= 0.5;
+  return scale;
 }
 
 function atomExtent(x, y, z, matIndex) {
@@ -1522,14 +1388,11 @@ export function clearBoard() {
   for (const clocks of effectClocks) clocks.fill(0);
   if (infection) infection.fill(0);
   if (infectionAge) infectionAge.fill(0);
+  if (holeShrink) holeShrink.fill(0);
   if (shrinkFlags) shrinkFlags.fill(0);
   if (shrinkT) shrinkT.fill(0);
   if (riseT) riseT.fill(0);
   if (riseElapsed) riseElapsed.fill(0);
-  if (riseSwept) riseSwept.fill(0);
-  if (pullTo) pullTo.fill(-1);
-  if (pullLimit) pullLimit.fill(0);
-  if (pullAge) pullAge.fill(0);
   if (restingFlags) restingFlags.fill(0);
   if (onFloorFlags) onFloorFlags.fill(0);
   if (sameAboveFlags) sameAboveFlags.fill(0);
@@ -1722,9 +1585,11 @@ function pourBrush(ix, iz) {
       if (!inEmitXZ(x, z) || !inBounds(x, y, z)) continue;
       if (getCell(x, y, z) !== 0) continue;
       setCell(x, y, z, matIndex);
-      const life = sampleEmitLife();
-      setLife(x, y, z, life);
-      recordEmittedLife(life);
+      if (materialSonifies(matIndex)) {
+        const life = sampleEmitLife();
+        setLife(x, y, z, life);
+        recordEmittedLife(life);
+      }
       placed += 1;
     }
   }
@@ -2311,8 +2176,7 @@ function packStickTogether() {
       startMat <= 0 ||
       visited.has(start) ||
       !isShrinking(start, startMat) ||
-      materialSlidesOpen(startMat) ||
-      (pullLimit?.[start] || 0) > 0
+      materialSlidesOpen(startMat)
     ) {
       continue;
     }
@@ -2335,7 +2199,7 @@ function packStickTogether() {
         if (!inBounds(nx, ny, nz)) continue;
         const ni = idx(nx, ny, nz);
         if (visited.has(ni) || cells[ni] <= 0) continue;
-        if (!isShrinking(ni, cells[ni]) || materialSlidesOpen(cells[ni]) || (pullLimit?.[ni] || 0) > 0) continue;
+        if (!isShrinking(ni, cells[ni]) || materialSlidesOpen(cells[ni])) continue;
         visited.add(ni);
         queue.push(ni);
       }
@@ -2449,78 +2313,6 @@ function runRules() {
   return culledShuffle || vacuumed;
 }
 
-const RISE_CARDINALS = [
-  [1, 0],
-  [-1, 0],
-  [0, 1],
-  [0, -1],
-];
-
-function atomCenterY(x, y, z) {
-  const i = idx(x, y, z);
-  if (posY && posY[i] > 0) return posY[i];
-  return (y + 0.5) * cellAtomSize(i);
-}
-
-/** Push this atom one cell along dx/dz. Occupied cells beyond it move first. */
-function shoveOutward(x, y, z, dx, dz, guard) {
-  if (guard > GRID_MAX || getCell(x, y, z) <= 0) return false;
-  const tx = x + dx;
-  const tz = z + dz;
-  if (!inBounds(tx, y, tz)) return false;
-  if (getCell(tx, y, tz) > 0 && !shoveOutward(tx, y, tz, dx, dz, guard + 1)) return false;
-  return moveGrain(gridApi, x, y, z, tx, y, tz, catalog);
-}
-
-/**
- * A rising grain stays in its cell. Any atom its body passes in the four
- * horizontal directions is pushed one cell further that way.
- * @returns {boolean}
- */
-function shoveRisingSand() {
-  if (!riseElapsed || !riseSwept || !cells || occupied.size === 0) return false;
-  const risers = [];
-  for (const i of occupied) {
-    if ((riseElapsed[i] || 0) > 0 && cells[i] > 0) risers.push(i);
-  }
-  let moved = false;
-  for (const i of risers) {
-    if (cells[i] <= 0 || (riseElapsed[i] || 0) <= 0) continue;
-    const { x, y, z } = decodeCell(i);
-    const half = atomExtent(x, y, z, cells[i]) * 0.5;
-    const rest = atomCenterY(x, y, z);
-    const curr = rest + riseOffset(x, y, z);
-    const prev = riseSwept[i] > 0 ? riseSwept[i] : rest;
-    const bottom = Math.min(prev, curr) - half;
-    const top = Math.max(prev, curr) + half;
-    riseSwept[i] = curr;
-    for (const [dx, dz] of RISE_CARDINALS) {
-      const nx = x + dx;
-      const nz = z + dz;
-      if (!inBounds(nx, 0, nz)) continue;
-      const list = columns.get(nz * GRID_MAX + nx);
-      if (!list) continue;
-      /** @type {{ x: number, y: number, z: number }[]} */
-      const hits = [];
-      for (let n = 0; n < list.length; n += 1) {
-        const ni = list[n];
-        if (cells[ni] <= 0) continue;
-        const hit = decodeCell(ni);
-        if (hit.x !== nx || hit.z !== nz) continue;
-        const nHalf = atomExtent(hit.x, hit.y, hit.z, cells[ni]) * 0.5;
-        const nCenter = atomCenterY(hit.x, hit.y, hit.z);
-        if (nCenter + nHalf <= bottom || nCenter - nHalf >= top) continue;
-        hits.push(hit);
-      }
-      for (const hit of hits) {
-        if (getCell(hit.x, hit.y, hit.z) <= 0) continue;
-        if (shoveOutward(hit.x, hit.y, hit.z, dx, dz, 0)) moved = true;
-      }
-    }
-  }
-  return moved;
-}
-
 function step(dt) {
   bumpXformGen();
   advanceEmitLife(dt);
@@ -2543,19 +2335,17 @@ function step(dt) {
   const heardBefore = countSonifying();
   rebuildColumnFlags();
   const effected = tickEffects(gridApi, collectOccupied(), catalog, columnQueries, dt);
-  const shoved = shoveRisingSand();
   audioDeath += Math.max(0, heardBefore - countSonifying());
-  if (occupied.size !== columnOccupancy || shoved) {
+  if (occupied.size !== columnOccupancy) {
     buildColumns();
     columnOccupancy = occupied.size;
   }
   const settled = settleGravity(dt);
   const lateral = settleLateral(dt);
-  const pulled = settlePull(dt);
   const packed = packStickTogether();
   const culled = consumeOutOfBounds();
   if (occupied.size !== columnOccupancy) buildColumns();
-  if (infected || effected || ruled || settled || lateral || pulled || packed || culled || shoved) {
+  if (infected || effected || ruled || settled || lateral || packed || culled) {
     writeMeshesFromColumns(effected);
   }
   rebuildColumnFlags();
@@ -2653,7 +2443,7 @@ function startRenderLoop() {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=75`);
+  const res = await fetch(`/materials.json?v=78`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(parseMaterialsJson(await res.text()));
@@ -2670,15 +2460,11 @@ function ensureEffectStorage() {
   effectClocks = Array.from({ length: channels }, () => new Float32Array(n));
   infection = new Float32Array(n);
   infectionAge = new Float32Array(n);
+  holeShrink = new Float32Array(n);
   shrinkFlags = new Uint8Array(n);
   shrinkT = new Float32Array(n);
   riseT = new Float32Array(n);
   riseElapsed = new Float32Array(n);
-  riseSwept = new Float32Array(n);
-  pullTo = new Int32Array(n);
-  pullTo.fill(-1);
-  pullLimit = new Float32Array(n);
-  pullAge = new Float32Array(n);
   restingFlags = new Uint8Array(n);
   onFloorFlags = new Uint8Array(n);
   sameAboveFlags = new Uint8Array(n);

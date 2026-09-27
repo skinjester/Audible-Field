@@ -37,9 +37,7 @@
  * (poured lifetime, or `age` when none is stored) × `lifeScale`, then clears.
  * lifeScale defaults to 1. The wait is not taken out of that lifetime. The same
  * age clock measures the wait and the climb. The lift is drawn on top of the
- * cell; the cell stays put until it clears. As the drawn body passes an atom
- * to the north, south, east, or west, that atom is pushed one cell further
- * outward. If the next cell is full, the atoms beyond it are pushed first.
+ * cell; the cell stays put until it clears.
  * slideLife "above": the horizontal travel of a grain is the number of atoms
  * stacked on it when it first slides. It despawns at that distance, stays full
  * size while sliding, and a shorter stack means a shorter life. 0 steps keeps
@@ -49,8 +47,8 @@
  *   { infect: { seconds, skipSurface?: "liquid" } }
  *   { vacuum: { skipSurface?: "liquid" } }
  *   vacuum clears each solid face neighbor. Every remaining face neighbor of
- *   that cell then slides one step toward the cell that was cleared and starts
- *   shrinking. `seconds` is how long that shrink takes. Liquids stay put.
+ *   that cell snaps to half size and stays there. Nothing is pulled toward
+ *   the emptied cell. Liquids are not cleared.
  *   { absorbSparse: { seconds, minNeighbors } }
  *   { dryUnbounded: { seconds, resetOn?: "gainedTouch" } }
  *   { cullShuffle: { hops, span } }
@@ -263,7 +261,6 @@ function normalizeEffect(rule) {
     return {
       ...base,
       kind: "vacuum",
-      seconds: positiveSeconds(verb.vacuum.seconds) || 6,
       skipSurface: verb.vacuum.skipSurface === "liquid" ? "liquid" : null,
     };
   }
@@ -1023,9 +1020,6 @@ function transferGrain(grid, x, y, z, toX, toY, toZ, matIndex, catalog) {
   const shrinkT = grid.getShrinkT?.(x, y, z) ?? 0;
   const risingT = grid.getRiseT?.(x, y, z) ?? 0;
   const risingElapsed = grid.getRiseElapsed?.(x, y, z) ?? 0;
-  const riseSwept = grid.getRiseSwept?.(x, y, z) ?? 0;
-  const pullAge = grid.getPullAge?.(x, y, z) ?? 0;
-  const pullLimit = grid.getPullLimit?.(x, y, z) ?? 0;
 
   grid.set(toX, toY, toZ, matIndex);
   grid.set(x, y, z, 0);
@@ -1041,12 +1035,7 @@ function transferGrain(grid, x, y, z, toX, toY, toZ, matIndex, catalog) {
   grid.setShuffleOriginX?.(toX, toY, toZ, shuffleOx);
   grid.setShuffleOriginZ?.(toX, toY, toZ, shuffleOz);
   grid.setShrink?.(toX, toY, toZ, shrinking, shrinkT);
-  if (pullLimit > 0) {
-    grid.setPullAge?.(toX, toY, toZ, pullAge);
-    grid.setPullLimit?.(toX, toY, toZ, pullLimit);
-  }
   if (risingElapsed > 0 || risingT > 0) grid.setRise?.(toX, toY, toZ, true, risingT, risingElapsed);
-  if (riseSwept > 0) grid.setRiseSwept?.(toX, toY, toZ, riseSwept);
 }
 
 /**
@@ -1360,7 +1349,6 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
   const flowDirZ = grid.getFlowDz?.(x, y, z) ?? 0;
   const risingT = grid.getRiseT?.(x, y, z) ?? 0;
   const risingElapsed = grid.getRiseElapsed?.(x, y, z) ?? 0;
-  const riseSwept = grid.getRiseSwept?.(x, y, z) ?? 0;
 
   /** @type {CellPos | null} */
   let to = null;
@@ -1394,7 +1382,6 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
     grid.setFlowDx?.(to.x, to.y, to.z, flowDirX);
     grid.setFlowDz?.(to.x, to.y, to.z, flowDirZ);
     if (risingElapsed > 0 || risingT > 0) grid.setRise?.(to.x, to.y, to.z, true, risingT, risingElapsed);
-    if (riseSwept > 0) grid.setRiseSwept?.(to.x, to.y, to.z, riseSwept);
     return to;
   }
   // Applied with no @ in result (e.g. etch consumes self + neighbor).
@@ -1479,6 +1466,7 @@ function readEffectState(grid, x, y, z, catalog) {
     clocks,
     infection: grid.getInfection?.(x, y, z) ?? 0,
     infectionAge: grid.getInfectionAge?.(x, y, z) ?? 0,
+    holeShrink: grid.getHoleShrink?.(x, y, z) ?? 0,
   };
 }
 
@@ -1489,6 +1477,7 @@ function writeEffectState(grid, x, y, z, state) {
   }
   grid.setInfection?.(x, y, z, state.infection);
   grid.setInfectionAge?.(x, y, z, state.infectionAge);
+  grid.setHoleShrink?.(x, y, z, state.holeShrink || 0);
 }
 
 function clearEffectState(grid, x, y, z, catalog) {
@@ -1496,6 +1485,7 @@ function clearEffectState(grid, x, y, z, catalog) {
   for (let c = 0; c < n; c += 1) grid.setEffectClock?.(x, y, z, c, 0);
   grid.setInfection?.(x, y, z, 0);
   grid.setInfectionAge?.(x, y, z, 0);
+  grid.setHoleShrink?.(x, y, z, 0);
   grid.setShrink?.(x, y, z, false, 0);
   grid.setRise?.(x, y, z, false, 0);
 }
@@ -1512,7 +1502,6 @@ function clearCellMeta(grid, x, y, z, catalog = null) {
   grid.setShuffleOriginZ?.(x, y, z, 0);
   grid.setFlowDx?.(x, y, z, 0);
   grid.setFlowDz?.(x, y, z, 0);
-  grid.clearPull?.(x, y, z);
   clearEffectState(grid, x, y, z, catalog);
 }
 
@@ -1633,40 +1622,10 @@ function vacuumVictim(catalog, matIndex, selfMat, effect) {
   return true;
 }
 
-/**
- * Slide every solid face neighbor one step toward the cell that was just cleared.
- * The empty cell can hold one grain; the rest keep a pull toward that same cell.
- * @param {GridApi} grid
- * @param {MaterialCatalog} catalog
- * @param {object} effect
- * @param {{ x: number, y: number, z: number, mat: number }} origin
- * @param {{ x: number, y: number, z: number }} hole
- */
-function slideNeighborsTowardHole(grid, catalog, effect, origin, hole) {
-  /** @type {{ x: number, y: number, z: number, mat: number }[]} */
-  const neighbors = [];
-  for (const [dx, dy, dz] of EFFECT_DIRS) {
-    const x = hole.x + dx;
-    const y = hole.y + dy;
-    const z = hole.z + dz;
-    if (x === origin.x && y === origin.y && z === origin.z) continue;
-    if (!grid.inBounds(x, y, z)) continue;
-    const mat = grid.get(x, y, z);
-    if (!vacuumVictim(catalog, mat, origin.mat, effect)) continue;
-    neighbors.push({ x, y, z, mat });
-  }
-  let moved = false;
-  for (const n of neighbors) {
-    grid.setPull?.(n.x, n.y, n.z, hole.x, hole.y, hole.z, effect.seconds);
-    moved = true;
-  }
-  for (const n of neighbors) {
-    if (grid.get(hole.x, hole.y, hole.z) > 0) break;
-    if (grid.get(n.x, n.y, n.z) !== n.mat) continue;
-    transferGrain(grid, n.x, n.y, n.z, hole.x, hole.y, hole.z, n.mat, catalog);
-    moved = true;
-  }
-  return moved;
+/** Snap a neighbor of a cleared cell to half size. A cell already snapped stays there. */
+function beginHoleShrink(grid, x, y, z) {
+  if ((grid.getHoleShrink?.(x, y, z) ?? 0) > 0) return;
+  grid.setHoleShrink?.(x, y, z, 1);
 }
 
 /**
@@ -1688,8 +1647,8 @@ export function moveGrain(grid, x, y, z, toX, toY, toZ, catalog) {
 }
 
 /**
- * Clear solid face neighbors, then slide every remaining face neighbor of each
- * cleared cell toward that cell.
+ * Clear solid face neighbors, then shrink every remaining face neighbor of each
+ * cleared cell. Those neighbors stay put.
  * @param {GridApi} grid
  * @param {{ x: number, y: number, z: number, mat: number }[]} cells
  * @param {MaterialCatalog} catalog
@@ -1705,7 +1664,7 @@ export function applyVacuum(grid, cells, catalog) {
     for (const effect of material.effects) {
       if (effect.kind !== "vacuum") continue;
       if (!whenMatches(effect.when, effectContext(grid, cell, catalog, null))) continue;
-      /** @type {{ x: number, y: number, z: number, dx: number, dy: number, dz: number }[]} */
+      /** @type {{ x: number, y: number, z: number }[]} */
       const holes = [];
       for (const [dx, dy, dz] of EFFECT_DIRS) {
         const nx = cell.x + dx;
@@ -1716,11 +1675,19 @@ export function applyVacuum(grid, cells, catalog) {
         if (!vacuumVictim(catalog, nmat, cell.mat, effect)) continue;
         grid.set(nx, ny, nz, 0);
         clearCellMeta(grid, nx, ny, nz, catalog);
-        holes.push({ x: nx, y: ny, z: nz, dx, dy, dz });
+        holes.push({ x: nx, y: ny, z: nz });
         dirty = true;
       }
       for (const hole of holes) {
-        if (slideNeighborsTowardHole(grid, catalog, effect, cell, hole)) dirty = true;
+        for (const [dx, dy, dz] of EFFECT_DIRS) {
+          const nx = hole.x + dx;
+          const ny = hole.y + dy;
+          const nz = hole.z + dz;
+          if (nx === cell.x && ny === cell.y && nz === cell.z) continue;
+          if (!grid.inBounds(nx, ny, nz) || grid.get(nx, ny, nz) <= 0) continue;
+          beginHoleShrink(grid, nx, ny, nz);
+          dirty = true;
+        }
       }
     }
   }
@@ -1985,20 +1952,6 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
       }
     } else if ((grid.getInfectionAge?.(cell.x, cell.y, cell.z) ?? 0) > 0) {
       grid.setInfectionAge?.(cell.x, cell.y, cell.z, 0);
-    }
-
-    const pullLimit = grid.getPullLimit?.(cell.x, cell.y, cell.z) ?? 0;
-    if (pullLimit > 0) {
-      const age = (grid.getPullAge?.(cell.x, cell.y, cell.z) ?? 0) + dt;
-      if (age >= pullLimit) {
-        doomed.push(cell);
-        dirty = true;
-      } else {
-        grid.setPullAge?.(cell.x, cell.y, cell.z, age);
-        shrink = true;
-        shrinkT = Math.max(shrinkT, Math.min(1, age / pullLimit));
-        dirty = true;
-      }
     }
 
     grid.setShrink?.(cell.x, cell.y, cell.z, shrink, shrink ? shrinkT : 0);

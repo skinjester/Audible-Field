@@ -112,21 +112,21 @@
         {
           "name": "lone-dissolve",
           "when": { "resting": true, "onFloor": true, "sameAbove": false, "blockAbove": false },
-          "do": { "age": 3.5, "visual": "shrink", "then": "clear" }
+          "do": { "age": 6, "visual": "shrink", "then": "clear" }
         },
         {
           "name": "crush-support",
           "when": { "resting": true, "onFloor": true, "sameAbove": true },
-          "do": { "age": 3.5, "then": "clear" }
+          "do": { "age": 6, "then": "clear" }
         },
         {
           "name": "crush-block",
           "when": { "resting": true, "onFloor": true, "blockAbove": true },
-          "do": { "age": 3.5, "then": "clear" }
+          "do": { "age": 6, "then": "clear" }
         },
         {
           "name": "vacuum",
-          "do": { "vacuum": { "seconds": 6, "skipSurface": "liquid" } }
+          "do": { "vacuum": { "skipSurface": "liquid" } }
         }
       ]
     }
