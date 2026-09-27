@@ -4,7 +4,7 @@
  * Stick axes use hand-editable bindings in wam-stick-maps.js.
  */
 
-import { getWamStickMap } from "./wam-stick-maps.js?v=1";
+import { getWamStickMap } from "./wam-stick-maps.js?v=2";
 
 const WIMMICS_SDK = "/wams/wimmics/utils/sdk/src/initializeWamHost.js";
 const WAM_PLUGIN_BASE = "/wams/";
@@ -66,8 +66,45 @@ export function setWamParam(audioNode, names, value) {
   }
 }
 
-function clamp01(n) {
-  return Math.min(1, Math.max(0, Number(n) || 0));
+/**
+ * Left stick −1…1 → multiplier. Rest (0) is 1.
+ * Full +stick is `maxMult`. Full −stick is 1/maxMult, which stays above 0.
+ * A max of 1 leaves the multiplier at 1 for every stick position.
+ * @param {number} stick
+ * @param {number} maxMult
+ */
+export function stickMultiplier(stick, maxMult) {
+  const s = Math.min(1, Math.max(-1, Number(stick) || 0));
+  const maxM = Math.max(1, Number(maxMult) || 1);
+  if (s === 0 || maxM === 1) return 1;
+  if (s > 0) return 1 + (maxM - 1) * s;
+  return 1 / (1 + (maxM - 1) * -s);
+}
+
+/**
+ * default × multiplier, clamped to the param's [min, max].
+ * Default 0 cannot be scaled by multiplication, so +stick uses
+ * (multiplier − 1) × max and −stick falls toward min.
+ * Values at or below 0 are not sent when min is 0 or greater — they clamp to min.
+ * @param {{ min: number, max: number, def: number }} param
+ * @param {number} mult
+ */
+export function paramFromMultiplier(param, mult) {
+  const min = Number(param.min);
+  const max = Number(param.max);
+  const def = Number(param.def);
+  const m = Number(mult);
+  let value;
+  if (!Number.isFinite(def) || Math.abs(def) <= 1e-8) {
+    const span = Number.isFinite(max) ? max : 0;
+    value = (Number.isFinite(m) ? m : 1) - 1;
+    value *= span;
+  } else {
+    value = def * (Number.isFinite(m) ? m : 1);
+  }
+  if (Number.isFinite(min) && value < min) value = min;
+  if (Number.isFinite(max) && value > max) value = max;
+  return value;
 }
 
 /**
@@ -184,35 +221,32 @@ export function applyWamDefaults(audioNode, binding) {
 }
 
 /**
- * Map stick axes (0–1) onto WAM params from an explicit X/Y binding.
- * Scale can be a single number (both axes) or `{ x, y }` for per-axis depth.
+ * Map raw stick axes (−1…1) onto WAM params.
+ * `scale` is the max multiplier at full +stick (per axis, or one number for both).
+ * Stick rest sends each param's default. The result is clamped to [min, max].
  * @param {{ setParamValue?: Function }} audioNode
  * @param {StickBinding | null} binding
- * @param {number} x01
- * @param {number} y01
+ * @param {number} stickX
+ * @param {number} stickY
  * @param {number | { x?: number, y?: number }} [scale=1]
  */
-export function applyStickToWamParams(audioNode, binding, x01, y01, scale = 1) {
+export function applyStickToWamParams(audioNode, binding, stickX, stickY, scale = 1) {
   if (!audioNode || !binding) return;
   const scales =
     scale && typeof scale === "object"
       ? {
-          x: Math.max(0.1, Number(scale.x) || 1),
-          y: Math.max(0.1, Number(scale.y) || 1),
+          x: Math.max(1, Number(scale.x) || 1),
+          y: Math.max(1, Number(scale.y) || 1),
         }
       : {
-          x: Math.max(0.1, Number(scale) || 1),
-          y: Math.max(0.1, Number(scale) || 1),
+          x: Math.max(1, Number(scale) || 1),
+          y: Math.max(1, Number(scale) || 1),
         };
-  const mapAxis = (t01, p, axisScale) => {
-    const u = clamp01(clamp01(t01) * axisScale);
-    return p.min + (p.max - p.min) * u;
-  };
   for (const p of binding.x || []) {
-    setWamParam(audioNode, p.id, mapAxis(x01, p, scales.x));
+    setWamParam(audioNode, p.id, paramFromMultiplier(p, stickMultiplier(stickX, scales.x)));
   }
   for (const p of binding.y || []) {
-    setWamParam(audioNode, p.id, mapAxis(y01, p, scales.y));
+    setWamParam(audioNode, p.id, paramFromMultiplier(p, stickMultiplier(stickY, scales.y)));
   }
   for (const id of binding.forceOff || []) {
     setWamParam(audioNode, id, 0);

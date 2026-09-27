@@ -385,7 +385,10 @@ export default class greyhole {
     this.baseURL = baseURL;
     this.pathTable = [];
 
-    this.fWorkletProcessors = this.fWorkletProcessors || [];
+    // Share the worklet registration across instances. A second Greyhole
+    // otherwise calls addModule again and registerProcessor throws.
+    if (!greyhole.fWorkletProcessors) greyhole.fWorkletProcessors = [];
+    this.fWorkletProcessors = greyhole.fWorkletProcessors;
   }
 
   heap2Str(buf) {

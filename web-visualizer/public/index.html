@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape Web Visualizer</title>
-    <link rel="stylesheet" href="/styles.css?v=122" />
+    <link rel="stylesheet" href="/styles.css?v=131" />
     <script type="importmap">
       {
         "imports": {
@@ -43,7 +43,7 @@
           Visualize
         </button>
         <button type="button" data-tab="falling-blocks" aria-selected="false">
-          Falling Blocks
+          Falling Blocks (Field-1)
         </button>
       </nav>
 
@@ -181,12 +181,12 @@
                 <p class="fx-btn">Triggers</p>
                 <div class="trig">
                   <div class="trig-row">
-                    <span>LT</span>
+                    <span title="Lowpass sweeps up">LT</span>
                     <div class="trig-bar"><span data-lt-bar></span></div>
                     <strong data-lt>0.00</strong>
                   </div>
                   <div class="trig-row">
-                    <span>RT</span>
+                    <span title="Highpass sweeps down">RT</span>
                     <div class="trig-bar"><span data-rt-bar></span></div>
                     <strong data-rt>0.00</strong>
                   </div>
@@ -196,8 +196,8 @@
                 <p class="fx-btn">Shoulders</p>
                 <div class="trig">
                   <div class="click-row">
-                    <button type="button" class="click-pill" data-l1 title="Hold for Abyss plunge">L1 abyss</button>
-                    <button type="button" class="click-pill" data-r1 title="Hold for Glass bloom">R1 bloom</button>
+                    <button type="button" class="click-pill" data-l1 title="Hold for reverb">L1 reverb</button>
+                    <button type="button" class="click-pill" data-r1 title="Hold for delay">R1 delay</button>
                   </div>
                 </div>
               </article>
@@ -240,10 +240,11 @@
                   <dt data-fx-x-label="square">Stick X</dt>
                   <dd class="fx-axis-value">
                     <span data-fx-x>0.00</span>
-                    <div class="fx-scale" data-fx-scale-wrap="square" data-fx-scale-axis="x" hidden title="Stick X → param depth (1 = full min–max)">
-                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="square" data-fx-scale-axis="x" aria-label="Decrease Stick X scale">−</button>
-                      <input type="number" class="fx-scale-input" data-fx-scale="square" data-fx-scale-axis="x" value="1" min="0.1" max="5" step="0.1" inputmode="decimal" aria-label="Stick X scale" />
-                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="square" data-fx-scale-axis="x" aria-label="Increase Stick X scale">+</button>
+                    <div class="fx-scale" data-fx-scale-wrap="square" data-fx-scale-axis="x" hidden title="Max multiplier at full +stick. Center stick is 1 (plugin default). Full −stick is 1/max.">
+                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="square" data-fx-scale-axis="x" aria-label="Decrease Stick X max multiplier">−</button>
+                      <span class="fx-scale-max">max</span>
+                      <input type="number" class="fx-scale-input" data-fx-scale="square" data-fx-scale-axis="x" value="1" min="1" step="0.1" inputmode="decimal" aria-label="Stick X max multiplier" />
+                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="square" data-fx-scale-axis="x" aria-label="Increase Stick X max multiplier">+</button>
                     </div>
                   </dd>
                 </div>
@@ -251,10 +252,11 @@
                   <dt data-fx-y-label="square">Stick Y</dt>
                   <dd class="fx-axis-value">
                     <span data-fx-y>0.00</span>
-                    <div class="fx-scale" data-fx-scale-wrap="square" data-fx-scale-axis="y" hidden title="Stick Y → param depth (1 = full min–max)">
-                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="square" data-fx-scale-axis="y" aria-label="Decrease Stick Y scale">−</button>
-                      <input type="number" class="fx-scale-input" data-fx-scale="square" data-fx-scale-axis="y" value="1" min="0.1" max="5" step="0.1" inputmode="decimal" aria-label="Stick Y scale" />
-                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="square" data-fx-scale-axis="y" aria-label="Increase Stick Y scale">+</button>
+                    <div class="fx-scale" data-fx-scale-wrap="square" data-fx-scale-axis="y" hidden title="Max multiplier at full +stick. Center stick is 1 (plugin default). Full −stick is 1/max.">
+                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="square" data-fx-scale-axis="y" aria-label="Decrease Stick Y max multiplier">−</button>
+                      <span class="fx-scale-max">max</span>
+                      <input type="number" class="fx-scale-input" data-fx-scale="square" data-fx-scale-axis="y" value="1" min="1" step="0.1" inputmode="decimal" aria-label="Stick Y max multiplier" />
+                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="square" data-fx-scale-axis="y" aria-label="Increase Stick Y max multiplier">+</button>
                     </div>
                   </dd>
                 </div>
@@ -273,10 +275,11 @@
                   <dt data-fx-x-label="triangle">Param 2</dt>
                   <dd class="fx-axis-value">
                     <span data-fx-x>0.00</span>
-                    <div class="fx-scale" data-fx-scale-wrap="triangle" data-fx-scale-axis="x" hidden title="Stick X → param depth (1 = full min–max)">
-                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="triangle" data-fx-scale-axis="x" aria-label="Decrease Stick X scale">−</button>
-                      <input type="number" class="fx-scale-input" data-fx-scale="triangle" data-fx-scale-axis="x" value="1" min="0.1" max="5" step="0.1" inputmode="decimal" aria-label="Stick X scale" />
-                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="triangle" data-fx-scale-axis="x" aria-label="Increase Stick X scale">+</button>
+                    <div class="fx-scale" data-fx-scale-wrap="triangle" data-fx-scale-axis="x" hidden title="Max multiplier at full +stick. Center stick is 1 (plugin default). Full −stick is 1/max.">
+                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="triangle" data-fx-scale-axis="x" aria-label="Decrease Stick X max multiplier">−</button>
+                      <span class="fx-scale-max">max</span>
+                      <input type="number" class="fx-scale-input" data-fx-scale="triangle" data-fx-scale-axis="x" value="1" min="1" step="0.1" inputmode="decimal" aria-label="Stick X max multiplier" />
+                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="triangle" data-fx-scale-axis="x" aria-label="Increase Stick X max multiplier">+</button>
                     </div>
                   </dd>
                 </div>
@@ -284,10 +287,11 @@
                   <dt data-fx-y-label="triangle">Param 3</dt>
                   <dd class="fx-axis-value">
                     <span data-fx-y>0.00</span>
-                    <div class="fx-scale" data-fx-scale-wrap="triangle" data-fx-scale-axis="y" hidden title="Stick Y → param depth (1 = full min–max)">
-                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="triangle" data-fx-scale-axis="y" aria-label="Decrease Stick Y scale">−</button>
-                      <input type="number" class="fx-scale-input" data-fx-scale="triangle" data-fx-scale-axis="y" value="1" min="0.1" max="5" step="0.1" inputmode="decimal" aria-label="Stick Y scale" />
-                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="triangle" data-fx-scale-axis="y" aria-label="Increase Stick Y scale">+</button>
+                    <div class="fx-scale" data-fx-scale-wrap="triangle" data-fx-scale-axis="y" hidden title="Max multiplier at full +stick. Center stick is 1 (plugin default). Full −stick is 1/max.">
+                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="triangle" data-fx-scale-axis="y" aria-label="Decrease Stick Y max multiplier">−</button>
+                      <span class="fx-scale-max">max</span>
+                      <input type="number" class="fx-scale-input" data-fx-scale="triangle" data-fx-scale-axis="y" value="1" min="1" step="0.1" inputmode="decimal" aria-label="Stick Y max multiplier" />
+                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="triangle" data-fx-scale-axis="y" aria-label="Increase Stick Y max multiplier">+</button>
                     </div>
                   </dd>
                 </div>
@@ -306,10 +310,11 @@
                   <dt data-fx-x-label="circle">Param 17</dt>
                   <dd class="fx-axis-value">
                     <span data-fx-x>0.00</span>
-                    <div class="fx-scale" data-fx-scale-wrap="circle" data-fx-scale-axis="x" hidden title="Stick X → param depth (1 = full min–max)">
-                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="circle" data-fx-scale-axis="x" aria-label="Decrease Stick X scale">−</button>
-                      <input type="number" class="fx-scale-input" data-fx-scale="circle" data-fx-scale-axis="x" value="1" min="0.1" max="5" step="0.1" inputmode="decimal" aria-label="Stick X scale" />
-                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="circle" data-fx-scale-axis="x" aria-label="Increase Stick X scale">+</button>
+                    <div class="fx-scale" data-fx-scale-wrap="circle" data-fx-scale-axis="x" hidden title="Max multiplier at full +stick. Center stick is 1 (plugin default). Full −stick is 1/max.">
+                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="circle" data-fx-scale-axis="x" aria-label="Decrease Stick X max multiplier">−</button>
+                      <span class="fx-scale-max">max</span>
+                      <input type="number" class="fx-scale-input" data-fx-scale="circle" data-fx-scale-axis="x" value="1" min="1" step="0.1" inputmode="decimal" aria-label="Stick X max multiplier" />
+                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="circle" data-fx-scale-axis="x" aria-label="Increase Stick X max multiplier">+</button>
                     </div>
                   </dd>
                 </div>
@@ -317,10 +322,11 @@
                   <dt data-fx-y-label="circle">Param 4</dt>
                   <dd class="fx-axis-value">
                     <span data-fx-y>0.00</span>
-                    <div class="fx-scale" data-fx-scale-wrap="circle" data-fx-scale-axis="y" hidden title="Stick Y → param depth (1 = full min–max)">
-                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="circle" data-fx-scale-axis="y" aria-label="Decrease Stick Y scale">−</button>
-                      <input type="number" class="fx-scale-input" data-fx-scale="circle" data-fx-scale-axis="y" value="1" min="0.1" max="5" step="0.1" inputmode="decimal" aria-label="Stick Y scale" />
-                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="circle" data-fx-scale-axis="y" aria-label="Increase Stick Y scale">+</button>
+                    <div class="fx-scale" data-fx-scale-wrap="circle" data-fx-scale-axis="y" hidden title="Max multiplier at full +stick. Center stick is 1 (plugin default). Full −stick is 1/max.">
+                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="circle" data-fx-scale-axis="y" aria-label="Decrease Stick Y max multiplier">−</button>
+                      <span class="fx-scale-max">max</span>
+                      <input type="number" class="fx-scale-input" data-fx-scale="circle" data-fx-scale-axis="y" value="1" min="1" step="0.1" inputmode="decimal" aria-label="Stick Y max multiplier" />
+                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="circle" data-fx-scale-axis="y" aria-label="Increase Stick Y max multiplier">+</button>
                     </div>
                   </dd>
                 </div>
@@ -363,20 +369,113 @@
                 />
                 <span data-falling-emit-height-val>5.5u</span>
               </label>
-              <div class="falling-emit-size">
-                Target
-                <div class="falling-emit-presets" role="group" aria-label="Emission target">
-                  <button type="button" data-falling-target="grid" aria-pressed="true">Grid</button>
-                  <button type="button" data-falling-target="shadow" aria-pressed="false">Shadow</button>
-                </div>
-              </div>
               <div class="falling-palette-row">
                 <div class="falling-palette" data-falling-palette role="group" aria-label="Material"></div>
                 <button type="button" class="falling-clear" data-falling-clear title="Clear board (Circle)">
                   Clear
                 </button>
+                <button type="button" class="falling-audio" data-falling-audio aria-pressed="true" title="Sonify the field">
+                  Audio
+                </button>
               </div>
             </div>
+            <aside class="falling-readout" data-falling-readout>
+              <table class="falling-measures" aria-label="Corner measures">
+                <colgroup>
+                  <col class="falling-readout-label" />
+                  <col class="falling-readout-val" span="4" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th scope="col"></th>
+                    <th scope="col" title="Top left">TL</th>
+                    <th scope="col" title="Top right">TR</th>
+                    <th scope="col" title="Bottom left">BL</th>
+                    <th scope="col" title="Bottom right">BR</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row" title="Occupied ground cells">area</th>
+                    <td data-readout="tl-area">—</td>
+                    <td data-readout="tr-area">—</td>
+                    <td data-readout="bl-area">—</td>
+                    <td data-readout="br-area">—</td>
+                  </tr>
+                  <tr>
+                    <th scope="row" title="Tallest stack, world units">height</th>
+                    <td data-readout="tl-height">—</td>
+                    <td data-readout="tr-height">—</td>
+                    <td data-readout="bl-height">—</td>
+                    <td data-readout="br-height">—</td>
+                  </tr>
+                </tbody>
+              </table>
+              <table class="falling-doing" aria-label="What atoms are doing">
+                <colgroup>
+                  <col class="falling-readout-label" />
+                  <col class="falling-readout-val" span="4" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th scope="col"></th>
+                    <th scope="col" title="Top left">TL</th>
+                    <th scope="col" title="Top right">TR</th>
+                    <th scope="col" title="Bottom left">BL</th>
+                    <th scope="col" title="Bottom right">BR</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row" title="In the air">fall</th>
+                    <td data-readout="tl-fall">—</td>
+                    <td data-readout="tr-fall">—</td>
+                    <td data-readout="bl-fall">—</td>
+                    <td data-readout="br-fall">—</td>
+                  </tr>
+                  <tr>
+                    <th scope="row" title="Stepping sideways">slide</th>
+                    <td data-readout="tl-slide">—</td>
+                    <td data-readout="tr-slide">—</td>
+                    <td data-readout="bl-slide">—</td>
+                    <td data-readout="br-slide">—</td>
+                  </tr>
+                  <tr>
+                    <th scope="row" title="Sitting still">rest</th>
+                    <td data-readout="tl-rest">—</td>
+                    <td data-readout="tr-rest">—</td>
+                    <td data-readout="bl-rest">—</td>
+                    <td data-readout="br-rest">—</td>
+                  </tr>
+                  <tr>
+                    <th scope="row" title="Dissolving">shrink</th>
+                    <td data-readout="tl-shrink">—</td>
+                    <td data-readout="tr-shrink">—</td>
+                    <td data-readout="bl-shrink">—</td>
+                    <td data-readout="br-shrink">—</td>
+                  </tr>
+                  <tr>
+                    <th scope="row" title="Lifting and fading">rise</th>
+                    <td data-readout="tl-rise">—</td>
+                    <td data-readout="tr-rise">—</td>
+                    <td data-readout="bl-rise">—</td>
+                    <td data-readout="br-rise">—</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="falling-life-wave" aria-label="Master lifetime oscillator, 0.1 to 3.5 seconds">
+                <svg viewBox="0 0 220 48" role="img">
+                  <text data-life-max x="0" y="12">3.5</text>
+                  <text data-life-min x="0" y="46">0.1</text>
+                  <polyline data-life-wave />
+                  <circle data-life-wave-dot r="2.6" cx="34" cy="42" />
+                </svg>
+              </div>
+              <div class="falling-life-log" data-falling-life-log aria-label="Emitted atom lifespans">
+                <div class="falling-life-log-head"><span>atom</span><span>life</span></div>
+                <ol data-falling-life-list></ol>
+              </div>
+            </aside>
             <div class="viz-hud falling-stats" aria-live="polite">
               <div><span data-falling-fps>--</span> fps</div>
               <div><span data-falling-atoms>--</span> atoms · <span data-falling-tris>--</span> polys</div>
@@ -385,6 +484,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=219"></script>
+    <script type="module" src="/app.js?v=245"></script>
   </body>
 </html>

@@ -130,6 +130,18 @@ function listAllSamplesGrouped() {
     }))
     .sort((a, b) => a.folder.localeCompare(b.folder));
 
+  const natureFiles = ["Beach-rx.wav", "Forest-rx.wav", "River-rx.wav"].filter((name) => {
+    const filePath = path.join(BEDS_DIR, name);
+    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+  });
+  if (natureFiles.length) {
+    groups.unshift({
+      folder: "nature",
+      urlBase: "/beds",
+      files: natureFiles,
+    });
+  }
+
   return { groups };
 }
 

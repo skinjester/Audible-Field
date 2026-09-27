@@ -1025,8 +1025,15 @@ dd {
   border-color: color-mix(in srgb, var(--live) 45%, var(--line));
 }
 
+.fx-scale-max {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  opacity: 0.65;
+  margin: 0 2px;
+}
+
 .fx-scale-input {
-  width: 3.2rem;
+  width: 4.6rem;
   height: 22px;
   margin: 0;
   padding: 0 4px;
@@ -1193,6 +1200,143 @@ dd {
   bottom: 12px;
 }
 
+.falling-readout {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 0;
+  color: rgba(240, 240, 240, 0.95);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  pointer-events: none;
+}
+
+.falling-readout table {
+  width: 34ch;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.falling-readout col.falling-readout-label {
+  width: 8ch;
+}
+
+.falling-readout col.falling-readout-val {
+  width: 6.5ch;
+}
+
+.falling-readout th,
+.falling-readout td {
+  box-sizing: border-box;
+  padding: 0 0 0 0.75ch;
+  font-weight: 400;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.falling-readout thead th {
+  padding-bottom: 2px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  opacity: 0.7;
+}
+
+.falling-readout tbody th {
+  padding-left: 0;
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+
+.falling-readout [data-empty] {
+  opacity: 0.35;
+}
+
+.falling-life-wave {
+  width: 34ch;
+  height: 52px;
+  flex: 0 0 auto;
+}
+
+.falling-life-wave svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.falling-life-wave text {
+  fill: currentColor;
+  font-family: inherit;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.falling-life-wave polyline {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  opacity: 0.8;
+}
+
+.falling-life-wave circle {
+  fill: rgba(255, 255, 255, 0.35);
+}
+
+.falling-life-wave circle[data-sampling] {
+  fill: #fff;
+}
+
+.falling-life-log {
+  width: 34ch;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.falling-life-log li,
+.falling-life-log-head {
+  display: grid;
+  grid-template-columns: 8ch 6.5ch 6.5ch 6.5ch 6.5ch;
+}
+
+.falling-life-log li span:first-child,
+.falling-life-log-head span:first-child {
+  grid-column: 4;
+  text-align: right;
+}
+
+.falling-life-log li span:last-child,
+.falling-life-log-head span:last-child {
+  grid-column: 5;
+  text-align: right;
+}
+
+.falling-life-log-head {
+  margin-bottom: 2px;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.falling-life-log ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: visible;
+  font-variant-numeric: tabular-nums;
+}
+
 .falling-atom-size {
   pointer-events: auto;
   display: flex;
@@ -1212,47 +1356,6 @@ dd {
   margin: 0;
   accent-color: var(--live);
   cursor: pointer;
-}
-
-.falling-emit-size {
-  pointer-events: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 148px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.falling-emit-presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  pointer-events: auto;
-}
-
-.falling-emit-presets button {
-  flex: 1 1 auto;
-  min-width: 0;
-  pointer-events: auto;
-  touch-action: manipulation;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text, #e8e8e8);
-  font: inherit;
-  font-size: 12px;
-  padding: 5px 8px;
-  cursor: pointer;
-}
-
-.falling-emit-presets button[aria-pressed="true"] {
-  border-color: var(--live);
-  color: var(--live);
 }
 
 .falling-palette-row {
@@ -1286,6 +1389,29 @@ dd {
   border-color: rgba(110, 231, 183, 0.35);
 }
 
+.falling-audio {
+  pointer-events: auto;
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.falling-audio[aria-pressed="true"] {
+  color: var(--live);
+  border-color: rgba(110, 231, 183, 0.45);
+}
+
+.falling-audio:hover {
+  color: var(--live);
+  border-color: rgba(110, 231, 183, 0.35);
+}
+
 .falling-palette button {
   appearance: none;
   border: 1px solid var(--line);
@@ -1307,13 +1433,16 @@ dd {
   height: 10px;
   border-radius: 50%;
   background: var(--swatch, #888);
+  opacity: 0.35;
   flex: 0 0 auto;
 }
 
 .falling-palette button[aria-pressed="true"] {
-  background: rgba(110, 231, 183, 0.16);
   color: var(--live);
-  border-color: rgba(110, 231, 183, 0.35);
+}
+
+.falling-palette button[aria-pressed="true"]::before {
+  opacity: 1;
 }
 
 

@@ -19,18 +19,19 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { clearBoard, hideFallingBlocks, showFallingBlocks, toggleBrushCurveInvert } from "./falling-blocks.js?v=161";
-import { audioEngine } from "./audio-engine.js?v=20";
+import { clearBoard, hideFallingBlocks, readGridSnapshot, showFallingBlocks, toggleBrushCurveInvert } from "./falling-blocks.js?v=184";
+import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=14";
+import { audioEngine } from "./audio-engine.js?v=42";
 import { gamepadInput } from "./gamepad-input.js?v=6";
 import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=4";
-import { openStemDropdown } from "./sample-picker.js?v=15";
+import { openStemDropdown } from "./sample-picker.js?v=16";
 import { openFxDropdown } from "./fx-picker.js?v=3";
 import {
   DEFAULT_STICK_SCALE,
   STICK_SCALE_STEP,
   STICK_SCALE_MIN,
-  STICK_SCALE_MAX,
-} from "./wam-catalog.js?v=4";
+} from "./wam-catalog.js?v=5";
+import { stickMultiplier } from "./wam-host.js?v=7";
 
 const pad = document.querySelector("[data-pad]");
 const cursor = document.querySelector("[data-cursor]");
@@ -115,8 +116,8 @@ const TAB_STORAGE_KEY = "echoscape.tab";
 
 /** @type {"diagnostics" | "visualize" | "falling-blocks"} */
 let activeTab = "diagnostics";
-/** True while Falling Blocks has suspended browser playback. */
-let audioOffForFallingBlocks = false;
+/** Falling Blocks sonification. Default on; the HUD switch can suspend it. */
+let fallingAudioEnabled = true;
 let audioStarting = false;
 /** @type {Promise<void> | null} */
 let audioStartPromise = null;
@@ -223,7 +224,8 @@ function syncFxLabelsFromEngine() {
 
 function clampStickScale(n) {
   const v = Math.round((Number(n) || DEFAULT_STICK_SCALE) * 10) / 10;
-  return Math.min(STICK_SCALE_MAX, Math.max(STICK_SCALE_MIN, v));
+  if (!Number.isFinite(v)) return DEFAULT_STICK_SCALE;
+  return Math.max(STICK_SCALE_MIN, v);
 }
 
 function setStickScaleUi(slot, axis, value) {
@@ -474,10 +476,10 @@ function renderDiagnostics() {
     const fxXEl = card.querySelector("[data-fx-x]");
     const fxYEl = card.querySelector("[data-fx-y]");
     if (audioEngine.fxAssignment?.[key]?.kind === "wam") {
-      const x01 = Math.min(1, Math.max(0, (Number(controller.rawX) || 0) * 0.5 + 0.5));
-      const y01 = Math.min(1, Math.max(0, (Number(controller.rawY) || 0) * 0.5 + 0.5));
-      if (fxXEl) fxXEl.textContent = fmt(x01);
-      if (fxYEl) fxYEl.textContent = fmt(y01);
+      const maxX = audioEngine.getFxStickScale(key, "x");
+      const maxY = audioEngine.getFxStickScale(key, "y");
+      if (fxXEl) fxXEl.textContent = fmt(stickMultiplier(controller.rawX, maxX));
+      if (fxYEl) fxYEl.textContent = fmt(stickMultiplier(controller.rawY, maxY));
     } else {
       if (fxXEl) fxXEl.textContent = fmt(controller.fx[key].x);
       if (fxYEl) fxYEl.textContent = fmt(controller.fx[key].y);
@@ -603,8 +605,8 @@ function applyMaxPad(x, y, source) {
 }
 
 function browserStatusLabel() {
-  if (activeTab === "falling-blocks" || audioOffForFallingBlocks) {
-    return "Falling Blocks — audio off";
+  if (activeTab === "falling-blocks") {
+    return fallingAudioEnabled ? "Falling Blocks — quadrants" : "Falling Blocks — audio off";
   }
   if (audioStarting) return "Loading beds…";
   if (!audioEngine.running) return "Browser audio — click pad to start";
@@ -703,7 +705,7 @@ function syncDualsenseHidUi() {
 
 async function ensureBrowserAudio() {
   if (inputMode !== "browser") return;
-  if (activeTab === "falling-blocks" || audioOffForFallingBlocks) return;
+  if (activeTab === "falling-blocks" && !fallingAudioEnabled) return;
   if (audioEngine.running) {
     await audioEngine.resume();
     await audioEngine.ensurePlaying();
@@ -772,13 +774,29 @@ async function setInputMode(mode) {
 
 function tick(now) {
   try {
+    const frameDt = lastFrame ? Math.min(0.05, (now - lastFrame) / 1000) : 0;
     if (inputMode === "browser") {
       gamepadInput.poll();
       if (dualsenseHid.poll() && sourceEl) {
         sourceEl.textContent = state.source;
       }
       syncDualsenseHidUi();
-      if (audioEngine.running && activeTab !== "falling-blocks" && !audioOffForFallingBlocks) {
+      if (audioEngine.running && activeTab === "falling-blocks" && fallingAudioEnabled) {
+        const snap = readGridSnapshot();
+        const shadow = fieldFrame(snap, frameDt);
+        audioEngine.sync({ x: 0.5, y: 0.5 }, shadow.controller);
+        audioEngine.setStemGains(shadow.gains, shadow.pans, shadow.cutoffs);
+        audioEngine.setStemReverb(shadow.reverbs);
+        if (shadow.splash) audioEngine.playSplash(shadow.splash);
+        audioEngine.setOutputLevel(1);
+        audioEngine.setCameraPresence(snap.view?.near, snap.view?.far);
+        const label = browserStatusLabel();
+        if (socketState !== "audio" || statusLabel?.textContent !== label) {
+          setStatus("audio", label);
+        }
+      } else if (audioEngine.running && activeTab !== "falling-blocks") {
+        audioEngine.setOutputLevel(1);
+        audioEngine.setCameraPresence(0, 0);
         audioEngine.sync(state, controller);
         syncFxLabelsFromEngine();
         const label = browserStatusLabel();
@@ -800,24 +818,36 @@ function setDpadLabel() {
   if (dpadEl) dpadEl.textContent = controller.dpadDir || "—";
 }
 
-async function setFallingBlocksAudio(disabled) {
-  if (disabled) {
-    if (audioEngine.running) {
-      await audioEngine.suspendPlayback();
-    }
-    audioOffForFallingBlocks = true;
-    setStatus("offline", "Falling Blocks — audio off");
+function syncFallingAudioButton() {
+  const button = document.querySelector("[data-falling-audio]");
+  if (!(button instanceof HTMLButtonElement)) return;
+  button.setAttribute("aria-pressed", fallingAudioEnabled ? "true" : "false");
+}
+
+async function setFallingAudioEnabled(enabled) {
+  fallingAudioEnabled = !!enabled;
+  syncFallingAudioButton();
+  if (activeTab !== "falling-blocks" || inputMode !== "browser") return;
+  if (fallingAudioEnabled) {
+    resetFieldSonify();
+    await ensureBrowserAudio();
+    setStatus(audioEngine.running ? "audio" : "loading", browserStatusLabel());
     return;
   }
+  resetFieldSonify();
+  if (audioEngine.running) await audioEngine.suspendPlayback();
+  setStatus("offline", browserStatusLabel());
+}
 
-  if (!audioOffForFallingBlocks) return;
-  audioOffForFallingBlocks = false;
-  if (inputMode === "browser" && audioEngine.running) {
-    await audioEngine.ensurePlaying();
-    setStatus("audio", browserStatusLabel());
-  } else if (inputMode === "browser") {
-    setStatus(audioEngine.running ? "audio" : "loading", browserStatusLabel());
-  }
+function bindFallingAudioUi() {
+  const button = document.querySelector("[data-falling-audio]");
+  if (!(button instanceof HTMLButtonElement) || button.dataset.bound === "1") return;
+  button.dataset.bound = "1";
+  syncFallingAudioButton();
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    void setFallingAudioEnabled(!fallingAudioEnabled);
+  });
 }
 
 function storedTab() {
@@ -859,14 +889,23 @@ function setActiveTab(tabId) {
 
   if (tabId === "falling-blocks") {
     hideVisualize();
-    void setFallingBlocksAudio(true);
     const panel = [...panels].find((item) => item.dataset.panel === "falling-blocks");
     void panel?.offsetHeight;
     if (fallingCanvas) showFallingBlocks(fallingCanvas);
+    if (fallingAudioEnabled && inputMode === "browser") {
+      void ensureBrowserAudio();
+    } else if (audioEngine.running) {
+      void audioEngine.suspendPlayback();
+      setStatus("offline", browserStatusLabel());
+    }
   } else {
     if (prevTab === "falling-blocks") {
       hideFallingBlocks();
-      void setFallingBlocksAudio(false);
+      if (inputMode === "browser" && audioEngine.running && audioEngine.ctx?.state === "suspended") {
+        void audioEngine.ensurePlaying().then(() => {
+          setStatus(audioEngine.running ? "audio" : "offline", browserStatusLabel());
+        });
+      }
     }
     if (tabId === "visualize") {
       const panel = [...panels].find((item) => item.dataset.panel === "visualize");
@@ -1186,6 +1225,7 @@ window.setInterval(() => {
 
 notify();
 updateCornerLabels();
+bindFallingAudioUi();
 renderDiagnostics();
 window.requestAnimationFrame(tick);
 connect();

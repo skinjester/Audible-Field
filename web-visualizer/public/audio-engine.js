@@ -1,15 +1,17 @@
 /**
  * Browser-side recreation of the EchoScape Max mix path:
  *   4 looping beds → equal-power gains → dry/wet gate → face-button FX
- *   → tone (LT) → shoulder FX (L1/R1) → pan → master (+ RT hall / R1 bloom)
+ *   → tone (LT lowpass / RT highpass) → shoulder FX (L1/R1) → pan → master
  *
  * Commercial VSTs are approximated with Web Audio nodes so design can iterate
  * without Max. Face-button slots can load vendored WAMs (e.g. OWLShimmer) via
  * the FX picker; native approximations remain the fallback.
  *
- * Shoulder character (momentary, distinct from LT/RT):
- *   L1 — Abyss plunge: resonant lowpass + peak scream + grit
- *   R1 — Glass bloom: reverse IR convolution + upward highpass shimmer
+ * Shoulder / trigger character:
+ *   LT — Lowpass sweeps upward (cutoff rises as the trigger is pulled)
+ *   RT — Highpass sweeps downward (cutoff falls as the trigger is pulled)
+ *   L1 — Reverb: parallel hall, dry stays in place
+ *   R1 — Delay: timed repeats with a damped, decaying feedback loop
  */
 
 import {
@@ -24,15 +26,15 @@ import {
   resolveStickBinding,
   applyWamDefaults,
   applyStickToWamParams,
-} from "./wam-host.js?v=6";
+} from "./wam-host.js?v=7";
 import {
   NATIVE_FX,
   DEFAULT_STICK_SCALE,
   STICK_SCALE_MIN,
-  STICK_SCALE_MAX,
-} from "./wam-catalog.js?v=4";
+} from "./wam-catalog.js?v=5";
 
 const CORNERS = ["tl", "tr", "bl", "br"];
+const GREYHOLE_PATH = "wimmics/greyhole/index.js";
 const FX_IDS = ["cross", "square", "triangle", "circle"];
 const FX_PICK_SLOTS = ["square", "triangle", "circle"];
 const FX_STORAGE_KEY = "echoscape.fxPrefs";
@@ -43,13 +45,44 @@ function clamp01(n) {
   return Math.min(1, Math.max(0, n));
 }
 
+/** Equal-power dry/wet. `mix` 0 is fully dry. */
+function equalPowerFade(mix) {
+  const m = clamp01(mix);
+  const angle = m * Math.PI * 0.5;
+  return { dry: Math.cos(angle), wet: Math.sin(angle) };
+}
+
+/** Odd tanh curve over ±1. Small signals stay near unity; peaks fold. */
+function tanhCurve(n) {
+  const curve = new Float32Array(n);
+  const last = n - 1;
+  for (let i = 0; i < n; i += 1) {
+    const x = (i / last) * 2 - 1;
+    curve[i] = Math.tanh(x);
+  }
+  return curve;
+}
+
+/** Up to `max` lifetimes spread from shortest to longest. */
+function sampleLifetimes(lives, max) {
+  const sorted = lives.filter((n) => n > 0).sort((a, b) => a - b);
+  if (sorted.length <= max) return sorted;
+  const out = [];
+  for (let i = 0; i < max; i += 1) {
+    const idx = Math.round((i * (sorted.length - 1)) / (max - 1));
+    out.push(sorted[idx]);
+  }
+  return out;
+}
+
 function defaultAxisScales() {
   return { x: DEFAULT_STICK_SCALE, y: DEFAULT_STICK_SCALE };
 }
 
 function clampAxisScale(n) {
   const v = Math.round((Number(n) || DEFAULT_STICK_SCALE) * 10) / 10;
-  return Math.min(STICK_SCALE_MAX, Math.max(STICK_SCALE_MIN, v));
+  if (!Number.isFinite(v)) return DEFAULT_STICK_SCALE;
+  return Math.max(STICK_SCALE_MIN, v);
 }
 
 /** Normalize legacy number or `{ x, y }` into per-axis scales. */
@@ -138,7 +171,22 @@ export class EchoScapeAudioEngine {
     this.stems = {};
     this.fx = {};
     this.activeFx = "cross";
+    /** True while the master trim is at its open level. Falling Blocks closes it on an empty grid. */
+    this._outputAudible = true;
+    this._outputOpen = 0.28;
     this._master = null;
+    /** Post-master camera stage: far = quieter/darker, close = louder/saturated. */
+    this._viewLp = null;
+    this._brightDry = null;
+    this._brightWet = null;
+    this._camSum = null;
+    this._driveDry = null;
+    this._drivePre = null;
+    this._driveShaper = null;
+    this._drivePost = null;
+    this._driveWet = null;
+    this._driveSum = null;
+    this._viewLevel = null;
     this._dry = null;
     this._wet = null;
     this._sum = null;
@@ -146,19 +194,16 @@ export class EchoScapeAudioEngine {
     this._reverb = null;
     this._reverbSend = null;
     this._tone = null;
+    this._hp = null;
     this._wetIn = null;
     this._shoulderOut = null;
-    this._l1Filter = null;
-    this._l1Peak = null;
-    this._l1Drive = null;
-    this._l1DriveGain = null;
+    this._splashOut = null;
+    this._l1Dry = null;
+    this._l1Send = null;
+    this._l1Reverb = null;
     this._r1Send = null;
-    this._r1PreDelay = null;
+    this._r1Delay = null;
     this._r1Feedback = null;
-    this._r1Highpass = null;
-    this._r1Bloom = null;
-    this._r1Peak = null;
-    this._r1Drive = null;
     this._r1Wet = null;
     this._comp = null;
     this._l1Held = false;
@@ -207,10 +252,15 @@ export class EchoScapeAudioEngine {
     this._wet = this.ctx.createGain();
     this._wet.gain.value = 0;
 
+    // LT lowpass (open until pulled) and RT highpass (open until pulled).
     this._tone = this.ctx.createBiquadFilter();
     this._tone.type = "lowpass";
-    this._tone.frequency.value = 18000;
+    this._tone.frequency.value = 20000;
     this._tone.Q.value = 0.7;
+    this._hp = this.ctx.createBiquadFilter();
+    this._hp.type = "highpass";
+    this._hp.frequency.value = 20;
+    this._hp.Q.value = 0.7;
 
     this._buildShoulderFx();
 
@@ -224,8 +274,20 @@ export class EchoScapeAudioEngine {
     this._comp.attack.value = 0.005;
     this._comp.release.value = 0.18;
 
+    // Everything sums here, including paths that used to skip the compressor.
+    this._outBus = this.ctx.createGain();
+    this._outBus.gain.value = 1;
+
+    this._limiter = this.ctx.createDynamicsCompressor();
+    this._limiter.threshold.value = -2;
+    this._limiter.knee.value = 0;
+    this._limiter.ratio.value = 20;
+    this._limiter.attack.value = 0.002;
+    this._limiter.release.value = 0.12;
+
     this._master = this.ctx.createGain();
-    this._master.gain.value = 1;
+    // Four full-scale beds sum well above 0 dBFS. Trim after the limiter.
+    this._master.gain.value = 0.28;
 
     this._reverbSend = this.ctx.createGain();
     this._reverbSend.gain.value = 0;
@@ -237,22 +299,23 @@ export class EchoScapeAudioEngine {
     this._sum.connect(this._wetIn);
     this._dry.connect(this._tone);
     this._wet.connect(this._tone);
-    // tone → L1 insert → shoulder bus → pan → compressor → master
-    this._tone.connect(this._l1Filter);
-    this._tone.connect(this._l1Drive);
+    this._tone.connect(this._hp);
+    // filters → dry shoulder bus; L1 reverb and R1 delay are parallel
+    this._hp.connect(this._l1Dry);
+    this._hp.connect(this._l1Send);
     this._shoulderOut.connect(this._panner);
+    this._splashOut = this.ctx.createGain();
+    this._splashOut.gain.value = 1;
+    this._splashOut.connect(this._shoulderOut);
     this._panner.connect(this._comp);
-    this._comp.connect(this._master);
-    this._master.connect(this.ctx.destination);
+    this._comp.connect(this._outBus);
+    this._outBus.connect(this._limiter);
+    this._limiter.connect(this._master);
+    this._buildCameraStage();
 
-    // RT hall (ambient) — post-tone, before shoulder color
-    this._tone.connect(this._reverbSend);
-    this._reverbSend.connect(this._reverb);
-    this._reverb.connect(this._master);
-
-    // R1 glass bloom — parallel reverse convolution off the shoulder bus
-    this._shoulderOut.connect(this._r1Send);
-    this._r1Wet.connect(this._master);
+    // R1 delay joins the dry bus so the source and the echo share one level
+    this._l1Dry.connect(this._r1Send);
+    this._r1Wet.connect(this._shoulderOut);
 
     // Beds first so sound can start even if WAM restore is slow/hangs.
     await this._loadStems();
@@ -262,6 +325,7 @@ export class EchoScapeAudioEngine {
     this.sync(mixerState, mixerController);
     await this._playAll();
     await this._safeResume(300);
+    void this._loadStemReverbs();
 
     // Restore WAMs after audible beds are up (best-effort, time-boxed).
     try {
@@ -392,6 +456,17 @@ export class EchoScapeAudioEngine {
     this._fxWam = {};
     this._fxInsertIn = {};
     this._fxStickParams = {};
+    this._viewLp = null;
+    this._brightDry = null;
+    this._brightWet = null;
+    this._camSum = null;
+    this._driveDry = null;
+    this._drivePre = null;
+    this._driveShaper = null;
+    this._drivePost = null;
+    this._driveWet = null;
+    this._driveSum = null;
+    this._viewLevel = null;
     this.ready = false;
     this.running = false;
     this._l1Held = false;
@@ -416,30 +491,22 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * Reverse / metallic impulse — densifies toward the end so the bloom
-   * feels like glass shattering backward into a bright space (unlike RT hall).
+   * Longer, softened hall for the L1 send. Distinct from the shorter RT hall.
    */
-  _createReverseBloom() {
-    const seconds = 2.4;
+  _createShoulderReverb() {
+    const seconds = 3.1;
     const rate = this.ctx.sampleRate;
     const length = Math.floor(rate * seconds);
     const buffer = this.ctx.createBuffer(2, length, rate);
     for (let ch = 0; ch < 2; ch++) {
       const data = buffer.getChannelData(ch);
-      const phase = ch * 0.37;
+      let z = 0;
       for (let i = 0; i < length; i++) {
         const t = i / length;
-        const rise = Math.pow(t, 1.15);
-        const shimmer =
-          Math.sin(i * 0.041 + phase) * 0.35 +
-          Math.sin(i * 0.113 + phase * 2) * 0.22 +
-          Math.sin(i * 0.29 + phase * 0.5) * 0.12;
-        const spike = ((i * 13 + ch * 71) % 90) === 0 ? 0.95 : 0;
-        const clang = ((i * 29 + ch * 41) % 160) === 0 ? 0.7 : 0;
-        data[i] =
-          ((Math.random() * 2 - 1) * 0.85 + shimmer + spike + clang) *
-          rise *
-          (0.25 + 0.9 * t);
+        const env = Math.pow(1 - t, 1.35) * Math.exp(-t * 1.6);
+        const noise = (Math.random() * 2 - 1) * env;
+        z += 0.07 * (noise - z);
+        data[i] = z;
       }
     }
     const convolver = this.ctx.createConvolver();
@@ -450,71 +517,51 @@ export class EchoScapeAudioEngine {
   _buildShoulderFx() {
     const ctx = this.ctx;
 
-    // --- L1 Abyss plunge (series insert) ---
-    this._l1Filter = ctx.createBiquadFilter();
-    this._l1Filter.type = "lowpass";
-    this._l1Filter.frequency.value = 20000;
-    this._l1Filter.Q.value = 0.7;
-
-    this._l1Peak = ctx.createBiquadFilter();
-    this._l1Peak.type = "peaking";
-    this._l1Peak.frequency.value = 900;
-    this._l1Peak.Q.value = 4;
-    this._l1Peak.gain.value = 0;
-
-    this._l1Drive = ctx.createWaveShaper();
-    this._l1Drive.curve = makeDistortionCurve(0.55);
-    this._l1Drive.oversample = "2x";
-    this._l1DriveGain = ctx.createGain();
-    this._l1DriveGain.gain.value = 0;
-
     this._shoulderOut = ctx.createGain();
     this._shoulderOut.gain.value = 1;
 
-    this._l1Filter.connect(this._l1Peak);
-    this._l1Peak.connect(this._shoulderOut);
-    this._l1Drive.connect(this._l1DriveGain);
-    this._l1DriveGain.connect(this._shoulderOut);
+    // --- L1 reverb (parallel; dry path is untouched) ---
+    this._l1Dry = ctx.createGain();
+    this._l1Dry.gain.value = 1;
+    this._l1Dry.connect(this._shoulderOut);
 
-    // --- R1 Glass bloom (parallel reverse convolution, extreme) ---
+    this._l1Send = ctx.createGain();
+    this._l1Send.gain.value = 0;
+    this._l1Reverb = this._createShoulderReverb();
+    const l1Damp = ctx.createBiquadFilter();
+    l1Damp.type = "lowpass";
+    l1Damp.frequency.value = 4200;
+    l1Damp.Q.value = 0.5;
+    const l1Wet = ctx.createGain();
+    l1Wet.gain.value = 0.7;
+    this._l1Send.connect(this._l1Reverb);
+    this._l1Reverb.connect(l1Damp);
+    l1Damp.connect(l1Wet);
+    l1Wet.connect(this._shoulderOut);
+
+    // --- R1 delay (repeats decay; lowpass in the loop keeps them from building) ---
     this._r1Send = ctx.createGain();
     this._r1Send.gain.value = 0;
 
-    this._r1PreDelay = ctx.createDelay(0.55);
-    this._r1PreDelay.delayTime.value = 0.048;
+    this._r1Delay = ctx.createDelay(2);
+    this._r1Delay.delayTime.value = 0.9;
+
+    const r1Damp = ctx.createBiquadFilter();
+    r1Damp.type = "lowpass";
+    r1Damp.frequency.value = 3200;
+    r1Damp.Q.value = 0.5;
 
     this._r1Feedback = ctx.createGain();
-    this._r1Feedback.gain.value = 0;
-
-    this._r1Highpass = ctx.createBiquadFilter();
-    this._r1Highpass.type = "highpass";
-    this._r1Highpass.frequency.value = 280;
-    this._r1Highpass.Q.value = 0.9;
-
-    this._r1Bloom = this._createReverseBloom();
-
-    this._r1Peak = ctx.createBiquadFilter();
-    this._r1Peak.type = "peaking";
-    this._r1Peak.frequency.value = 3200;
-    this._r1Peak.Q.value = 6;
-    this._r1Peak.gain.value = 0;
-
-    this._r1Drive = ctx.createWaveShaper();
-    this._r1Drive.curve = makeDistortionCurve(0.75);
-    this._r1Drive.oversample = "2x";
+    this._r1Feedback.gain.value = 0.32;
 
     this._r1Wet = ctx.createGain();
     this._r1Wet.gain.value = 1;
 
-    this._r1Send.connect(this._r1PreDelay);
-    this._r1PreDelay.connect(this._r1Highpass);
-    this._r1Highpass.connect(this._r1Bloom);
-    this._r1Bloom.connect(this._r1Peak);
-    this._r1Peak.connect(this._r1Drive);
-    this._r1Drive.connect(this._r1Wet);
-    // Dense freeze feedback — compressor on master keeps it from exploding
-    this._r1Drive.connect(this._r1Feedback);
-    this._r1Feedback.connect(this._r1PreDelay);
+    this._r1Send.connect(this._r1Delay);
+    this._r1Delay.connect(this._r1Wet);
+    this._r1Delay.connect(r1Damp);
+    r1Damp.connect(this._r1Feedback);
+    this._r1Feedback.connect(this._r1Delay);
   }
 
   _applyShoulders(l1, r1, t) {
@@ -528,43 +575,19 @@ export class EchoScapeAudioEngine {
     // Only schedule on press/release edges. Re-calling setTargetAtTime every
     // frame restarts the ramp and makes release feel instantaneous.
     // Attack: snappy so FX is fully in while held. Release: long fade out.
-    const L1_ATTACK = 0.04;
-    const L1_RELEASE = 0.85;
-    const R1_ATTACK = 0.025;
-    const R1_RELEASE = 1.15;
+    const L1_ATTACK = 0.12;
+    const L1_RELEASE = 0.45;
+    const R1_ATTACK = 0.03;
+    const R1_RELEASE = 0.06;
 
     if (l1Changed) {
       const tau = l1On ? L1_ATTACK : L1_RELEASE;
-      this._l1Filter.frequency.setTargetAtTime(l1On ? 240 : 20000, t, tau);
-      this._l1Filter.Q.setTargetAtTime(l1On ? 16 : 0.7, t, tau);
-      this._l1Peak.frequency.setTargetAtTime(l1On ? 380 : 900, t, tau);
-      this._l1Peak.Q.setTargetAtTime(l1On ? 11 : 4, t, tau);
-      this._l1Peak.gain.setTargetAtTime(l1On ? 14 : 0, t, tau);
-      this._l1DriveGain.gain.setTargetAtTime(l1On ? 0.42 : 0, t, tau);
+      this._l1Send.gain.setTargetAtTime(l1On ? 0.85 : 0, t, tau);
     }
 
     if (r1Changed) {
       const tau = r1On ? R1_ATTACK : R1_RELEASE;
-      this._r1Send.gain.setTargetAtTime(r1On ? 1.35 : 0, t, tau);
-      this._r1Highpass.frequency.setTargetAtTime(r1On ? 4800 : 280, t, tau);
-      this._r1Highpass.Q.setTargetAtTime(r1On ? 8.5 : 0.9, t, tau);
-      this._r1PreDelay.delayTime.setTargetAtTime(r1On ? 0.14 : 0.048, t, tau);
-      this._r1Feedback.gain.setTargetAtTime(r1On ? 0.72 : 0, t, tau);
-      this._r1Peak.frequency.setTargetAtTime(r1On ? 5100 : 3200, t, tau);
-      this._r1Peak.Q.setTargetAtTime(r1On ? 14 : 6, t, tau);
-      this._r1Peak.gain.setTargetAtTime(r1On ? 16 : 0, t, tau);
-      this._r1Wet.gain.setTargetAtTime(r1On ? 1.55 : 1, t, tau);
-    }
-
-    if (l1Changed || r1Changed) {
-      // Duck dry path so bloom/abyss owns the mix while held; restore on release.
-      const dryTarget = r1On ? 0.28 : l1On ? 0.78 : 1;
-      let tau = Math.max(L1_RELEASE, R1_RELEASE);
-      if (r1Changed && !l1Changed) tau = r1On ? R1_ATTACK : R1_RELEASE;
-      else if (l1Changed && !r1Changed) tau = l1On ? L1_ATTACK : L1_RELEASE;
-      else if (r1On) tau = R1_ATTACK;
-      else if (l1On) tau = L1_ATTACK;
-      this._shoulderOut.gain.setTargetAtTime(dryTarget, t, tau);
+      this._r1Send.gain.setTargetAtTime(r1On ? 1 : 0, t, tau);
     }
   }
 
@@ -1006,16 +1029,16 @@ export class EchoScapeAudioEngine {
         this._fxStickParams[button] = binding;
         applyWamDefaults(wamNode, binding);
         this.fxStickScale[button] = normalizeAxisScales(this.fxStickScale[button]);
-        slot.apply = (x01, y01) => {
+        slot.apply = (stickX, stickY) => {
           applyStickToWamParams(
             wamNode,
             this._fxStickParams[button],
-            x01,
-            y01,
+            stickX,
+            stickY,
             this.fxStickScale[button] || defaultAxisScales()
           );
         };
-        slot.apply(0.5, 0.5);
+        slot.apply(0, 0);
         this.fxAssignment[button] = {
           id: choice.id,
           label: choice.label || path,
@@ -1071,7 +1094,7 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * Stick depth into each axis's param min→max range (1 = full range).
+   * Max multiplier at full +stick for one axis. Live multiplier is 1 at rest.
    * @param {string} button
    * @param {'x'|'y'} axis
    * @param {number} scale
@@ -1086,10 +1109,11 @@ export class EchoScapeAudioEngine {
     current[axis] = clampAxisScale(n);
     this.fxStickScale[button] = current;
     if (this.fxAssignment?.[button]?.kind === "wam" && this.fx[button]?.apply) {
-      const x01 = Math.min(1, Math.max(0, (Number(mixerController.rawX) || 0) * 0.5 + 0.5));
-      const y01 = Math.min(1, Math.max(0, (Number(mixerController.rawY) || 0) * 0.5 + 0.5));
       try {
-        this.fx[button].apply(x01, y01);
+        this.fx[button].apply(
+          Number(mixerController.rawX) || 0,
+          Number(mixerController.rawY) || 0
+        );
       } catch {
         /* ignore */
       }
@@ -1168,12 +1192,27 @@ export class EchoScapeAudioEngine {
 
     const source = this.ctx.createMediaElementSource(el);
     const gain = this.ctx.createGain();
+    // Beds are wide stereo files. Fold to mono so the panner can place them.
+    const mono = this.ctx.createGain();
+    mono.channelCount = 1;
+    mono.channelCountMode = "explicit";
+    const pan = this.ctx.createStereoPanner();
+    const tone = this.ctx.createBiquadFilter();
+    tone.type = "lowpass";
+    tone.frequency.value = 20000;
+    tone.Q.value = 0.7;
     const weights = equalPowerMix(mixerState.x, mixerState.y);
     const initialGain =
       typeof opts.initialGain === "number" ? opts.initialGain : weights[corner] ?? 0;
     gain.gain.value = initialGain;
+    pan.pan.value = 0;
     source.connect(gain);
-    gain.connect(this._sum);
+    gain.connect(mono);
+    mono.connect(pan);
+    pan.connect(tone);
+    tone.connect(this._sum);
+    const reverbSend = this._stemReverbs?.[corner]?.send;
+    if (reverbSend) tone.connect(reverbSend);
 
     if (prev) {
       try {
@@ -1187,6 +1226,26 @@ export class EchoScapeAudioEngine {
         /* ignore */
       }
       try {
+        prev.mono?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      try {
+        prev.pan?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      try {
+        prev.tone?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      try {
+        prev.strike?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      try {
         prev.el.removeAttribute("src");
         prev.el.load();
       } catch {
@@ -1194,7 +1253,7 @@ export class EchoScapeAudioEngine {
       }
     }
 
-    this.stems[corner] = { el, source, gain, meta };
+    this.stems[corner] = { el, source, gain, mono, pan, tone, meta };
 
     if (opts.resume !== false && this.running) {
       try {
@@ -1240,16 +1299,287 @@ export class EchoScapeAudioEngine {
     if (!this.ctx || !this.fx[button]) return;
 
     this.activeFx = button;
+    const bypass = button === "cross";
     const t = this.ctx.currentTime;
     for (const id of FX_IDS) {
       const node = this.fx[id];
       if (!node) continue;
-      node.out.gain.setTargetAtTime(id === button ? 1 : 0, t, RAMP);
+      // Cross is the mute face: every slot, including native Saturn, stays closed.
+      node.out.gain.setTargetAtTime(!bypass && id === button ? 1 : 0, t, RAMP);
     }
-    this._wet.gain.setTargetAtTime(0.45, t, RAMP);
-    this._dry.gain.setTargetAtTime(0.85, t, RAMP);
+    this._wet.gain.setTargetAtTime(bypass ? 0 : 0.45, t, RAMP);
+    this._dry.gain.setTargetAtTime(bypass ? 1 : 0.85, t, RAMP);
     // Slot gains mute inactive faces (including WAMs). Do not destroy WAM
     // instances here — X / Cross only turns FX off until that face is selected again.
+  }
+
+  /**
+   * Master trim as a fraction of the open level. 0 is silence, 1 is the normal trim.
+   * Camera distance scales a stage after this, so the open level stays the baseline.
+   * @param {number} amount01
+   */
+  setOutputLevel(amount01) {
+    if (!this._master || !this.ctx) return;
+    const amount = Math.min(1, Math.max(0, Number(amount01) || 0));
+    this._outputAudible = amount > 0.0001;
+    this._master.gain.value = this._outputOpen * amount;
+  }
+
+  /**
+   * Distance from the default camera height.
+   * `near` and `far` are 0 at the default: baseline level, filter bypassed, no drive.
+   * `far` 1 is the farthest zoom (quieter, low-passed). `near` 1 is the closest (louder, soft-clipped).
+   * @param {number} near
+   * @param {number} far
+   */
+  setCameraPresence(near, far) {
+    if (!this.ctx || !this._viewLevel) return;
+    const close = clamp01(near);
+    const away = clamp01(far);
+    const t = this.ctx.currentTime;
+    const tau = 0.045;
+
+    const level =
+      (1 + Math.pow(close, 0.9) * 0.8) * (1 - Math.pow(away, 1.05) * 0.68);
+    this._viewLevel.gain.setTargetAtTime(level, t, tau);
+
+    const dark = Math.pow(away, 0.9);
+    const bright = equalPowerFade(dark);
+    this._brightDry.gain.setTargetAtTime(bright.dry, t, tau);
+    this._brightWet.gain.setTargetAtTime(bright.wet, t, tau);
+    const cutoff = 19000 * Math.pow(680 / 19000, Math.pow(away, 0.75));
+    this._viewLp.frequency.setTargetAtTime(cutoff, t, tau);
+
+    const drive = Math.pow(close, 1.3);
+    const pre = 1 + drive * 3.4;
+    const ref = 0.3;
+    const shaped = Math.tanh(pre * ref);
+    const post = shaped > 1e-4 ? ref / shaped : 1;
+    const grit = equalPowerFade(drive * 0.38);
+    this._drivePre.gain.setTargetAtTime(pre, t, tau);
+    this._drivePost.gain.setTargetAtTime(post, t, tau);
+    this._driveDry.gain.setTargetAtTime(grit.dry, t, tau);
+    this._driveWet.gain.setTargetAtTime(grit.wet, t, tau);
+  }
+
+  /** Low-pass and soft clip after the master trim. Default camera leaves both bypassed. */
+  _buildCameraStage() {
+    const ctx = this.ctx;
+    this._viewLp = ctx.createBiquadFilter();
+    this._viewLp.type = "lowpass";
+    this._viewLp.frequency.value = 19000;
+    this._viewLp.Q.value = 0.7;
+
+    this._brightDry = ctx.createGain();
+    this._brightDry.gain.value = 1;
+    this._brightWet = ctx.createGain();
+    this._brightWet.gain.value = 0;
+    this._camSum = ctx.createGain();
+    this._camSum.gain.value = 1;
+
+    this._driveDry = ctx.createGain();
+    this._driveDry.gain.value = 1;
+    this._drivePre = ctx.createGain();
+    this._drivePre.gain.value = 1;
+    this._driveShaper = ctx.createWaveShaper();
+    this._driveShaper.curve = tanhCurve(2048);
+    this._driveShaper.oversample = "2x";
+    this._drivePost = ctx.createGain();
+    this._drivePost.gain.value = 1;
+    this._driveWet = ctx.createGain();
+    this._driveWet.gain.value = 0;
+    this._driveSum = ctx.createGain();
+    this._driveSum.gain.value = 1;
+
+    this._viewLevel = ctx.createGain();
+    this._viewLevel.gain.value = 1;
+
+    this._master.connect(this._brightDry);
+    this._master.connect(this._viewLp);
+    this._viewLp.connect(this._brightWet);
+    this._brightDry.connect(this._camSum);
+    this._brightWet.connect(this._camSum);
+    this._camSum.connect(this._driveDry);
+    this._camSum.connect(this._drivePre);
+    this._drivePre.connect(this._driveShaper);
+    this._driveShaper.connect(this._drivePost);
+    this._drivePost.connect(this._driveWet);
+    this._driveDry.connect(this._driveSum);
+    this._driveWet.connect(this._driveSum);
+    this._driveSum.connect(this._viewLevel);
+    this._viewLevel.connect(ctx.destination);
+  }
+
+  /**
+   * One Greyhole per bed. Height opens that channel's send; the tail stays on that sample.
+   */
+  async _loadStemReverbs() {
+    if (this._stemReverbs || !this.ctx) return;
+    this._stemReverbs = {};
+    for (const corner of CORNERS) {
+      try {
+        const instance = await loadWam(this.ctx, GREYHOLE_PATH);
+        const node = instance.audioNode;
+        const send = this.ctx.createGain();
+        send.gain.value = 0;
+        send.channelCount = 2;
+        send.channelCountMode = "explicit";
+        send.channelInterpretation = "speakers";
+        const ret = this.ctx.createGain();
+        // Same wet level as the diagnostics face slot (wet bus at 0.45).
+        ret.gain.value = 0.45;
+        const stem = this.stems[corner];
+        if (stem?.tone) stem.tone.connect(send);
+        send.connect(node);
+        node.connect(ret);
+        ret.connect(this._sum);
+        this._applyGreyholeHeight(node, 0);
+        this._stemReverbs[corner] = { instance, send, node, applied: -1 };
+      } catch (err) {
+        console.warn(`[EchoScape audio] Greyhole failed for ${corner}:`, err?.message || err);
+      }
+    }
+    const loaded = Object.keys(this._stemReverbs);
+    if (loaded.length) console.info("[EchoScape audio] Greyhole per stem", loaded.join(", "));
+  }
+
+  /**
+   * Match the diagnostics Square Grey Hole. Stick scales 2.6 and 3.8 pin
+   * center-stick to the top of size, delayTime, feedback, and diffusion.
+   * Height 1 is that setting. Shorter stacks move toward it.
+   * @param {{ setParamValue?: Function }} node
+   * @param {number} height01
+   */
+  _applyGreyholeHeight(node, height01) {
+    if (!node?.setParamValue) return;
+    const h = Math.min(1, Math.max(0, Number(height01) || 0));
+    const pairs = [
+      ["/greyhole/bypass", 0],
+      ["/greyhole/damping", 0],
+      ["/greyhole/modDepth", 0.1],
+      ["/greyhole/modFreq", 2],
+      ["/greyhole/size", 0.5 + (3 - 0.5) * h],
+      ["/greyhole/delayTime", 0.001 + (1.45 - 0.001) * h],
+      ["/greyhole/feedback", h],
+      ["/greyhole/diffusion", 0.99 * h],
+    ];
+    for (const [name, value] of pairs) {
+      try {
+        node.setParamValue(name, value);
+      } catch {
+        /* param name differs */
+      }
+    }
+  }
+
+  /**
+   * Per-stem Greyhole send. 0 is dry. 1 is the diagnostics Grey Hole at full throw.
+   * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} levels
+   */
+  setStemReverb(levels) {
+    if (!this._stemReverbs) return;
+    for (const corner of CORNERS) {
+      const rec = this._stemReverbs[corner];
+      if (!rec?.send) continue;
+      const level = Math.min(1, Math.max(0, Number(levels?.[corner]) || 0));
+      rec.send.gain.value = level;
+      if (Math.abs(level - rec.applied) < 0.01) continue;
+      rec.applied = level;
+      this._applyGreyholeHeight(rec.node, level);
+    }
+  }
+
+  /**
+   * @param {{ tl?: number, tr?: number, bl?: number, br?: number }} gains
+   * @param {{ tl?: number, tr?: number, bl?: number, br?: number }} [pans]
+   * @param {{ tl?: number, tr?: number, bl?: number, br?: number }} [cutoffs] Hz
+   */
+  setStemGains(gains, pans, cutoffs) {
+    if (!this.running) return;
+    for (const corner of CORNERS) {
+      const stem = this.stems[corner];
+      if (!stem?.gain) continue;
+      const level = Math.min(1, Math.max(0, Number(gains?.[corner]) || 0));
+      stem.gain.gain.value = level;
+      if (stem.pan) {
+        const placed = Math.min(1, Math.max(-1, Number(pans?.[corner]) || 0));
+        stem.pan.pan.value = placed;
+      }
+      if (stem.tone) {
+        const hz = Number(cutoffs?.[corner]);
+        stem.tone.frequency.value = Number.isFinite(hz) && hz > 0 ? hz : 20000;
+      }
+    }
+  }
+
+  /**
+   * Repeat each landed quadrant's own sample. The repeat's low-pass sweeps
+   * shut across that atom's lifetime: a short life closes fast, a long one lingers.
+   * @param {Record<string, number[]> | null} hits lifetimes in seconds, per corner
+   */
+  playSplash(hits) {
+    if (!this.running || !this.ctx || !this._splashOut || !hits) return;
+    for (const corner of CORNERS) {
+      const lives = hits[corner];
+      if (lives?.length) this._strikeStem(corner, lives);
+    }
+  }
+
+  _strikeStem(corner, lives) {
+    const stem = this.stems[corner];
+    if (!stem?.source) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const panValue = stem.pan ? stem.pan.pan.value : 0;
+    const active = stem.sweepCount || 0;
+    const room = 4 - active;
+    if (room <= 0) return;
+    const chosen = sampleLifetimes(lives, room);
+    stem.sweepCount = active + chosen.length;
+    for (let i = 0; i < chosen.length; i += 1) {
+      const dur = Math.min(3.5, Math.max(0.1, Number(chosen[i]) || 0.1));
+      const gain = ctx.createGain();
+      const delay = ctx.createDelay(0.2);
+      delay.delayTime.value = 0.05;
+      const filter = ctx.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.Q.value = 0.85;
+      filter.frequency.setValueAtTime(9000, t);
+      filter.frequency.exponentialRampToValueAtTime(180, t + dur);
+      const pan = ctx.createStereoPanner();
+      pan.pan.value = panValue;
+      const release = Math.min(0.15, dur * 0.3);
+      gain.gain.setValueAtTime(0.001, t);
+      gain.gain.exponentialRampToValueAtTime(0.42, t + 0.012);
+      if (dur > release + 0.04) gain.gain.setValueAtTime(0.42, t + dur - release);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      stem.source.connect(gain);
+      gain.connect(delay);
+      delay.connect(filter);
+      filter.connect(pan);
+      pan.connect(this._splashOut);
+      const nodes = [gain, delay, filter, pan];
+      window.setTimeout(() => {
+        stem.sweepCount = Math.max(0, (stem.sweepCount || 1) - 1);
+        for (const node of nodes) {
+          try {
+            node.disconnect();
+          } catch {
+            /* already gone */
+          }
+        }
+      }, (dur + 0.08) * 1000);
+    }
+  }
+
+  /**
+   * The shared low-pass stays open. Each stem's own filter carries brightness.
+   * @param {number} _amount
+   */
+  setMotionDepth(_amount) {
+    if (!this._tone) return;
+    this._tone.frequency.value = 20000;
+    this._tone.Q.value = 0.7;
   }
 
   /**
@@ -1268,22 +1598,23 @@ export class EchoScapeAudioEngine {
       // Snap gains — setTargetAtTime with RAMP was fine, but immediate
       // values make first audible frame reliable after start.
       stem.gain.gain.value = weights[corner];
+      if (stem.pan) stem.pan.pan.value = 0;
+      if (stem.tone) stem.tone.frequency.value = 20000;
     }
 
     if (controller.activeFx !== this.activeFx) {
       this.setActiveFx(controller.activeFx);
     }
 
-    const slot = controller.fx[controller.activeFx];
-    const fx = this.fx[controller.activeFx];
-    if (slot && fx?.apply) {
-      if (this._fxWam?.[controller.activeFx]) {
-        // Normalize left stick −1…1 → 0…1 for WAM min/max mapping
-        const x01 = Math.min(1, Math.max(0, (Number(controller.rawX) || 0) * 0.5 + 0.5));
-        const y01 = Math.min(1, Math.max(0, (Number(controller.rawY) || 0) * 0.5 + 0.5));
-        fx.apply(x01, y01);
-      } else {
-        fx.apply(Number(slot.x) || 0, Number(slot.y) || 0);
+    if (controller.activeFx !== "cross") {
+      const slot = controller.fx[controller.activeFx];
+      const fx = this.fx[controller.activeFx];
+      if (slot && fx?.apply) {
+        if (this._fxWam?.[controller.activeFx]) {
+          fx.apply(Number(controller.rawX) || 0, Number(controller.rawY) || 0);
+        } else {
+          fx.apply(Number(slot.x) || 0, Number(slot.y) || 0);
+        }
       }
     }
 
@@ -1292,10 +1623,15 @@ export class EchoScapeAudioEngine {
 
     const lt = clamp01(Math.abs(Number(controller.lt) || 0) > 1.5 ? controller.lt / 255 : controller.lt);
     const rt = clamp01(Math.abs(Number(controller.rt) || 0) > 1.5 ? controller.rt / 255 : controller.rt);
-    this._tone.frequency.value = 18000 - lt * 14000;
-    this._reverbSend.gain.value = rt * 0.45;
+    // Released = wide open. LT sweeps the lowpass up from ~200 Hz; RT sweeps the highpass down from ~8 kHz.
+    this._tone.frequency.value = lt <= 0.001 ? 20000 : 200 * Math.pow(18000 / 200, lt);
+    this._tone.Q.value = 0.7;
+    if (this._hp) {
+      this._hp.frequency.value = rt <= 0.001 ? 20 : 8000 * Math.pow(35 / 8000, rt);
+    }
 
     this._applyShoulders(controller.l1, controller.r1, t);
+    this.setStemReverb(null);
   }
 }
 

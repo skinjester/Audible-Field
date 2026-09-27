@@ -37,10 +37,11 @@ export const SLOT_WAM_PATHS = {
   ],
 };
 
+/** Diagnostics field: multiplier at full +stick. Live multiplier is 1 at rest. */
 export const DEFAULT_STICK_SCALE = 1;
 export const STICK_SCALE_STEP = 0.1;
-export const STICK_SCALE_MIN = 0.1;
-export const STICK_SCALE_MAX = 5;
+/** A max of 1 holds the live multiplier at 1 (neutral stick does nothing). */
+export const STICK_SCALE_MIN = 1;
 
 /**
  * Default assignment when browser audio starts.

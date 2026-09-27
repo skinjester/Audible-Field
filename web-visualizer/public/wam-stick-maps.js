@@ -3,8 +3,14 @@
  *
  * Each entry:
  * - params: full list of continuous params (id, label, min, max, default)
- * - x: param ids driven by stick X (0–1 → min–max × scale)
+ * - x: param ids driven by stick X (−1…1, 0 = plugin default)
  * - y: param ids driven by stick Y
+ *
+ * Sent value is default × live multiplier, then clamped to [min, max].
+ * Live multiplier is 1 at stick rest, the Diagnostics max at full +stick,
+ * and 1/max at full −stick (stays above 0). A default of 0 rests at 0;
+ * +stick then scales (multiplier − 1) × max. Nothing below min is sent,
+ * so a result of 0 or less is held at min when min is 0 or greater.
  * - forceOff: params forced to 0 while the WAM is active (bypass, etc.)
  *
  * Edit x / y arrays to change what the thumbstick controls.

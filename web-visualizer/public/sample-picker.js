@@ -242,9 +242,10 @@ function folderHeaderLabel(folder) {
     .toUpperCase();
 }
 
-function sampleUrl(folder, name) {
-  const rel = folder ? `${folder}/${name}` : name;
-  return `/samples/${rel.split("/").map(encodeURIComponent).join("/")}`;
+function sampleUrl(folder, name, urlBase) {
+  const base = urlBase || "/samples";
+  const rel = urlBase ? name : folder ? `${folder}/${name}` : name;
+  return `${base}/${String(rel).split("/").map(encodeURIComponent).join("/")}`;
 }
 
 function closeStemDropdown() {
@@ -433,7 +434,8 @@ function renderDropdownGroups(groups) {
       btn.type = "button";
       btn.className = "stem-dropdown-item";
       btn.setAttribute("role", "option");
-      const label = name.replace(/\.[^.]+$/, "");
+      const rawLabel = name.replace(/\.[^.]+$/, "");
+      const label = group.urlBase ? rawLabel.replace(/-rx$/i, "") : rawLabel;
       btn.textContent = label;
       btn.title = name;
       btn.addEventListener("click", (event) => {
@@ -442,7 +444,7 @@ function renderDropdownGroups(groups) {
         const file = {
           name,
           path: group.folder ? `${group.folder}/${name}` : name,
-          url: sampleUrl(group.folder, name),
+          url: sampleUrl(group.folder, name, group.urlBase),
           label,
         };
         const cb = dropdownOnSelect;

@@ -1,0 +1,10 @@
+---
+description: Do not verify with Playwright unless the user asks
+alwaysApply: true
+---
+
+# No Playwright unless asked
+
+Do not launch Playwright, write Playwright scripts, or use Playwright to verify UI unless the user explicitly asks for Playwright.
+
+When browser tools are unavailable, say what you could not verify. Do not substitute Playwright on your own.

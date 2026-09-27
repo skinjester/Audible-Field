@@ -18,6 +18,7 @@
  *   solid   — no splash when something rests on it
  *   liquid  — splash when a grain lands or shifts onto it
  * World floor uses catalog.floor ("liquid" | "solid").
+ * sonify: false — the grain is not footprint or height, and landing is silent.
  *
  * SpaceTode-ish rule fields (aliases accepted):
  *   for: "xz.rotations" / rotations: "xz" — try all horizontal facings
@@ -31,7 +32,12 @@
  *
  * Effect rules (no diagram) live in the same rules array. `when` is a flat
  * predicate object (all must pass). `do` is one verb:
- *   { age, visual?: "shrink", slideLife?: "above", then: "clear" }
+ *   { age, hold?: seconds, lifeScale?: number, visual?: "shrink" | "rise", slideLife?: "above", then: "clear" }
+ * visual "rise": the grain waits `hold` seconds, then lifts and fades for
+ * (poured lifetime, or `age` when none is stored) × `lifeScale`, then clears.
+ * lifeScale defaults to 1. The wait is not taken out of that lifetime. The same
+ * age clock measures the wait and the climb. The lift is drawn on top of the
+ * cell; the cell stays put until it clears.
  * slideLife "above": the horizontal travel of a grain is the number of atoms
  * stacked on it when it first slides. It despawns at that distance, stays full
  * size while sliding, and a shorter stack means a shorter life. 0 steps keeps
@@ -56,7 +62,7 @@ const ROTATIONS_XZ = [
 ];
 
 /**
- * @typedef {{ id: string, label: string, color: string, opacity: number, surface: "solid" | "liquid", pushPower: number, slideOpen: boolean, rules: object[], effects: object[] }} MaterialDef
+ * @typedef {{ id: string, label: string, color: string, opacity: number, surface: "solid" | "liquid", sonify: boolean, pushPower: number, slideOpen: boolean, rules: object[], effects: object[] }} MaterialDef
  * @typedef {{
  *   get: (x: number, y: number, z: number) => number,
  *   set: (x: number, y: number, z: number, v: number) => void,
@@ -173,6 +179,7 @@ export function compileMaterials(raw) {
       color: String(item.color || "#cccccc"),
       opacity,
       surface,
+      sonify: item.sonify !== false,
       pushPower,
       rules,
       effects,
@@ -226,11 +233,16 @@ function normalizeEffect(rule) {
   };
   const age = positiveSeconds(verb.age);
   if (age > 0) {
+    const visual = verb.visual === "rise" ? "rise" : verb.visual === "shrink" ? "shrink" : null;
+    const holdRaw = Math.max(0, Number(verb.hold) || 0);
+    const scaleRaw = Number(verb.lifeScale);
     return {
       ...base,
       kind: "age",
       seconds: age,
-      visual: verb.visual === "shrink" ? "shrink" : null,
+      hold: visual === "rise" ? holdRaw : Math.min(holdRaw, age),
+      lifeScale: visual === "rise" && Number.isFinite(scaleRaw) && scaleRaw > 0 ? scaleRaw : 1,
+      visual,
       slide: verb.visual === "shrink" && verb.slide === "closestOpen" ? "closestOpen" : null,
       thenClear: verb.then === "clear",
       slideUnits: Math.max(0, Math.floor(Number(verb.slideUnits) || 0)),
@@ -490,8 +502,8 @@ export function shouldSplashMove(grid, from, to, matIndex, catalog) {
   if (!catalog || !to) return false;
   const moverId = catalog.idByIndex[matIndex];
   const mover = moverId ? catalog.byId.get(moverId) : null;
-  // Liquids don't splash when they themselves settle.
-  if (mover?.surface === "liquid") return false;
+  // Removal grains and liquids make no landing sound.
+  if (mover?.sonify === false || mover?.surface === "liquid") return false;
 
   const destMat = grid.get(to.x, to.y, to.z);
   // Moved into a liquid cell (displaced / mixed occupancy edge case).
@@ -614,6 +626,7 @@ function applyPushRule(grid, x, y, z, matIndex, rule, catalog) {
   const posX = grid.getPosX?.(x, y, z) ?? 0;
   const posZ = grid.getPosZ?.(x, y, z) ?? 0;
   const emitSize = grid.getEmitSize?.(x, y, z) ?? 0;
+  const life = grid.getLife?.(x, y, z) ?? 0;
   const shuffle = grid.getShuffle?.(x, y, z) ?? 0;
   const shuffleOx = grid.getShuffleOriginX?.(x, y, z) ?? 0;
   const shuffleOz = grid.getShuffleOriginZ?.(x, y, z) ?? 0;
@@ -626,6 +639,7 @@ function applyPushRule(grid, x, y, z, matIndex, rule, catalog) {
   grid.setPosX?.(x, topSandY, z, posX);
   grid.setPosZ?.(x, topSandY, z, posZ);
   if (emitSize > 0) grid.setEmitSize?.(x, topSandY, z, emitSize);
+  if (life > 0) grid.setLife?.(x, topSandY, z, life);
   grid.setShuffle?.(x, topSandY, z, shuffle);
   grid.setShuffleOriginX?.(x, topSandY, z, shuffleOx);
   grid.setShuffleOriginZ?.(x, topSandY, z, shuffleOz);
@@ -983,6 +997,7 @@ function transferGrain(grid, x, y, z, toX, toY, toZ, matIndex, catalog) {
   const posX = grid.getPosX?.(x, y, z) ?? 0;
   const posZ = grid.getPosZ?.(x, y, z) ?? 0;
   const emitSize = grid.getEmitSize?.(x, y, z) ?? 0;
+  const life = grid.getLife?.(x, y, z) ?? 0;
   const shuffle = grid.getShuffle?.(x, y, z) ?? 0;
   const shuffleOx = grid.getShuffleOriginX?.(x, y, z) ?? 0;
   const shuffleOz = grid.getShuffleOriginZ?.(x, y, z) ?? 0;
@@ -998,6 +1013,7 @@ function transferGrain(grid, x, y, z, toX, toY, toZ, matIndex, catalog) {
   grid.setPosX?.(toX, toY, toZ, posX);
   grid.setPosZ?.(toX, toY, toZ, posZ);
   if (emitSize > 0) grid.setEmitSize?.(toX, toY, toZ, emitSize);
+  if (life > 0) grid.setLife?.(toX, toY, toZ, life);
   grid.setShuffle?.(toX, toY, toZ, shuffle);
   grid.setShuffleOriginX?.(toX, toY, toZ, shuffleOx);
   grid.setShuffleOriginZ?.(toX, toY, toZ, shuffleOz);
@@ -1307,6 +1323,7 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
   const posX = grid.getPosX?.(x, y, z) ?? 0;
   const posZ = grid.getPosZ?.(x, y, z) ?? 0;
   const emitSize = grid.getEmitSize?.(x, y, z) ?? 0;
+  const life = grid.getLife?.(x, y, z) ?? 0;
   const shuffle = grid.getShuffle?.(x, y, z) ?? 0;
   const shuffleOx = grid.getShuffleOriginX?.(x, y, z) ?? 0;
   const shuffleOz = grid.getShuffleOriginZ?.(x, y, z) ?? 0;
@@ -1338,6 +1355,7 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
     grid.setPosX?.(to.x, to.y, to.z, posX);
     grid.setPosZ?.(to.x, to.y, to.z, posZ);
     if (emitSize > 0) grid.setEmitSize?.(to.x, to.y, to.z, emitSize);
+    if (life > 0) grid.setLife?.(to.x, to.y, to.z, life);
     grid.setShuffle?.(to.x, to.y, to.z, shuffle);
     grid.setShuffleOriginX?.(to.x, to.y, to.z, shuffleOx);
     grid.setShuffleOriginZ?.(to.x, to.y, to.z, shuffleOz);
@@ -1445,10 +1463,12 @@ function clearEffectState(grid, x, y, z, catalog) {
   grid.setInfection?.(x, y, z, 0);
   grid.setInfectionAge?.(x, y, z, 0);
   grid.setShrink?.(x, y, z, false, 0);
+  grid.setRise?.(x, y, z, false, 0);
 }
 
 function clearCellMeta(grid, x, y, z, catalog = null) {
   grid.setBudget?.(x, y, z, 0);
+  grid.setLife?.(x, y, z, 0);
   grid.setPosY?.(x, y, z, 0);
   grid.setPosX?.(x, y, z, 0);
   grid.setPosZ?.(x, y, z, 0);
@@ -1691,6 +1711,9 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
     let matchedAge = false;
     let shrink = false;
     let shrinkT = 0;
+    let rise = false;
+    let riseT = 0;
+    const prevRise = grid.getRiseT?.(cell.x, cell.y, cell.z) ?? 0;
     const infection = grid.getInfection?.(cell.x, cell.y, cell.z) ?? 0;
 
     for (const effect of material?.effects || []) {
@@ -1704,7 +1727,8 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
         }
         matchedAge = true;
         let clock = getClock(grid, cell.x, cell.y, cell.z, effect.clockId) + dt;
-        let limit = effect.seconds;
+        const baked = grid.getLife?.(cell.x, cell.y, cell.z) ?? 0;
+        let limit = baked > 0 ? baked : effect.seconds;
         let slid = 0;
         if (effect.slideLifeAbove) {
           slid = grid.getShuffle?.(cell.x, cell.y, cell.z) ?? 0;
@@ -1731,6 +1755,12 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
           }
           limit *= 1 - slid / effect.slideUnits;
         }
+        if (effect.visual === "rise") {
+          const scale = effect.lifeScale > 0 ? effect.lifeScale : 1;
+          const base = baked > 0 ? baked : effect.seconds;
+          const hold = Math.max(0, effect.hold || 0);
+          limit = hold + Math.max(1e-4, base * scale);
+        }
         if (infection > 0) limit = Math.min(limit, infection);
         if (effect.thenClear && clock >= limit) {
           doomed.push(cell);
@@ -1742,6 +1772,13 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
           shrink = true;
           shrinkT = Math.max(shrinkT, limit > 0 ? Math.min(1, clock / limit) : 0);
           dirty = true;
+        } else if (effect.visual === "rise" && slid === 0) {
+          const hold = Math.min(effect.hold || 0, limit);
+          if (clock > hold) {
+            const span = Math.max(1e-4, limit - hold);
+            rise = true;
+            riseT = Math.max(riseT, Math.min(1, (clock - hold) / span));
+          }
         }
       } else if (effect.kind === "absorbSparse") {
         if (!whenMatches(effect.when, ctx)) {
@@ -1799,6 +1836,8 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
     }
 
     grid.setShrink?.(cell.x, cell.y, cell.z, shrink, shrink ? shrinkT : 0);
+    if (rise || prevRise > 0) dirty = true;
+    grid.setRise?.(cell.x, cell.y, cell.z, rise, rise ? riseT : 0);
   }
 
   for (const cell of doomed) {

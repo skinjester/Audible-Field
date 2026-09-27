@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { controller, mix } from "./mixer-core.js?v=66";
-import { applyInfect, applyPostMoves, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=50";
-import { fallingBindings, fallingInput } from "./falling-input.js?v=6";
+import { applyInfect, applyPostMoves, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=53";
+import { fallingBindings, fallingInput } from "./falling-input.js?v=7";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -9,6 +9,8 @@ import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
  * denser grid (Sand1-style room to paint).
  */
 const ATOM_SIZE = 0.25;
+/** Rise visual climbs this many atom-heights while it fades out. */
+const RISE_CELLS = 3;
 /** Max emitter height above the ground plane (world units). */
 const EMIT_HEIGHT_MAX_U = 12;
 /** Tall enough for the emitter to sit at EMIT_HEIGHT_MAX_U. */
@@ -87,6 +89,14 @@ let fpsLastAt = 0;
 let hudFpsText = "";
 let hudAtomsText = "";
 let hudTrisText = "";
+/** @type {HTMLOListElement | null} */
+let lifeLogEl = null;
+let lifeLogCount = 0;
+/** @type {Map<string, { el: HTMLElement, text: string }>} */
+const readoutSlots = new Map();
+const CORNER_IDS = ["tl", "tr", "bl", "br"];
+const DOING_VERBS = ["fall", "slide", "rest", "shrink", "rise"];
+const LIFE_LOG_MAX = 8;
 
 let running = false;
 let rafId = 0;
@@ -94,6 +104,16 @@ let sizeTries = 0;
 let lastNow = 0;
 let ruleAcc = 0;
 let cameraDist = CAMERA_DIST_DEFAULT;
+/** Frame counters for the audio snapshot. Reset after each capture. */
+let audioPour = 0;
+let audioFall = 0;
+let audioDeath = 0;
+let audioSplash = 0;
+/** Grid cells that splashed since the last audio snapshot. */
+const audioSplashAt = [];
+let audioGen = 0;
+/** @type {ReturnType<typeof captureAudioSnapshot> | null} */
+let audioSnap = null;
 
 /** @type {Uint8Array | null} */
 let cells = null;
@@ -114,6 +134,9 @@ let shrinkFlags = null;
 /** Shrink progress 0..1 for the mesh scale. */
 /** @type {Float32Array | null} */
 let shrinkT = null;
+/** Rise/fade progress 0..1. Drawn above the cell; 0 means not rising. */
+/** @type {Float32Array | null} */
+let riseT = null;
 /** Column snapshot: resting on the atom or floor below. */
 /** @type {Uint8Array | null} */
 let restingFlags = null;
@@ -134,6 +157,18 @@ let posZ = null;
 /** Edge length baked at emit time (existing atoms keep their size). */
 /** @type {Float32Array | null} */
 let emitSizes = null;
+/**
+ * Per-atom dissolve time, assigned at emit by sampling a continuous oscillator
+ * between 0.1s and 3.5s. The wave keeps moving whether or not atoms are poured.
+ */
+/** @type {Float32Array | null} */
+let lifeSpans = null;
+const EMIT_LIFE_MIN = 0.1;
+const EMIT_LIFE_MAX = 3.5;
+/** Seconds for one cycle: minimum, through the maximum, back to the minimum. */
+const EMIT_LIFE_PERIOD = 1.7;
+/** 0 at the minimum, 0.5 at the maximum, 1 back at the minimum. */
+let emitLifePhase = 0;
 /** Consecutive same-height hops (shuffle detection). */
 /** @type {Uint8Array | null} */
 let shuffleCounts = null;
@@ -155,6 +190,9 @@ const instances = new Map();
 /** In-flight atoms — same materials, but without the projected target. */
 /** @type {Map<number, THREE.InstancedMesh>} */
 const fallingInstances = new Map();
+/** Grains in the rise visual: transparent, lifted, no landing projection. */
+/** @type {Map<number, THREE.InstancedMesh>} */
+const risingInstances = new Map();
 /** Column lists reused across flags, gravity, and mesh classify. Key is z * GRID_MAX + x. */
 /** @type {Map<number, number[]>} */
 const columns = new Map();
@@ -170,6 +208,8 @@ let landedMatOf = null;
 const landedOrder = new Map();
 /** @type {Map<number, number[]>} material → x,y,z triples for the falling draw */
 const fallingBuckets = new Map();
+/** @type {Map<number, number[]>} material → x,y,z triples for the rise/fade draw */
+const risingBuckets = new Map();
 /** @type {Uint32Array | null} */
 let xformStamp = null;
 let xformGen = 1;
@@ -222,25 +262,17 @@ const scratchQuat = new THREE.Quaternion();
 const scratchMat4 = new THREE.Matrix4();
 
 /**
- * Landing grid projected straight down (orthographic).
- * One cell per emitter atom; lines continue past the square and fade.
+ * Flat shadow square projected straight down (orthographic) under the emitter.
  */
 const landingTarget = {
   center: { value: new THREE.Vector2() },
   half: { value: ATOM_SIZE * 0.5 },
-  cells: { value: 1 },
-  /** 0 = grid, 1 = flat shadow square. */
-  mode: { value: 0 },
   yaw: { value: 0 },
 };
-/** @type {"grid" | "shadow"} */
-let landMode = "grid";
 
 function compileLandingTarget(shader) {
   shader.uniforms.uLandCenter = landingTarget.center;
   shader.uniforms.uLandHalf = landingTarget.half;
-  shader.uniforms.uLandCells = landingTarget.cells;
-  shader.uniforms.uLandMode = landingTarget.mode;
   shader.uniforms.uLandYaw = landingTarget.yaw;
   shader.vertexShader = shader.vertexShader
     .replace("#include <common>", "#include <common>\nvarying vec3 vLandWorld;")
@@ -262,8 +294,6 @@ function compileLandingTarget(shader) {
 varying vec3 vLandWorld;
 uniform vec2 uLandCenter;
 uniform float uLandHalf;
-uniform float uLandCells;
-uniform float uLandMode;
 uniform float uLandYaw;`,
     )
     .replace(
@@ -274,29 +304,10 @@ uniform float uLandYaw;`,
   float s = sin(uLandYaw);
   vec2 local = vec2(c * d.x - s * d.y, s * d.x + c * d.y);
   float halfE = max(uLandHalf, 0.001);
-  float cells = max(1.0, floor(uLandCells + 0.5));
-  float pitch = (halfE * 2.0) / cells;
-  float reach = halfE + pitch * 0.85;
   float ax = abs(local.x);
   float ay = abs(local.y);
-  if (ax < reach && ay < reach) {
-    float lw = max(pitch * 0.07, 0.008);
-    float fadeY = 1.0 - smoothstep(halfE, reach, ay);
-    float fadeX = 1.0 - smoothstep(halfE, reach, ax);
-    if (uLandMode > 0.5) {
-      float inside = step(ax, halfE) * step(ay, halfE);
-      outgoingLight *= 1.0 - 0.5 * inside;
-    } else {
-      float mark = 0.0;
-      for (int i = 0; i <= 12; i++) {
-        if (float(i) > cells) break;
-        float pos = -halfE + float(i) * pitch;
-        float vLine = 1.0 - smoothstep(lw * 0.2, lw, abs(local.x - pos));
-        float hLine = 1.0 - smoothstep(lw * 0.2, lw, abs(local.y - pos));
-        mark = max(mark, max(vLine * fadeY, hLine * fadeX));
-      }
-      outgoingLight += vec3(1.0, 0.97, 0.93) * mark * 0.5;
-    }
+  if (ax < halfE && ay < halfE) {
+    outgoingLight *= 0.5;
   }
 }
 #include <opaque_fragment>`,
@@ -307,11 +318,21 @@ function attachLandingTarget(material) {
   material.onBeforeCompile = compileLandingTarget;
 }
 
+function compileRiseFade(shader) {
+  shader.vertexShader = shader.vertexShader
+    .replace(
+      "#include <common>",
+      "#include <common>\nattribute float instanceOpacity;\nvarying float vAtomOpacity;",
+    )
+    .replace("#include <project_vertex>", "#include <project_vertex>\nvAtomOpacity = instanceOpacity;");
+  shader.fragmentShader = shader.fragmentShader
+    .replace("#include <common>", "#include <common>\nvarying float vAtomOpacity;")
+    .replace("#include <opaque_fragment>", "#include <opaque_fragment>\ngl_FragColor.a *= vAtomOpacity;");
+}
+
 function syncLandingTarget() {
   landingTarget.center.value.set(aimWorldX, aimWorldZ);
   landingTarget.half.value = Math.max(atomSize * 0.5, brushN * atomSize * 0.5);
-  landingTarget.cells.value = Math.max(1, brushN);
-  landingTarget.mode.value = landMode === "shadow" ? 1 : 0;
   landingTarget.yaw.value = surface ? surface.rotation.y : 0;
 }
 
@@ -424,6 +445,7 @@ function setCell(x, y, z, value) {
     if (posX) posX[i] = 0;
     if (posZ) posZ[i] = 0;
     if (emitSizes) emitSizes[i] = 0;
+    if (lifeSpans) lifeSpans[i] = 0;
     if (shuffleCounts) shuffleCounts[i] = 0;
     if (shuffleOriginX) shuffleOriginX[i] = 0;
     if (shuffleOriginZ) shuffleOriginZ[i] = 0;
@@ -433,6 +455,7 @@ function setCell(x, y, z, value) {
     // Fresh spawn: bake current atom size; pitch matches so neighbors of this size touch.
     clearEffectCell(i);
     if (emitSizes) emitSizes[i] = atomSize;
+    if (lifeSpans) lifeSpans[i] = 0;
     if (shuffleCounts) shuffleCounts[i] = 0;
     if (shuffleOriginX) shuffleOriginX[i] = 0;
     if (shuffleOriginZ) shuffleOriginZ[i] = 0;
@@ -444,6 +467,159 @@ function setCell(x, y, z, value) {
   }
   if (value > 0) occupied.add(i);
   else if (prev > 0) occupied.delete(i);
+}
+
+/** Advance the lifetime oscillator. Emission reads it; it does not step the wave. */
+function advanceEmitLife(dt) {
+  if (!(dt > 0) || EMIT_LIFE_PERIOD <= 0) return;
+  emitLifePhase = (emitLifePhase + dt / EMIT_LIFE_PERIOD) % 1;
+}
+
+/** Lifetime in seconds at a phase on the displayed wave. */
+function lifeFromPhase(phase) {
+  const height = (1 - Math.cos(phase * Math.PI * 2)) * 0.5;
+  return EMIT_LIFE_MIN + height * (EMIT_LIFE_MAX - EMIT_LIFE_MIN);
+}
+
+/** Sample the oscillator where it is right now. */
+function sampleEmitLife() {
+  return lifeFromPhase(emitLifePhase);
+}
+
+function resetEmitLife() {
+  emitLifePhase = 0;
+}
+
+function bindLifeLog() {
+  lifeLogEl = document.querySelector("[data-falling-life-list]");
+  bindReadout();
+  bindLifeWave();
+}
+
+const LIFE_WAVE = { left: 36, right: 216, top: 8, bottom: 42 };
+let lifeWaveDot = null;
+let lifeWaveKey = "";
+
+function lifeWaveXY(phase) {
+  const s = -Math.cos(phase * Math.PI * 2);
+  const t = (s + 1) * 0.5;
+  return {
+    x: LIFE_WAVE.left + phase * (LIFE_WAVE.right - LIFE_WAVE.left),
+    y: LIFE_WAVE.bottom - t * (LIFE_WAVE.bottom - LIFE_WAVE.top),
+  };
+}
+
+function bindLifeWave() {
+  const wave = document.querySelector("[data-life-wave]");
+  lifeWaveDot = document.querySelector("[data-life-wave-dot]");
+  const maxEl = document.querySelector("[data-life-max]");
+  const minEl = document.querySelector("[data-life-min]");
+  if (maxEl) maxEl.textContent = EMIT_LIFE_MAX.toFixed(1);
+  if (minEl) minEl.textContent = EMIT_LIFE_MIN.toFixed(1);
+  if (wave) {
+    const parts = [];
+    const steps = 48;
+    for (let i = 0; i <= steps; i += 1) {
+      const p = lifeWaveXY(i / steps);
+      parts.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`);
+    }
+    wave.setAttribute("points", parts.join(" "));
+  }
+  lifeWaveKey = "";
+  paintLifeWave();
+}
+
+function paintLifeWave() {
+  if (!lifeWaveDot) return;
+  const sampling = emitting ? "1" : "0";
+  const key = `${emitLifePhase.toFixed(4)}:${sampling}`;
+  if (key === lifeWaveKey) return;
+  lifeWaveKey = key;
+  const p = lifeWaveXY(emitLifePhase);
+  lifeWaveDot.setAttribute("cx", p.x.toFixed(1));
+  lifeWaveDot.setAttribute("cy", p.y.toFixed(1));
+  if (emitting) lifeWaveDot.setAttribute("data-sampling", "");
+  else lifeWaveDot.removeAttribute("data-sampling");
+}
+
+function bindReadout() {
+  readoutSlots.clear();
+  for (const el of document.querySelectorAll("[data-readout]")) {
+    const key = el.getAttribute("data-readout");
+    if (!key) continue;
+    readoutSlots.set(key, { el, text: el.textContent || "" });
+    if ((el.textContent || "") === "—") el.setAttribute("data-empty", "");
+  }
+}
+
+function setReadout(key, text) {
+  const slot = readoutSlots.get(key);
+  if (!slot || slot.text === text) return;
+  slot.text = text;
+  slot.el.textContent = text;
+  if (text === "—") slot.el.setAttribute("data-empty", "");
+  else slot.el.removeAttribute("data-empty");
+}
+
+/** Paint corner measures and activity counts from the latest audio snapshot. */
+function paintReadout() {
+  paintLifeWave();
+  if (readoutSlots.size === 0) return;
+  const snap = audioSnap || GRID_SNAP_IDLE;
+  for (let q = 0; q < CORNER_IDS.length; q += 1) {
+    const id = CORNER_IDS[q];
+    const quad = snap.quads?.[id] || {};
+    const cells = quad.cells | 0;
+    const peak = Number(quad.peak) || 0;
+    setReadout(`${id}-area`, cells > 0 ? String(cells) : "—");
+    setReadout(`${id}-height`, peak > 0.05 ? peak.toFixed(2) : "—");
+    const doing = snap.activity?.[id] || {};
+    for (let v = 0; v < DOING_VERBS.length; v += 1) {
+      const verb = DOING_VERBS[v];
+      const n = doing[verb] | 0;
+      setReadout(`${id}-${verb}`, n > 0 ? String(n) : "—");
+    }
+  }
+}
+
+function emptyActivity() {
+  return {
+    tl: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
+    tr: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
+    bl: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
+    br: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
+  };
+}
+
+function clearLifeLog() {
+  lifeLogCount = 0;
+  lifeLogEl?.replaceChildren();
+}
+
+/** Append one emitted atom to the upper-right lifespan list. */
+function recordEmittedLife(seconds) {
+  lifeLogCount += 1;
+  if (!lifeLogEl) return;
+  const row = document.createElement("li");
+  const index = document.createElement("span");
+  index.textContent = String(lifeLogCount);
+  const life = document.createElement("span");
+  life.textContent = `${Number(seconds).toFixed(1)}s`;
+  row.append(index, life);
+  lifeLogEl.appendChild(row);
+  while (lifeLogEl.childElementCount > LIFE_LOG_MAX) {
+    lifeLogEl.firstElementChild?.remove();
+  }
+}
+
+function getLife(x, y, z) {
+  if (!lifeSpans || !inBounds(x, y, z)) return 0;
+  return lifeSpans[idx(x, y, z)];
+}
+
+function setLife(x, y, z, value) {
+  if (!lifeSpans || !inBounds(x, y, z)) return;
+  lifeSpans[idx(x, y, z)] = Math.max(0, Number(value) || 0);
 }
 
 function getBudget(x, y, z) {
@@ -462,6 +638,7 @@ function clearEffectCell(i) {
   if (infectionAge) infectionAge[i] = 0;
   if (shrinkFlags) shrinkFlags[i] = 0;
   if (shrinkT) shrinkT[i] = 0;
+  if (riseT) riseT[i] = 0;
 }
 
 function getEffectClock(x, y, z, channel) {
@@ -501,6 +678,16 @@ function setShrink(x, y, z, shrinking, t) {
   const i = idx(x, y, z);
   if (shrinkFlags) shrinkFlags[i] = shrinking ? 1 : 0;
   if (shrinkT) shrinkT[i] = shrinking ? Math.max(0, Math.min(1, Number(t) || 0)) : 0;
+}
+
+function setRise(x, y, z, rising, t) {
+  if (!riseT || !inBounds(x, y, z)) return;
+  riseT[idx(x, y, z)] = rising ? Math.max(0, Math.min(1, Number(t) || 0)) : 0;
+}
+
+function getRiseT(x, y, z) {
+  if (!riseT || !inBounds(x, y, z)) return 0;
+  return riseT[idx(x, y, z)] || 0;
 }
 
 function getShrink(x, y, z) {
@@ -675,6 +862,8 @@ const gridApi = {
   setShrink,
   getShrink,
   getShrinkT,
+  setRise,
+  getRiseT,
   getResting,
   getOnFloor,
   getSameAbove,
@@ -690,6 +879,8 @@ const gridApi = {
   setPosZ,
   getEmitSize: getCellEmitSize,
   setEmitSize: setCellEmitSize,
+  getLife,
+  setLife,
   getShuffle,
   setShuffle,
   getShuffleOriginX,
@@ -723,6 +914,8 @@ function cellWorld(x, y, z, target, scale = 1) {
   const pitch = cellAtomSize(i);
   target.x = posX ? posX[i] : worldXForCell(x, pitch);
   target.y = posY ? posY[i] : (y + 0.5) * pitch;
+  const rise = riseT ? riseT[i] : 0;
+  if (rise > 0) target.y += pitch * RISE_CELLS * rise;
   target.z = posZ ? posZ[i] : worldZForCell(z, pitch);
   return target;
 }
@@ -747,6 +940,11 @@ function rebuildAtomGeometry() {
     surface.remove(mesh);
   }
   fallingInstances.clear();
+  for (const mesh of risingInstances.values()) {
+    if (mesh.geometry !== blockGeo) mesh.geometry.dispose();
+    surface.remove(mesh);
+  }
+  risingInstances.clear();
   resetLandedTracking();
   reconcileMeshes();
 }
@@ -754,6 +952,19 @@ function rebuildAtomGeometry() {
 function rebuildSplashGeometry() {
   if (splashGeo) splashGeo.dispose();
   splashGeo = new THREE.RingGeometry(atomSize * 0.55, atomSize * 0.8, 28);
+}
+
+/**
+ * 0 at the default camera distance.
+ * `near` reaches 1 at the closest zoom; `far` reaches 1 at the farthest.
+ */
+function cameraPresence() {
+  const nearSpan = CAMERA_DIST_DEFAULT - CAMERA_DIST_MIN;
+  const farSpan = CAMERA_DIST_MAX - CAMERA_DIST_DEFAULT;
+  return {
+    near: nearSpan > 0 ? clamp01((CAMERA_DIST_DEFAULT - cameraDist) / nearSpan) : 0,
+    far: farSpan > 0 ? clamp01((cameraDist - CAMERA_DIST_DEFAULT) / farSpan) : 0,
+  };
 }
 
 function syncCamera() {
@@ -765,6 +976,19 @@ function syncCamera() {
     Math.cos(CAMERA_YAW) * horizontal,
   );
   camera.lookAt(0, 0.35, 0);
+  syncViewBrightness();
+}
+
+/** Default distance stays at full picture brightness. Pulling back darkens the view. */
+function syncViewBrightness() {
+  if (!canvas) return;
+  const { far } = cameraPresence();
+  if (far < 0.001) {
+    canvas.style.filter = "";
+    return;
+  }
+  const brightness = 1 - Math.pow(far, 0.85) * 0.55;
+  canvas.style.filter = `brightness(${brightness.toFixed(3)})`;
 }
 
 function setCameraDist(next) {
@@ -998,14 +1222,14 @@ function materialColor(matIndex) {
   return def?.color || "#cccccc";
 }
 
-function materialMeshMat(matIndex, receiveTarget = true) {
-  const key = receiveTarget ? matIndex : -matIndex - 1;
+function materialMeshMat(matIndex, receiveTarget = true, fade = false) {
+  const key = fade ? `fade:${matIndex}` : receiveTarget ? matIndex : -matIndex - 1;
   let mat = matCache.get(key);
   if (mat) return mat;
   const id = catalog?.idByIndex[matIndex];
   const def = id ? catalog.byId.get(id) : null;
   const opacity = def?.opacity ?? 1;
-  const transparent = opacity < 1;
+  const transparent = fade || opacity < 1;
   mat = new THREE.MeshPhongMaterial({
     color: new THREE.Color(materialColor(matIndex)),
     specular: 0x222222,
@@ -1014,8 +1238,8 @@ function materialMeshMat(matIndex, receiveTarget = true) {
     opacity,
     depthWrite: !transparent,
   });
-  // Only landed atoms (and the ground) receive the projected emit target.
-  if (receiveTarget) attachLandingTarget(mat);
+  if (fade) mat.onBeforeCompile = compileRiseFade;
+  else if (receiveTarget) attachLandingTarget(mat);
   matCache.set(key, mat);
   return mat;
 }
@@ -1084,6 +1308,7 @@ export function clearBoard() {
   if (infectionAge) infectionAge.fill(0);
   if (shrinkFlags) shrinkFlags.fill(0);
   if (shrinkT) shrinkT.fill(0);
+  if (riseT) riseT.fill(0);
   if (restingFlags) restingFlags.fill(0);
   if (onFloorFlags) onFloorFlags.fill(0);
   if (sameAboveFlags) sameAboveFlags.fill(0);
@@ -1091,12 +1316,17 @@ export function clearBoard() {
   if (posX) posX.fill(0);
   if (posZ) posZ.fill(0);
   if (emitSizes) emitSizes.fill(0);
+  if (lifeSpans) lifeSpans.fill(0);
+  resetEmitLife();
+  clearLifeLog();
   if (shuffleCounts) shuffleCounts.fill(0);
   if (shuffleOriginX) shuffleOriginX.fill(0);
   if (shuffleOriginZ) shuffleOriginZ.fill(0);
   if (flowDx) flowDx.fill(0);
   if (flowDz) flowDz.fill(0);
   occupied.clear();
+  audioSplash = 0;
+  audioSplashAt.length = 0;
 
   for (const splash of splashes) {
     surface?.remove(splash.mesh);
@@ -1109,6 +1339,10 @@ export function clearBoard() {
     mesh.instanceMatrix.needsUpdate = true;
   }
   for (const mesh of fallingInstances.values()) {
+    mesh.count = 0;
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+  for (const mesh of risingInstances.values()) {
     mesh.count = 0;
     mesh.instanceMatrix.needsUpdate = true;
   }
@@ -1174,27 +1408,6 @@ function setEmitHeight(value) {
   emitHeightU = clampEmitHeightU(emitHeightU);
   syncEmitHeightUi();
   syncEmitter();
-}
-
-function syncLandModeUi() {
-  for (const btn of document.querySelectorAll("[data-falling-target]")) {
-    const on = btn.getAttribute("data-falling-target") === landMode;
-    btn.setAttribute("aria-pressed", on ? "true" : "false");
-  }
-}
-
-function bindLandModeUi() {
-  syncLandModeUi();
-  for (const btn of document.querySelectorAll("[data-falling-target]")) {
-    if (!(btn instanceof HTMLButtonElement) || btn.dataset.bound === "1") continue;
-    btn.dataset.bound = "1";
-    btn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const mode = btn.getAttribute("data-falling-target");
-      if (mode === "grid" || mode === "shadow") landMode = mode;
-      syncLandModeUi();
-    });
-  }
 }
 
 function bindEmitHeightUi() {
@@ -1264,7 +1477,8 @@ function updateEmitStream(dt, active) {
 /**
  * Sand1-style brush: scatter atoms across a flat N×N field centered on aim.
  * Each cell rolls EMIT_CHANCE so the column cascades instead of falling as one slab.
- * Brush edge comes from RT pressure (or BRUSH_MAX for pointer pour).
+ * Brush edge comes from RT pressure. Mouse buttons pin that same curve
+ * to full squeeze (left) or the lightest press (right).
  */
 function pourBrush(ix, iz) {
   if (!cells || !catalog) return;
@@ -1285,11 +1499,17 @@ function pourBrush(ix, iz) {
       if (!inEmitXZ(x, z) || !inBounds(x, y, z)) continue;
       if (getCell(x, y, z) !== 0) continue;
       setCell(x, y, z, matIndex);
+      const life = sampleEmitLife();
+      setLife(x, y, z, life);
+      recordEmittedLife(life);
       placed += 1;
     }
   }
 
-  if (placed) reconcileMeshes();
+  if (placed) {
+    audioPour += placed;
+    reconcileMeshes();
+  }
 }
 
 function spawnSplash(x, y, z) {
@@ -1370,16 +1590,30 @@ function buildColumns() {
   }
 }
 
-function ensureInstanced(matIndex, count, receiveTarget) {
-  const map = receiveTarget ? instances : fallingInstances;
+function riseGeometry(capacity, previous) {
+  const geo = blockGeo.clone();
+  const data = new Float32Array(capacity);
+  data.fill(1);
+  const src = previous?.geometry?.getAttribute?.("instanceOpacity");
+  if (src?.array) data.set(src.array.subarray(0, Math.min(src.array.length, data.length)));
+  const opacity = new THREE.InstancedBufferAttribute(data, 1);
+  opacity.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute("instanceOpacity", opacity);
+  return geo;
+}
+
+function ensureKind(matIndex, count, kind) {
+  const map = kind === "rise" ? risingInstances : kind === "fall" ? fallingInstances : instances;
   let mesh = map.get(matIndex);
   const capacity = mesh ? mesh.instanceMatrix.count : 0;
   if (!mesh || capacity < count) {
     const nextCap = Math.max(count, capacity * 2 || 4096);
-    const next = new THREE.InstancedMesh(blockGeo, materialMeshMat(matIndex, receiveTarget), nextCap);
+    const geometry = kind === "rise" ? riseGeometry(nextCap, mesh) : blockGeo;
+    const next = new THREE.InstancedMesh(geometry, materialMeshMat(matIndex, kind === "land", kind === "rise"), nextCap);
     next.frustumCulled = false;
     next.castShadow = false;
     next.receiveShadow = false;
+    if (kind === "rise") next.renderOrder = 2;
     if (mesh) {
       const keep = mesh.count;
       for (let s = 0; s < keep; s += 1) {
@@ -1388,6 +1622,7 @@ function ensureInstanced(matIndex, count, receiveTarget) {
       }
       next.count = keep;
       next.instanceMatrix.needsUpdate = true;
+      if (mesh.geometry !== blockGeo) mesh.geometry.dispose();
       surface?.remove(mesh);
     } else {
       next.count = 0;
@@ -1399,17 +1634,18 @@ function ensureInstanced(matIndex, count, receiveTarget) {
   return mesh;
 }
 
-function fillInstanced(matIndex, coords, receiveTarget) {
+function ensureInstanced(matIndex, count, receiveTarget) {
+  return ensureKind(matIndex, count, receiveTarget ? "land" : "fall");
+}
+
+function cellOpacity(x, y, z) {
+  const t = getRiseT(x, y, z);
+  return t > 0 ? Math.max(0, 1 - t) : 1;
+}
+
+function paintInstances(mesh, coords, matIndex) {
   const n = (coords.length / 3) | 0;
-  if (n <= 0) {
-    const mesh = receiveTarget ? instances.get(matIndex) : fallingInstances.get(matIndex);
-    if (mesh) {
-      mesh.count = 0;
-      mesh.instanceMatrix.needsUpdate = true;
-    }
-    return;
-  }
-  const mesh = ensureInstanced(matIndex, n, receiveTarget);
+  const opacity = mesh.geometry.getAttribute("instanceOpacity");
   for (let k = 0; k < n; k += 1) {
     const o = k * 3;
     const x = coords[o];
@@ -1420,9 +1656,30 @@ function fillInstanced(matIndex, coords, receiveTarget) {
     scratchScale.set(scale, scale, scale);
     scratchMat4.compose(scratchPos, scratchQuat, scratchScale);
     mesh.setMatrixAt(k, scratchMat4);
+    if (opacity) opacity.setX(k, cellOpacity(x, y, z));
   }
+  if (opacity) opacity.needsUpdate = true;
   mesh.count = n;
   mesh.instanceMatrix.needsUpdate = true;
+}
+
+function fillKind(matIndex, coords, kind) {
+  const map = kind === "rise" ? risingInstances : fallingInstances;
+  const n = (coords.length / 3) | 0;
+  if (n <= 0) {
+    const mesh = map.get(matIndex);
+    if (mesh) {
+      mesh.count = 0;
+      mesh.instanceMatrix.needsUpdate = true;
+    }
+    return;
+  }
+  const mesh = ensureKind(matIndex, n, kind);
+  paintInstances(mesh, coords, matIndex);
+}
+
+function fillInstanced(matIndex, coords, receiveTarget) {
+  fillKind(matIndex, coords, receiveTarget ? "land" : "fall");
 }
 
 function resetLandedTracking() {
@@ -1528,6 +1785,30 @@ function writeFallingMeshes() {
   }
 }
 
+function risingBucket(mat) {
+  let coords = risingBuckets.get(mat);
+  if (!coords) {
+    coords = [];
+    risingBuckets.set(mat, coords);
+  }
+  return coords;
+}
+
+function writeRisingMeshes() {
+  /** @type {Set<number>} */
+  const used = new Set();
+  for (const [mat, coords] of risingBuckets) {
+    if (coords.length === 0) continue;
+    used.add(mat);
+    fillKind(mat, coords, "rise");
+  }
+  for (const [mat, mesh] of risingInstances) {
+    if (used.has(mat) || mesh.count === 0) continue;
+    mesh.count = 0;
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+}
+
 /**
  * Upload falling atoms every call. Landed slots change only when a cell
  * lands, leaves, or its transform/scale was marked this frame.
@@ -1554,6 +1835,7 @@ function writeMeshesFromColumns(resize) {
   }
 
   for (const coords of fallingBuckets.values()) coords.length = 0;
+  for (const coords of risingBuckets.values()) coords.length = 0;
 
   for (let k = 0; k < columnKeys.length; k += 1) {
     const list = columns.get(columnKeys[k]);
@@ -1569,7 +1851,9 @@ function writeMeshesFromColumns(resize) {
       const landed = yCenter <= restCenter + 1e-3;
       floorTop += size;
       if (catalog?.idByIndex[mat] === "block-exp") continue;
-      if (landed) {
+      if ((riseT?.[i] || 0) > 0) {
+        risingBucket(mat).push(x, y, z);
+      } else if (landed) {
         classStamp[i] = classGen;
         if (landedSlot[i] >= 0 && landedMatOf[i] !== mat) removeLanded(i);
         if (landedSlot[i] < 0) addLanded(i, mat);
@@ -1592,6 +1876,7 @@ function writeMeshesFromColumns(resize) {
   }
 
   writeFallingMeshes();
+  writeRisingMeshes();
   syncBlockExpSurface();
   syncEmitter();
 }
@@ -1905,11 +2190,16 @@ function runRules() {
   if (!catalog) return false;
   const occupiedList = collectOccupied();
   const { splashes: splashCells, moves } = stepWorld(gridApi, occupiedList, catalog);
+  for (let m = 0; m < moves.length; m += 1) {
+    if (moves[m].to.y < moves[m].from.y) audioFall += 1;
+  }
   const culledShuffle = applyPostMoves(gridApi, moves, catalog);
 
   consumeOutOfBounds();
   reconcileMeshes();
   for (const cell of splashCells) {
+    audioSplash += 1;
+    audioSplashAt.push({ x: cell.x, z: cell.z, life: getLife(cell.x, cell.y, cell.z) });
     const pitch = cellAtomSize(idx(cell.x, cell.y, cell.z));
     const wx = worldXForCell(cell.x, pitch);
     const wy = (cell.y + 0.5) * pitch;
@@ -1922,6 +2212,7 @@ function runRules() {
 
 function step(dt) {
   bumpXformGen();
+  advanceEmitLife(dt);
   applyInput(dt);
 
   let infected = applyInfect(gridApi, collectOccupied(), catalog);
@@ -1940,6 +2231,7 @@ function step(dt) {
   let columnOccupancy = occupied.size;
   rebuildColumnFlags();
   const effected = tickEffects(gridApi, collectOccupied(), catalog, columnQueries, dt);
+  audioDeath += Math.max(0, columnOccupancy - occupied.size);
   if (occupied.size !== columnOccupancy) {
     buildColumns();
     columnOccupancy = occupied.size;
@@ -1952,6 +2244,8 @@ function step(dt) {
   if (infected || effected || ruled || settled || lateral || packed || culled) {
     writeMeshesFromColumns(effected);
   }
+  rebuildColumnFlags();
+  captureAudioSnapshot(dt);
 
   for (let i = splashes.length - 1; i >= 0; i -= 1) {
     const splash = splashes[i];
@@ -2002,6 +2296,7 @@ function setHudText(el, prev, text) {
 }
 
 function updateHud(now) {
+  paintReadout();
   if (!fpsEl || !atomsEl || !trisEl) return;
   fpsFrames += 1;
   if (!fpsLastAt) fpsLastAt = now;
@@ -2044,7 +2339,7 @@ function startRenderLoop() {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=65`);
+  const res = await fetch(`/materials.json?v=70`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(parseMaterialsJson(await res.text()));
@@ -2063,9 +2358,31 @@ function ensureEffectStorage() {
   infectionAge = new Float32Array(n);
   shrinkFlags = new Uint8Array(n);
   shrinkT = new Float32Array(n);
+  riseT = new Float32Array(n);
   restingFlags = new Uint8Array(n);
   onFloorFlags = new Uint8Array(n);
   sameAboveFlags = new Uint8Array(n);
+}
+
+/** Cross on the playfield: the four quadrants are the four sample beds. */
+function addQuadrantAxes() {
+  if (!surface) return;
+  const y = 0.06;
+  const half = PLAYFIELD_HALF;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(
+      [-half, y, 0, half, y, 0, 0, y, -half, 0, y, half],
+      3,
+    ),
+  );
+  const lines = new THREE.LineSegments(
+    geo,
+    new THREE.LineBasicMaterial({ color: 0xf4efe6, transparent: true, opacity: 0.9 }),
+  );
+  lines.renderOrder = 3;
+  surface.add(lines);
 }
 
 function initScene(nextCanvas) {
@@ -2076,6 +2393,7 @@ function initScene(nextCanvas) {
   fpsEl = document.querySelector("[data-falling-fps]");
   atomsEl = document.querySelector("[data-falling-atoms]");
   trisEl = document.querySelector("[data-falling-tris]");
+  bindLifeLog();
   fpsFrames = 0;
   fpsLastAt = 0;
 
@@ -2085,6 +2403,7 @@ function initScene(nextCanvas) {
   posX = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   posZ = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   emitSizes = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
+  lifeSpans = new Float32Array(GRID_MAX * GRID_MAX * MAX_Y);
   shuffleCounts = new Uint8Array(GRID_MAX * GRID_MAX * MAX_Y);
   shuffleOriginX = new Uint16Array(GRID_MAX * GRID_MAX * MAX_Y);
   shuffleOriginZ = new Uint16Array(GRID_MAX * GRID_MAX * MAX_Y);
@@ -2107,6 +2426,11 @@ function initScene(nextCanvas) {
     surface?.remove(mesh);
   }
   fallingInstances.clear();
+  for (const mesh of risingInstances.values()) {
+    if (mesh.geometry !== blockGeo) mesh.geometry.dispose();
+    surface?.remove(mesh);
+  }
+  risingInstances.clear();
   splashes = [];
   ruleAcc = 0;
 
@@ -2147,6 +2471,7 @@ function initScene(nextCanvas) {
   groundMesh.rotation.x = -Math.PI / 2;
   groundMesh.position.y = -0.02;
   surface.add(groundMesh);
+  addQuadrantAxes();
 
   blockGeo = new THREE.BoxGeometry(1, 1, 1);
   {
@@ -2184,6 +2509,10 @@ function initScene(nextCanvas) {
 function installSimHook() {
   if (!new URLSearchParams(location.search).has("sim")) return;
   window.__fallingSim = {
+    setMaterial(id) {
+      setActiveMaterial(id);
+      return activeMaterialId;
+    },
     placeColumn(count) {
       clearBoard();
       const matIndex =
@@ -2215,6 +2544,8 @@ function installSimHook() {
           z,
           scale: cellScale(x, y, z),
           shrinking: shrinkFlags?.[i] === 1,
+          rise: riseT?.[i] || 0,
+          yDraw: (posY?.[i] || 0) + (riseT?.[i] || 0) * cellAtomSize(i) * RISE_CELLS,
           onFloor: onFloorFlags?.[i] === 1,
           sameAbove: sameAboveFlags?.[i] === 1,
           resting: restingFlags?.[i] === 1,
@@ -2355,6 +2686,263 @@ function installSimHook() {
   };
 }
 
+/**
+ * Activity weight for the field centroid. Motion and aging pull harder than a lone floor atom.
+ * @param {boolean} resting
+ * @param {boolean} onFloor
+ * @param {boolean} sameAbove
+ * @param {number} dying
+ */
+function activityWeight(resting, onFloor, sameAbove, dying) {
+  if (!resting) return 1;
+  if (onFloor && dying > 0.001) return 0.7;
+  if (sameAbove || !onFloor) return 0.35;
+  return 0.05;
+}
+
+/** Age-clock progress 0..1 for this cell, across compiled effect channels. */
+function clockProgress(i) {
+  if (!effectClocks.length || !cells || !catalog) return 0;
+  const id = catalog.idByIndex[cells[i]];
+  const material = id ? catalog.byId.get(id) : null;
+  let limit = 0;
+  const effects = material?.effects || [];
+  for (let e = 0; e < effects.length; e += 1) {
+    const effect = effects[e];
+    if (effect.kind === "age" && effect.seconds > limit) limit = effect.seconds;
+  }
+  if (lifeSpans && lifeSpans[i] > 0) limit = lifeSpans[i];
+  if (!(limit > 0)) return 0;
+  let clock = 0;
+  for (let c = 0; c < effectClocks.length; c += 1) {
+    const value = effectClocks[c][i];
+    if (value > clock) clock = value;
+  }
+  return Math.min(1, clock / limit);
+}
+
+/**
+ * Stereo pan (−1 left … 1 right) of a surface-local point after playfield yaw.
+ * Uses the azimuth around the camera, so a pile anywhere off center swings
+ * fully left and right as the surface turns. Screen-right matches moveAim.
+ */
+function screenPan(lx, lz, yaw) {
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  const wx = c * lx + s * lz;
+  const wz = -s * lx + c * lz;
+  const camC = Math.cos(CAMERA_YAW);
+  const camS = Math.sin(CAMERA_YAW);
+  const screenX = wx * camC - wz * camS;
+  const screenDepth = -wx * camS - wz * camC;
+  const mag = Math.hypot(screenX, screenDepth);
+  if (mag < 1e-4) return 0;
+  return Math.min(1, Math.max(-1, screenX / mag));
+}
+
+/** Describe the grid for sonification. Does not change the simulation. */
+function captureAudioSnapshot(dt) {
+  const pour = audioPour;
+  const fallRate = audioFall;
+  const deathRate = audioDeath;
+  const splashHits = audioSplashAt.splice(0, audioSplashAt.length);
+  audioPour = 0;
+  audioFall = 0;
+  audioDeath = 0;
+  audioSplash = 0;
+  audioGen += 1;
+
+  const yaw = surface ? surface.rotation.y : 0;
+  const splash = { tl: [], tr: [], bl: [], br: [] };
+  const splashMid = GRID_MAX >> 1;
+  for (let i = 0; i < splashHits.length; i += 1) {
+    const hit = splashHits[i];
+    const id = hit.x < splashMid ? (hit.z < splashMid ? "tl" : "bl") : hit.z < splashMid ? "tr" : "br";
+    splash[id].push(hit.life > 0 ? hit.life : 3.5);
+  }
+  const zoomSpan = CAMERA_DIST_MAX - CAMERA_DIST_MIN;
+  const zoom = zoomSpan > 0 ? (cameraDist - CAMERA_DIST_MIN) / zoomSpan : 0;
+  const presence = cameraPresence();
+
+  let sumW = 0;
+  let sumX = 0;
+  let sumZ = 0;
+  let sumXX = 0;
+  let sumZZ = 0;
+  let sumH = 0;
+  let count = 0;
+  let fallingN = 0;
+  let settledN = 0;
+  let floorN = 0;
+  let dieSum = 0;
+  let maxTop = 0;
+  let stackedN = 0;
+  const mid = GRID_MAX >> 1;
+  const quadCells = mid * mid;
+  const fp = { tl: 0, tr: 0, bl: 0, br: 0 };
+  const peak = { tl: 0, tr: 0, bl: 0, br: 0 };
+  const panSum = { tl: 0, tr: 0, bl: 0, br: 0 };
+  const activity = emptyActivity();
+
+  if (cells && occupied.size > 0 && posX && posZ && posY) {
+    for (let c = 0; c < columnKeys.length; c += 1) {
+      const list = columns.get(columnKeys[c]);
+      let n = 0;
+      let top = 0;
+      for (let k = 0; k < list.length; k += 1) {
+        const i = list[k];
+        if (cells[i] <= 0) continue;
+        n += 1;
+        const decoded = decodeCell(i);
+        const half = atomExtent(decoded.x, decoded.y, decoded.z, cells[i]) * 0.5;
+        const yCenter = posY[i] > 0 ? posY[i] : half;
+        const tip = yCenter + half;
+        if (tip > top) top = tip;
+      }
+      if (top > maxTop) maxTop = top;
+      if (n > 1) stackedN += n;
+      if (n > 0) {
+        const key = columnKeys[c];
+        const colX = key % GRID_MAX;
+        const colZ = (key / GRID_MAX) | 0;
+        const id = colX < mid ? (colZ < mid ? "tl" : "bl") : (colZ < mid ? "tr" : "br");
+        fp[id] += 1;
+        if (top > peak[id]) peak[id] = top;
+        panSum[id] += screenPan(worldXForCell(colX, ATOM_SIZE), worldZForCell(colZ, ATOM_SIZE), yaw);
+      }
+    }
+
+    for (const i of occupied) {
+      if (cells[i] <= 0) continue;
+      const resting = restingFlags?.[i] === 1;
+      const onFloor = onFloorFlags?.[i] === 1;
+      const sameAbove = sameAboveFlags?.[i] === 1;
+      const dying = onFloor ? clockProgress(i) : 0;
+      const ax = i % GRID_MAX;
+      const az = ((i / GRID_MAX) | 0) % GRID_MAX;
+      const aid = ax < mid ? (az < mid ? "tl" : "bl") : az < mid ? "tr" : "br";
+      const bucket = activity[aid];
+      if ((riseT?.[i] || 0) > 0) bucket.rise += 1;
+      else if (!resting) bucket.fall += 1;
+      else if (shrinkFlags?.[i] === 1) bucket.shrink += 1;
+      else if ((flowDx?.[i] || 0) !== 0 || (flowDz?.[i] || 0) !== 0) bucket.slide += 1;
+      else bucket.rest += 1;
+      const w = activityWeight(resting, onFloor, sameAbove, dying);
+      const x = posX[i];
+      const z = posZ[i];
+      const yCenter = posY[i] > 0 ? posY[i] : 0;
+      sumW += w;
+      sumX += w * x;
+      sumZ += w * z;
+      sumXX += w * x * x;
+      sumZZ += w * z * z;
+      sumH += yCenter;
+      count += 1;
+      if (!resting) fallingN += 1;
+      if (onFloor && resting && !sameAbove) settledN += 1;
+      if (onFloor) {
+        floorN += 1;
+        dieSum += dying;
+      }
+    }
+  }
+
+  let fieldX = 0.5;
+  let fieldZ = 0.5;
+  let spread = 0;
+  if (sumW > 0) {
+    const cx = sumX / sumW;
+    const cz = sumZ / sumW;
+    fieldX = (cx + PLAYFIELD_HALF) / PLAYFIELD_SPAN;
+    fieldZ = (cz + PLAYFIELD_HALF) / PLAYFIELD_SPAN;
+    const radial = sumXX + sumZZ - sumW * (cx * cx + cz * cz);
+    const rms = Math.sqrt(Math.max(0, radial) / sumW);
+    spread = Math.min(1, rms / (PLAYFIELD_HALF * Math.SQRT2));
+  }
+
+  audioSnap = {
+    field: {
+      x: Math.min(1, Math.max(0, fieldX)),
+      z: Math.min(1, Math.max(0, fieldZ)),
+    },
+    spread,
+    height: Math.min(1, Math.max(0, maxTop / EMIT_HEIGHT_MAX_U)),
+    meanHeight: count > 0 ? Math.min(1, Math.max(0, sumH / count / EMIT_HEIGHT_MAX_U)) : 0,
+    stacked: count > 0 ? stackedN / count : 0,
+    falling: count > 0 ? fallingN / count : 0,
+    dying: floorN > 0 ? dieSum / floorN : 0,
+    settled: count > 0 ? settledN / count : 0,
+    pour,
+    fallRate,
+    deathRate,
+    weight: sumW,
+    mass: count,
+    quads: {
+      tl: { coverage: fp.tl / quadCells, height: Math.min(1, peak.tl / EMIT_HEIGHT_MAX_U), cells: fp.tl, peak: peak.tl },
+      tr: { coverage: fp.tr / quadCells, height: Math.min(1, peak.tr / EMIT_HEIGHT_MAX_U), cells: fp.tr, peak: peak.tr },
+      bl: { coverage: fp.bl / quadCells, height: Math.min(1, peak.bl / EMIT_HEIGHT_MAX_U), cells: fp.bl, peak: peak.bl },
+      br: { coverage: fp.br / quadCells, height: Math.min(1, peak.br / EMIT_HEIGHT_MAX_U), cells: fp.br, peak: peak.br },
+    },
+    activity,
+    pans: {
+      tl: fp.tl > 0 ? panSum.tl / fp.tl : 0,
+      tr: fp.tr > 0 ? panSum.tr / fp.tr : 0,
+      bl: fp.bl > 0 ? panSum.bl / fp.bl : 0,
+      br: fp.br > 0 ? panSum.br / fp.br : 0,
+    },
+    splash,
+    view: {
+      yaw,
+      zoom: Math.min(1, Math.max(0, zoom)),
+      near: presence.near,
+      far: presence.far,
+    },
+    gen: audioGen,
+  };
+}
+
+const GRID_SNAP_IDLE = {
+  field: { x: 0.5, z: 0.5 },
+  spread: 0,
+  height: 0,
+  meanHeight: 0,
+  stacked: 0,
+  falling: 0,
+  dying: 0,
+  settled: 0,
+  pour: 0,
+  fallRate: 0,
+  deathRate: 0,
+  weight: 0,
+  mass: 0,
+  quads: {
+    tl: { coverage: 0, height: 0, cells: 0, peak: 0 },
+    tr: { coverage: 0, height: 0, cells: 0, peak: 0 },
+    bl: { coverage: 0, height: 0, cells: 0, peak: 0 },
+    br: { coverage: 0, height: 0, cells: 0, peak: 0 },
+  },
+  activity: {
+    tl: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
+    tr: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
+    bl: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
+    br: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
+  },
+  pans: { tl: 0, tr: 0, bl: 0, br: 0 },
+  splash: { tl: [], tr: [], bl: [], br: [] },
+  view: {
+    yaw: 0,
+    zoom: (CAMERA_DIST_DEFAULT - CAMERA_DIST_MIN) / (CAMERA_DIST_MAX - CAMERA_DIST_MIN),
+    near: 0,
+    far: 0,
+  },
+  gen: 0,
+};
+
+/** Latest grid description for the audio adapter. Idle until the sim has stepped. */
+export function readGridSnapshot() {
+  return audioSnap || GRID_SNAP_IDLE;
+}
+
 export async function showFallingBlocks(nextCanvas) {
   try {
     await loadCatalog();
@@ -2366,12 +2954,12 @@ export async function showFallingBlocks(nextCanvas) {
       fpsEl = document.querySelector("[data-falling-fps]");
       atomsEl = document.querySelector("[data-falling-atoms]");
       trisEl = document.querySelector("[data-falling-tris]");
+      bindLifeLog();
       fpsFrames = 0;
       fpsLastAt = 0;
     }
     bindClearUi();
     bindEmitHeightUi();
-    bindLandModeUi();
     fallingInput.attach(canvas);
     installSimHook();
     running = true;
@@ -2385,6 +2973,7 @@ export async function showFallingBlocks(nextCanvas) {
 
 export function hideFallingBlocks() {
   running = false;
+  if (canvas) canvas.style.filter = "";
   fallingInput.detach();
   emitting = false;
   emitAcc = 0;

@@ -30,6 +30,93 @@
     /*
     ,
     {
+      "id": "sand",
+      "label": "Sand",
+      "color": "#e0a84a",
+      "surface": "solid",
+      "rules": [
+        {
+          "name": "fall",
+          "diagram": [
+            "@ => _",
+            "_    @"
+          ]
+        },
+        {
+          "name": "slide",
+          "any": "xz.rotations",
+          "diagram": [
+            "@. => _.",
+            "x_    x@"
+          ]
+        }
+      ]
+    }
+    */
+    ,
+    {
+      "id": "sand-rise",
+      "label": "Sand Rise",
+      "color": "#e0a84a",
+      "surface": "solid",
+      "rules": [
+        {
+          "name": "fall",
+          "diagram": [
+            "@ => _",
+            "_    @"
+          ]
+        },
+        {
+          "name": "slide",
+          "any": "xz.rotations",
+          "diagram": [
+            "@. => _.",
+            "x_    x@"
+          ]
+        },
+        {
+          "name": "blow",
+          "when": { "resting": true, "onFloor": false, "belowMinNeighbors": 3 },
+          "do": { "age": 4.5, "hold": 2, "lifeScale": 3, "visual": "rise", "then": "clear" }
+        }
+      ]
+    },
+    {
+      "id": "erode",
+      "label": "Erode",
+      "color": "#7a9e6a",
+      "surface": "solid",
+      "sonify": false,
+      "rules": [
+        {
+          "name": "fall",
+          "diagram": [
+            "@ => _",
+            "_    @"
+          ]
+        },
+        {
+          "name": "slide",
+          "any": "xz.rotations",
+          "diagram": [
+            "@. => _.",
+            "x_    x@"
+          ]
+        },
+        {
+          "name": "dissolve",
+          "do": { "age": 10, "visual": "shrink", "then": "clear" }
+        },
+        {
+          "name": "infect",
+          "do": { "infect": { "seconds": 6, "skipSurface": "liquid" } }
+        }
+      ]
+    }
+    /*
+    ,
+    {
       "id": "block-exp",
       "label": "Block Exp",
       "color": "#3d7ec4",
@@ -57,60 +144,6 @@
     */
     /*
     ,
-    {
-      "id": "sand",
-      "label": "Sand",
-      "color": "#e0a84a",
-      "surface": "solid",
-      "rules": [
-        {
-          "name": "fall",
-          "diagram": [
-            "@ => _",
-            "_    @"
-          ]
-        },
-        {
-          "name": "slide",
-          "any": "xz.rotations",
-          "diagram": [
-            "@. => _.",
-            "x_    x@"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "erode",
-      "label": "Erode",
-      "color": "#7a9e6a",
-      "surface": "solid",
-      "rules": [
-        {
-          "name": "fall",
-          "diagram": [
-            "@ => _",
-            "_    @"
-          ]
-        },
-        {
-          "name": "slide",
-          "any": "xz.rotations",
-          "diagram": [
-            "@. => _.",
-            "x_    x@"
-          ]
-        },
-        {
-          "name": "dissolve",
-          "do": { "age": 10, "visual": "shrink", "then": "clear" }
-        },
-        {
-          "name": "infect",
-          "do": { "infect": { "seconds": 6, "skipSurface": "liquid" } }
-        }
-      ]
-    },
     {
       "id": "etch",
       "label": "Etch",
