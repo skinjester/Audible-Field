@@ -150,6 +150,9 @@ let flowDz = null;
 const occupied = new Set();
 /** @type {Map<number, THREE.InstancedMesh>} */
 const instances = new Map();
+/** In-flight atoms — same materials, but without the projected target. */
+/** @type {Map<number, THREE.InstancedMesh>} */
+const fallingInstances = new Map();
 /** @type {Map<number, THREE.MeshStandardMaterial>} */
 const matCache = new Map();
 /** @type {{ mesh: THREE.Mesh, age: number }[]} */
@@ -181,12 +184,107 @@ const gridXZ = GRID_XZ;
 
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
-const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+/** Horizontal plane at the emitter height. Pointer aims this, not the ground target. */
+const emitterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const hitPoint = new THREE.Vector3();
 const scratchPos = new THREE.Vector3();
 const scratchScale = new THREE.Vector3(1, 1, 1);
 const scratchQuat = new THREE.Quaternion();
 const scratchMat4 = new THREE.Matrix4();
+
+/**
+ * Landing grid projected straight down (orthographic).
+ * One cell per emitter atom; lines continue past the square and fade.
+ */
+const landingTarget = {
+  center: { value: new THREE.Vector2() },
+  half: { value: ATOM_SIZE * 0.5 },
+  cells: { value: 1 },
+  /** 0 = grid, 1 = flat shadow square. */
+  mode: { value: 0 },
+  yaw: { value: 0 },
+};
+/** @type {"grid" | "shadow"} */
+let landMode = "grid";
+
+function compileLandingTarget(shader) {
+  shader.uniforms.uLandCenter = landingTarget.center;
+  shader.uniforms.uLandHalf = landingTarget.half;
+  shader.uniforms.uLandCells = landingTarget.cells;
+  shader.uniforms.uLandMode = landingTarget.mode;
+  shader.uniforms.uLandYaw = landingTarget.yaw;
+  shader.vertexShader = shader.vertexShader
+    .replace("#include <common>", "#include <common>\nvarying vec3 vLandWorld;")
+    .replace(
+      "#include <project_vertex>",
+      `#include <project_vertex>
+{
+  vec4 landPos = vec4(transformed, 1.0);
+  #ifdef USE_INSTANCING
+    landPos = instanceMatrix * landPos;
+  #endif
+  vLandWorld = (modelMatrix * landPos).xyz;
+}`,
+    );
+  shader.fragmentShader = shader.fragmentShader
+    .replace(
+      "#include <common>",
+      `#include <common>
+varying vec3 vLandWorld;
+uniform vec2 uLandCenter;
+uniform float uLandHalf;
+uniform float uLandCells;
+uniform float uLandMode;
+uniform float uLandYaw;`,
+    )
+    .replace(
+      "#include <opaque_fragment>",
+      `{
+  vec2 d = vLandWorld.xz - uLandCenter;
+  float c = cos(uLandYaw);
+  float s = sin(uLandYaw);
+  vec2 local = vec2(c * d.x - s * d.y, s * d.x + c * d.y);
+  float halfE = max(uLandHalf, 0.001);
+  float cells = max(1.0, floor(uLandCells + 0.5));
+  float pitch = (halfE * 2.0) / cells;
+  float reach = halfE + pitch * 0.85;
+  float ax = abs(local.x);
+  float ay = abs(local.y);
+  if (ax < reach && ay < reach) {
+    float lw = max(pitch * 0.07, 0.008);
+    float fadeY = 1.0 - smoothstep(halfE, reach, ay);
+    float fadeX = 1.0 - smoothstep(halfE, reach, ax);
+    if (uLandMode > 0.5) {
+      float inside = step(ax, halfE) * step(ay, halfE);
+      outgoingLight *= 1.0 - 0.5 * inside;
+    } else {
+      float mark = 0.0;
+      for (int i = 0; i <= 12; i++) {
+        if (float(i) > cells) break;
+        float pos = -halfE + float(i) * pitch;
+        float vLine = 1.0 - smoothstep(lw * 0.2, lw, abs(local.x - pos));
+        float hLine = 1.0 - smoothstep(lw * 0.2, lw, abs(local.y - pos));
+        mark = max(mark, max(vLine * fadeY, hLine * fadeX));
+      }
+      outgoingLight += vec3(1.0, 0.97, 0.93) * mark * 0.5;
+    }
+  }
+}
+#include <opaque_fragment>`,
+    );
+}
+
+function attachLandingTarget(material) {
+  material.onBeforeCompile = compileLandingTarget;
+}
+
+function syncLandingTarget() {
+  landingTarget.center.value.set(aimWorldX, aimWorldZ);
+  landingTarget.half.value = Math.max(atomSize * 0.5, brushN * atomSize * 0.5);
+  landingTarget.cells.value = Math.max(1, brushN);
+  landingTarget.mode.value = landMode === "shadow" ? 1 : 0;
+  landingTarget.yaw.value = surface ? surface.rotation.y : 0;
+}
 
 function showError(message) {
   const el = document.querySelector("[data-falling-error]");
@@ -566,6 +664,10 @@ function rebuildAtomGeometry() {
     surface.remove(mesh);
   }
   instances.clear();
+  for (const mesh of fallingInstances.values()) {
+    surface.remove(mesh);
+  }
+  fallingInstances.clear();
   reconcileMeshes();
 }
 
@@ -705,7 +807,8 @@ function aimFromClient(clientX, clientY) {
   pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointerNdc, camera);
-  if (!raycaster.ray.intersectPlane(groundPlane, hitPoint)) return;
+  emitterPlane.constant = -emitWorldY();
+  if (!raycaster.ray.intersectPlane(emitterPlane, hitPoint)) return;
   // Store world hit — do not bake into surface-local (decoupled from grid yaw).
   aimWorldX = hitPoint.x;
   aimWorldZ = hitPoint.z;
@@ -816,8 +919,9 @@ function materialColor(matIndex) {
   return def?.color || "#cccccc";
 }
 
-function materialMeshMat(matIndex) {
-  let mat = matCache.get(matIndex);
+function materialMeshMat(matIndex, receiveTarget = true) {
+  const key = receiveTarget ? matIndex : -matIndex - 1;
+  let mat = matCache.get(key);
   if (mat) return mat;
   const id = catalog?.idByIndex[matIndex];
   const def = id ? catalog.byId.get(id) : null;
@@ -831,7 +935,9 @@ function materialMeshMat(matIndex) {
     opacity,
     depthWrite: !transparent,
   });
-  matCache.set(matIndex, mat);
+  // Only landed atoms (and the ground) receive the projected emit target.
+  if (receiveTarget) attachLandingTarget(mat);
+  matCache.set(key, mat);
   return mat;
 }
 
@@ -921,6 +1027,10 @@ export function clearBoard() {
     mesh.count = 0;
     mesh.instanceMatrix.needsUpdate = true;
   }
+  for (const mesh of fallingInstances.values()) {
+    mesh.count = 0;
+    mesh.instanceMatrix.needsUpdate = true;
+  }
 
   if (surface) {
     surface.position.set(0, 0, 0);
@@ -983,6 +1093,27 @@ function setEmitHeight(value) {
   emitHeightU = clampEmitHeightU(emitHeightU);
   syncEmitHeightUi();
   syncEmitter();
+}
+
+function syncLandModeUi() {
+  for (const btn of document.querySelectorAll("[data-falling-target]")) {
+    const on = btn.getAttribute("data-falling-target") === landMode;
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+}
+
+function bindLandModeUi() {
+  syncLandModeUi();
+  for (const btn of document.querySelectorAll("[data-falling-target]")) {
+    if (!(btn instanceof HTMLButtonElement) || btn.dataset.bound === "1") continue;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const mode = btn.getAttribute("data-falling-target");
+      if (mode === "grid" || mode === "shadow") landMode = mode;
+      syncLandModeUi();
+    });
+  }
 }
 
 function bindEmitHeightUi() {
@@ -1118,27 +1249,101 @@ function collectOccupied() {
   return list;
 }
 
-function ensureInstanced(matIndex, count) {
-  let mesh = instances.get(matIndex);
+/** Cell indices whose center has reached the settled column. Falling atoms are omitted. */
+function collectLanded() {
+  /** @type {Set<number>} */
+  const landed = new Set();
+  if (!cells || !posY || occupied.size === 0) return landed;
+
+  /** @type {Map<number, number[]>} */
+  const columns = new Map();
+  for (const i of occupied) {
+    if (cells[i] <= 0) continue;
+    const x = i % GRID_MAX;
+    const rest = (i / GRID_MAX) | 0;
+    const z = rest % GRID_MAX;
+    const key = z * GRID_MAX + x;
+    let list = columns.get(key);
+    if (!list) {
+      list = [];
+      columns.set(key, list);
+    }
+    list.push(i);
+  }
+
+  for (const list of columns.values()) {
+    list.sort((a, b) => (posY[a] || 0) - (posY[b] || 0) || a - b);
+    let floorTop = 0;
+    for (const i of list) {
+      const mat = cells[i];
+      const x = i % GRID_MAX;
+      const rest = (i / GRID_MAX) | 0;
+      const z = rest % GRID_MAX;
+      const y = (rest / GRID_MAX) | 0;
+      const size = atomExtent(x, y, z, mat);
+      const restCenter = floorTop + size * 0.5;
+      const yCenter = posY[i] > 0 ? posY[i] : restCenter;
+      if (yCenter <= restCenter + 1e-3) landed.add(i);
+      floorTop += size;
+    }
+  }
+  return landed;
+}
+
+function ensureInstanced(matIndex, count, receiveTarget) {
+  const map = receiveTarget ? instances : fallingInstances;
+  let mesh = map.get(matIndex);
   const capacity = mesh ? mesh.instanceMatrix.count : 0;
   if (!mesh || capacity < count) {
-    if (mesh) surface?.remove(mesh);
+    if (mesh) {
+      surface?.remove(mesh);
+    }
     const nextCap = Math.max(count, capacity * 2 || 4096);
-    mesh = new THREE.InstancedMesh(blockGeo, materialMeshMat(matIndex), nextCap);
+    mesh = new THREE.InstancedMesh(blockGeo, materialMeshMat(matIndex, receiveTarget), nextCap);
     mesh.frustumCulled = false;
     mesh.castShadow = false;
     mesh.receiveShadow = false;
     surface.add(mesh);
-    instances.set(matIndex, mesh);
+    map.set(matIndex, mesh);
   }
   return mesh;
+}
+
+function fillInstanced(matIndex, coords, receiveTarget) {
+  const n = (coords.length / 3) | 0;
+  if (n <= 0) {
+    const mesh = receiveTarget ? instances.get(matIndex) : fallingInstances.get(matIndex);
+    if (mesh) {
+      mesh.count = 0;
+      mesh.instanceMatrix.needsUpdate = true;
+    }
+    return;
+  }
+  const mesh = ensureInstanced(matIndex, n, receiveTarget);
+  for (let k = 0; k < n; k += 1) {
+    const o = k * 3;
+    const x = coords[o];
+    const y = coords[o + 1];
+    const z = coords[o + 2];
+    const scale = cellScale(x, y, z, matIndex) * cellAtomSize(idx(x, y, z));
+    cellWorld(x, y, z, scratchPos, scale);
+    scratchScale.set(scale, scale, scale);
+    scratchMat4.compose(scratchPos, scratchQuat, scratchScale);
+    mesh.setMatrixAt(k, scratchMat4);
+  }
+  mesh.count = n;
+  mesh.instanceMatrix.needsUpdate = true;
 }
 
 function reconcileMeshes() {
   if (!surface || !blockGeo) return;
 
   /** @type {Map<number, number[]>} */
-  const byMat = new Map();
+  const landedByMat = new Map();
+  /** @type {Map<number, number[]>} */
+  const fallingByMat = new Map();
+  const landed = collectLanded();
+
   for (const i of occupied) {
     const mat = cells[i];
     if (mat <= 0) continue;
@@ -1146,37 +1351,28 @@ function reconcileMeshes() {
     const rest = (i / GRID_MAX) | 0;
     const z = rest % GRID_MAX;
     const y = (rest / GRID_MAX) | 0;
-    let coords = byMat.get(mat);
+    const map = landed.has(i) ? landedByMat : fallingByMat;
+    let coords = map.get(mat);
     if (!coords) {
       coords = [];
-      byMat.set(mat, coords);
+      map.set(mat, coords);
     }
     coords.push(x, y, z);
   }
 
   for (const [mat, mesh] of instances) {
-    if (byMat.has(mat)) continue;
+    if (landedByMat.has(mat)) continue;
+    mesh.count = 0;
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+  for (const [mat, mesh] of fallingInstances) {
+    if (fallingByMat.has(mat)) continue;
     mesh.count = 0;
     mesh.instanceMatrix.needsUpdate = true;
   }
 
-  for (const [mat, coords] of byMat) {
-    const n = (coords.length / 3) | 0;
-    const mesh = ensureInstanced(mat, n);
-    for (let k = 0; k < n; k += 1) {
-      const o = k * 3;
-      const x = coords[o];
-      const y = coords[o + 1];
-      const z = coords[o + 2];
-      const scale = cellScale(x, y, z, mat) * cellAtomSize(idx(x, y, z));
-      cellWorld(x, y, z, scratchPos, scale);
-      scratchScale.set(scale, scale, scale);
-      scratchMat4.compose(scratchPos, scratchQuat, scratchScale);
-      mesh.setMatrixAt(k, scratchMat4);
-    }
-    mesh.count = n;
-    mesh.instanceMatrix.needsUpdate = true;
-  }
+  for (const [mat, coords] of landedByMat) fillInstanced(mat, coords, true);
+  for (const [mat, coords] of fallingByMat) fillInstanced(mat, coords, false);
   syncEmitter();
 }
 
@@ -1917,6 +2113,7 @@ function renderFrame(now) {
 
   try {
     step(dt);
+    syncLandingTarget();
     renderer.render(scene, camera);
     updateHud(now);
   } catch (err) {
@@ -2019,6 +2216,10 @@ function initScene(nextCanvas) {
     surface?.remove(mesh);
   }
   instances.clear();
+  for (const mesh of fallingInstances.values()) {
+    surface?.remove(mesh);
+  }
+  fallingInstances.clear();
   splashes = [];
   ruleAcc = 0;
 
@@ -2050,9 +2251,11 @@ function initScene(nextCanvas) {
   fill.position.set(-7, 6, -5);
   scene.add(fill);
 
+  const groundMat = new THREE.MeshStandardMaterial({ color: 0x1a4f6e, roughness: 0.85, metalness: 0.05 });
+  attachLandingTarget(groundMat);
   groundMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(GROUND_PLANE_SIZE, GROUND_PLANE_SIZE),
-    new THREE.MeshStandardMaterial({ color: 0x10181c, roughness: 1, metalness: 0 }),
+    groundMat,
   );
   groundMesh.rotation.x = -Math.PI / 2;
   groundMesh.position.y = -0.02;
@@ -2107,6 +2310,7 @@ export async function showFallingBlocks(nextCanvas) {
     }
     bindClearUi();
     bindEmitHeightUi();
+    bindLandModeUi();
     fallingInput.attach(canvas);
     running = true;
     sizeTries = 0;

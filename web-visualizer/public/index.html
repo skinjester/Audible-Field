@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>EchoScape mixer</title>
+    <title>EchoScape Web Visualizer</title>
     <link rel="stylesheet" href="/styles.css?v=122" />
     <script type="importmap">
       {
@@ -19,7 +19,7 @@
       <header class="top">
         <div>
           <p class="kicker">EchoScape</p>
-          <h1>Touchpad mixer</h1>
+          <h1>Web Visualizer</h1>
         </div>
         <div class="top-actions">
           <div class="mode-toggle" role="group" aria-label="Input mode">
@@ -363,6 +363,13 @@
                 />
                 <span data-falling-emit-height-val>5.5u</span>
               </label>
+              <div class="falling-emit-size">
+                Target
+                <div class="falling-emit-presets" role="group" aria-label="Emission target">
+                  <button type="button" data-falling-target="grid" aria-pressed="true">Grid</button>
+                  <button type="button" data-falling-target="shadow" aria-pressed="false">Shadow</button>
+                </div>
+              </div>
               <div class="falling-palette-row">
                 <div class="falling-palette" data-falling-palette role="group" aria-label="Material"></div>
                 <button type="button" class="falling-clear" data-falling-clear title="Clear board (Circle)">
@@ -378,6 +385,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=186"></script>
+    <script type="module" src="/app.js?v=195"></script>
   </body>
 </html>
