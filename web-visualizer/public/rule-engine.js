@@ -45,7 +45,10 @@
  * slide "closestOpen": a resting floor block with any atom above steps one cell
  * outward. The column above drops straight down into the cell it left.
  *   { infect: { seconds, skipSurface?: "liquid" } }
- *   A poured lifetime on the infecting grain replaces seconds.
+ *   { vacuum: { skipSurface?: "liquid" } }
+ *   vacuum clears each solid face neighbor. Every remaining face neighbor of
+ *   that cell then slides one step toward the cell that was cleared.
+ *   Liquids are left in place.
  *   { absorbSparse: { seconds, minNeighbors } }
  *   { dryUnbounded: { seconds, resetOn?: "gainedTouch" } }
  *   { cullShuffle: { hops, span } }
@@ -249,6 +252,13 @@ function normalizeEffect(rule) {
       thenClear: verb.then === "clear",
       slideUnits: Math.max(0, Math.floor(Number(verb.slideUnits) || 0)),
       slideLifeAbove: verb.slideLife === "above",
+    };
+  }
+  if (verb.vacuum && typeof verb.vacuum === "object") {
+    return {
+      ...base,
+      kind: "vacuum",
+      skipSurface: verb.vacuum.skipSurface === "liquid" ? "liquid" : null,
     };
   }
   if (verb.infect && typeof verb.infect === "object") {
@@ -1486,6 +1496,7 @@ function clearCellMeta(grid, x, y, z, catalog = null) {
   grid.setShuffleOriginZ?.(x, y, z, 0);
   grid.setFlowDx?.(x, y, z, 0);
   grid.setFlowDz?.(x, y, z, 0);
+  grid.clearPull?.(x, y, z);
   clearEffectState(grid, x, y, z, catalog);
 }
 
@@ -1597,6 +1608,107 @@ function setClock(grid, x, y, z, channel, value) {
   grid.setEffectClock?.(x, y, z, channel, Math.max(0, Number(value) || 0));
 }
 
+function vacuumVictim(catalog, matIndex, selfMat, effect) {
+  if (matIndex <= 0 || matIndex === selfMat) return false;
+  const neighbor = materialByIndex(catalog, matIndex);
+  if (effect.skipSurface && neighbor?.surface === effect.skipSurface) return false;
+  return true;
+}
+
+/**
+ * Slide every solid face neighbor one step toward the cell that was just cleared.
+ * The empty cell can hold one grain; the rest keep a pull toward that same cell.
+ * @param {GridApi} grid
+ * @param {MaterialCatalog} catalog
+ * @param {object} effect
+ * @param {{ x: number, y: number, z: number, mat: number }} origin
+ * @param {{ x: number, y: number, z: number }} hole
+ */
+function slideNeighborsTowardHole(grid, catalog, effect, origin, hole) {
+  /** @type {{ x: number, y: number, z: number, mat: number }[]} */
+  const neighbors = [];
+  for (const [dx, dy, dz] of EFFECT_DIRS) {
+    const x = hole.x + dx;
+    const y = hole.y + dy;
+    const z = hole.z + dz;
+    if (x === origin.x && y === origin.y && z === origin.z) continue;
+    if (!grid.inBounds(x, y, z)) continue;
+    const mat = grid.get(x, y, z);
+    if (!vacuumVictim(catalog, mat, origin.mat, effect)) continue;
+    neighbors.push({ x, y, z, mat });
+  }
+  let moved = false;
+  for (const n of neighbors) {
+    grid.setPull?.(n.x, n.y, n.z, hole.x, hole.y, hole.z);
+    moved = true;
+  }
+  for (const n of neighbors) {
+    if (grid.get(hole.x, hole.y, hole.z) > 0) break;
+    if (grid.get(n.x, n.y, n.z) !== n.mat) continue;
+    transferGrain(grid, n.x, n.y, n.z, hole.x, hole.y, hole.z, n.mat, catalog);
+    moved = true;
+  }
+  return moved;
+}
+
+/**
+ * Move one grain and its clocks onto an empty cell.
+ * @param {GridApi} grid
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @param {number} toX
+ * @param {number} toY
+ * @param {number} toZ
+ * @param {MaterialCatalog} catalog
+ */
+export function moveGrain(grid, x, y, z, toX, toY, toZ, catalog) {
+  const mat = grid.get(x, y, z);
+  if (mat <= 0 || grid.get(toX, toY, toZ) > 0) return false;
+  transferGrain(grid, x, y, z, toX, toY, toZ, mat, catalog);
+  return true;
+}
+
+/**
+ * Clear solid face neighbors, then slide every remaining face neighbor of each
+ * cleared cell toward that cell.
+ * @param {GridApi} grid
+ * @param {{ x: number, y: number, z: number, mat: number }[]} cells
+ * @param {MaterialCatalog} catalog
+ * @returns {boolean}
+ */
+export function applyVacuum(grid, cells, catalog) {
+  if (!catalog || !cells?.length) return false;
+  let dirty = false;
+  for (const cell of cells) {
+    if (grid.get(cell.x, cell.y, cell.z) !== cell.mat) continue;
+    const material = materialByIndex(catalog, cell.mat);
+    if (!material?.effects?.length) continue;
+    for (const effect of material.effects) {
+      if (effect.kind !== "vacuum") continue;
+      if (!whenMatches(effect.when, effectContext(grid, cell, catalog, null))) continue;
+      /** @type {{ x: number, y: number, z: number, dx: number, dy: number, dz: number }[]} */
+      const holes = [];
+      for (const [dx, dy, dz] of EFFECT_DIRS) {
+        const nx = cell.x + dx;
+        const ny = cell.y + dy;
+        const nz = cell.z + dz;
+        if (!grid.inBounds(nx, ny, nz)) continue;
+        const nmat = grid.get(nx, ny, nz);
+        if (!vacuumVictim(catalog, nmat, cell.mat, effect)) continue;
+        grid.set(nx, ny, nz, 0);
+        clearCellMeta(grid, nx, ny, nz, catalog);
+        holes.push({ x: nx, y: ny, z: nz, dx, dy, dz });
+        dirty = true;
+      }
+      for (const hole of holes) {
+        if (slideNeighborsTowardHole(grid, catalog, effect, cell, hole)) dirty = true;
+      }
+    }
+  }
+  return dirty;
+}
+
 /**
  * Tag face neighbors from infect effects. Liquids are skipped when the rule says so.
  * @param {GridApi} grid
@@ -1624,9 +1736,7 @@ export function applyInfect(grid, cells, catalog) {
         if ((grid.getInfection?.(nx, ny, nz) ?? 0) > 0) continue;
         const neighbor = materialByIndex(catalog, nmat);
         if (effect.skipSurface && neighbor?.surface === effect.skipSurface) continue;
-        const baked = grid.getLife?.(cell.x, cell.y, cell.z) ?? 0;
-        const seconds = baked > 0 ? baked : effect.seconds;
-        grid.setInfection?.(nx, ny, nz, seconds);
+        grid.setInfection?.(nx, ny, nz, effect.seconds);
         dirty = true;
       }
     }

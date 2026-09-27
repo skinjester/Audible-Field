@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import { controller, mix } from "./mixer-core.js?v=66";
-import { applyInfect, applyPostMoves, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=58";
+import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=66";
+import { applyInfect, applyPostMoves, applyVacuum, compileMaterials, moveGrain, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=61";
 import { inputBindings } from "./input-bindings.js?v=1";
 import { fallingInput } from "./falling-input.js?v=8";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
@@ -133,6 +133,9 @@ let shrinkFlags = null;
 /** Shrink progress 0..1 for the mesh scale. */
 /** @type {Float32Array | null} */
 let shrinkT = null;
+/** Cell index a grain is sliding toward, or -1. */
+/** @type {Int32Array | null} */
+let pullTo = null;
 /** Rise/fade progress 0..1. 0 means not rising. */
 /** @type {Float32Array | null} */
 let riseT = null;
@@ -645,6 +648,7 @@ function clearEffectCell(i) {
   if (shrinkT) shrinkT[i] = 0;
   if (riseT) riseT[i] = 0;
   if (riseElapsed) riseElapsed[i] = 0;
+  if (pullTo) pullTo[i] = -1;
 }
 
 function getEffectClock(x, y, z, channel) {
@@ -763,6 +767,22 @@ function materialSlidesOpen(matIndex) {
   return !!id && catalog.byId.get(id)?.slideOpen === true;
 }
 
+/** Silent grains stay out of footprint, height, pan, and the other audio measures. */
+function materialSonifies(matIndex) {
+  const id = catalog?.idByIndex[matIndex];
+  const def = id ? catalog.byId.get(id) : null;
+  return !def || def.sonify !== false;
+}
+
+function countSonifying() {
+  let n = 0;
+  if (!cells) return 0;
+  for (const i of occupied) {
+    if (cells[i] > 0 && materialSonifies(cells[i])) n += 1;
+  }
+  return n;
+}
+
 function getPosY(x, y, z) {
   if (!posY || !inBounds(x, y, z)) return 0;
   return posY[idx(x, y, z)];
@@ -860,6 +880,99 @@ function setFlowDz(x, y, z, value) {
   flowDz[idx(x, y, z)] = value | 0;
 }
 
+function setPull(x, y, z, tx, ty, tz) {
+  if (!pullTo || !inBounds(x, y, z) || !inBounds(tx, ty, tz)) return;
+  pullTo[idx(x, y, z)] = idx(tx, ty, tz);
+}
+
+function clearPull(x, y, z) {
+  if (!pullTo || !inBounds(x, y, z)) return;
+  pullTo[idx(x, y, z)] = -1;
+}
+
+function vacuumNear(x, y, z) {
+  if (!catalog) return false;
+  for (const [dx, dy, dz] of [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+  ]) {
+    const nx = x + dx;
+    const ny = y + dy;
+    const nz = z + dz;
+    if (!inBounds(nx, ny, nz)) continue;
+    const mat = getCell(nx, ny, nz);
+    if (mat <= 0) continue;
+    const id = catalog.idByIndex[mat];
+    const def = id ? catalog.byId.get(id) : null;
+    if (def?.effects?.some((effect) => effect.kind === "vacuum")) return true;
+  }
+  return false;
+}
+
+/**
+ * Ease every neighbor of a cleared cell toward that cell. The first to arrive
+ * occupies it; the others keep sliding toward the same spot.
+ * @returns {boolean}
+ */
+function settlePull(dt) {
+  if (!pullTo || !posX || !posY || !posZ || !cells || dt <= 0 || occupied.size === 0) return false;
+  let moved = false;
+  /** @type {{ i: number, x: number, y: number, z: number, tx: number, ty: number, tz: number, dist: number }[]} */
+  const arrivals = [];
+  for (const i of occupied) {
+    const target = pullTo[i];
+    if (target < 0 || cells[i] <= 0) continue;
+    const tx = target % GRID_MAX;
+    const trest = (target / GRID_MAX) | 0;
+    const tz = trest % GRID_MAX;
+    const ty = (trest / GRID_MAX) | 0;
+    if (!vacuumNear(tx, ty, tz)) {
+      pullTo[i] = -1;
+      continue;
+    }
+    const pitch = cellAtomSize(i);
+    const cx = worldXForCell(tx, pitch);
+    const cy = (ty + 0.5) * pitch;
+    const cz = worldZForCell(tz, pitch);
+    const dx = cx - posX[i];
+    const dy = cy - posY[i];
+    const dz = cz - posZ[i];
+    const dist = Math.hypot(dx, dy, dz);
+    const maxStep = pitch * RULE_HZ * 0.85 * dt;
+    if (dist > 1e-5) {
+      const s = dist <= maxStep ? 1 : maxStep / dist;
+      posX[i] += dx * s;
+      posY[i] += dy * s;
+      posZ[i] += dz * s;
+      moved = true;
+      markXform(i);
+    }
+    const sx = i % GRID_MAX;
+    const srest = (i / GRID_MAX) | 0;
+    const sz = srest % GRID_MAX;
+    const sy = (srest / GRID_MAX) | 0;
+    const adjacent = Math.abs(sx - tx) + Math.abs(sy - ty) + Math.abs(sz - tz) === 1;
+    if (adjacent && getCell(tx, ty, tz) === 0 && dist <= maxStep + 1e-4) {
+      arrivals.push({ i, x: sx, y: sy, z: sz, tx, ty, tz, dist });
+    }
+  }
+  arrivals.sort((a, b) => a.dist - b.dist);
+  const taken = new Set();
+  for (const arrival of arrivals) {
+    const key = idx(arrival.tx, arrival.ty, arrival.tz);
+    if (taken.has(key) || getCell(arrival.tx, arrival.ty, arrival.tz) !== 0) continue;
+    if (moveGrain(gridApi, arrival.x, arrival.y, arrival.z, arrival.tx, arrival.ty, arrival.tz, catalog)) {
+      taken.add(key);
+      moved = true;
+    }
+  }
+  return moved;
+}
+
 const gridApi = {
   get: getCell,
   set: setCell,
@@ -905,6 +1018,8 @@ const gridApi = {
   setFlowDx,
   getFlowDz,
   setFlowDz,
+  setPull,
+  clearPull,
 };
 
 function cellAtomSize(cellIndex) {
@@ -1339,6 +1454,7 @@ export function clearBoard() {
   if (shrinkT) shrinkT.fill(0);
   if (riseT) riseT.fill(0);
   if (riseElapsed) riseElapsed.fill(0);
+  if (pullTo) pullTo.fill(-1);
   if (restingFlags) restingFlags.fill(0);
   if (onFloorFlags) onFloorFlags.fill(0);
   if (sameAboveFlags) sameAboveFlags.fill(0);
@@ -1537,8 +1653,10 @@ function pourBrush(ix, iz) {
     }
   }
 
-  if (placed) {
+  if (placed && materialSonifies(matIndex)) {
     audioPour += placed;
+    reconcileMeshes();
+  } else if (placed) {
     reconcileMeshes();
   }
 }
@@ -2227,9 +2345,10 @@ function runRules() {
   const occupiedList = collectOccupied();
   const { splashes: splashCells, moves } = stepWorld(gridApi, occupiedList, catalog);
   for (let m = 0; m < moves.length; m += 1) {
-    if (moves[m].to.y < moves[m].from.y) audioFall += 1;
+    if (moves[m].to.y < moves[m].from.y && materialSonifies(moves[m].mat)) audioFall += 1;
   }
   const culledShuffle = applyPostMoves(gridApi, moves, catalog);
+  const vacuumed = applyVacuum(gridApi, collectOccupied(), catalog);
 
   consumeOutOfBounds();
   reconcileMeshes();
@@ -2243,7 +2362,7 @@ function runRules() {
     if (!isDrawnInSim(wx, wy, wz, pitch * 0.5)) continue;
     spawnSplash(cell.x, cell.y, cell.z);
   }
-  return culledShuffle;
+  return culledShuffle || vacuumed;
 }
 
 function step(dt) {
@@ -2265,19 +2384,21 @@ function step(dt) {
 
   buildColumns();
   let columnOccupancy = occupied.size;
+  const heardBefore = countSonifying();
   rebuildColumnFlags();
   const effected = tickEffects(gridApi, collectOccupied(), catalog, columnQueries, dt);
-  audioDeath += Math.max(0, columnOccupancy - occupied.size);
+  audioDeath += Math.max(0, heardBefore - countSonifying());
   if (occupied.size !== columnOccupancy) {
     buildColumns();
     columnOccupancy = occupied.size;
   }
   const settled = settleGravity(dt);
   const lateral = settleLateral(dt);
+  const pulled = settlePull(dt);
   const packed = packStickTogether();
   const culled = consumeOutOfBounds();
   if (occupied.size !== columnOccupancy) buildColumns();
-  if (infected || effected || ruled || settled || lateral || packed || culled) {
+  if (infected || effected || ruled || settled || lateral || pulled || packed || culled) {
     writeMeshesFromColumns(effected);
   }
   rebuildColumnFlags();
@@ -2375,7 +2496,7 @@ function startRenderLoop() {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=73`);
+  const res = await fetch(`/materials.json?v=74`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(parseMaterialsJson(await res.text()));
@@ -2396,6 +2517,8 @@ function ensureEffectStorage() {
   shrinkT = new Float32Array(n);
   riseT = new Float32Array(n);
   riseElapsed = new Float32Array(n);
+  pullTo = new Int32Array(n);
+  pullTo.fill(-1);
   restingFlags = new Uint8Array(n);
   onFloorFlags = new Uint8Array(n);
   sameAboveFlags = new Uint8Array(n);
@@ -2421,6 +2544,126 @@ function addQuadrantAxes() {
   );
   lines.renderOrder = 3;
   surface.add(lines);
+  addQuadrantLabels();
+}
+
+/**
+ * Row-major bed order, matching the pad and the readout columns.
+ * 1 TL · 2 TR · 3 BL · 4 BR.
+ * x0/z0 are the quadrant's upper-left corner, in playfield-half units
+ * (low X is left, low Z is up).
+ */
+const QUAD_MARKS = [
+  { id: "tl", n: "1", x0: -1, z0: -1 },
+  { id: "tr", n: "2", x0: 0, z0: -1 },
+  { id: "bl", n: "3", x0: -1, z0: 0 },
+  { id: "br", n: "4", x0: 0, z0: 0 },
+];
+/** World size of the label strip painted along each quadrant's top edge. */
+const QUAD_LABEL_W = 5.4;
+const QUAD_LABEL_H = 0.72;
+const QUAD_LABEL_INSET = 0.16;
+
+/** @type {{ id: string, n: string, canvas: HTMLCanvasElement, texture: THREE.CanvasTexture }[] | null} */
+let quadLabels = null;
+let quadLabelKey = "";
+let unsubQuadLabels = null;
+
+function ellipsizeLabel(ctx, text, maxWidth) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let cut = text;
+  while (cut.length > 1 && ctx.measureText(`${cut}…`).width > maxWidth) {
+    cut = cut.slice(0, -1);
+  }
+  return cut.length < text.length ? `${cut}…` : cut;
+}
+
+function paintQuadLabel(canvas, number, sample) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  const name = String(sample || "").trim();
+  const text = name ? `${number}  ${name}` : number;
+  let size = Math.floor(h * 0.78);
+  const maxW = w - 16;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.lineJoin = "round";
+  ctx.font = `600 ${size}px "Segoe UI", system-ui, sans-serif`;
+  while (size > 28 && ctx.measureText(text).width > maxW) {
+    size -= 2;
+    ctx.font = `600 ${size}px "Segoe UI", system-ui, sans-serif`;
+  }
+  const drawn = ellipsizeLabel(ctx, text, maxW);
+  ctx.lineWidth = Math.max(8, size * 0.14);
+  ctx.strokeStyle = "rgba(4, 14, 22, 0.92)";
+  ctx.strokeText(drawn, 8, h / 2);
+  ctx.fillStyle = "#f4efe6";
+  ctx.fillText(drawn, 8, h / 2);
+}
+
+function quadLabelSignature() {
+  return QUAD_MARKS.map((mark) => `${mark.n}:${STEM_CORNERS[mark.id]?.label || ""}`).join("|");
+}
+
+function syncQuadLabels() {
+  if (!quadLabels) return;
+  const key = quadLabelSignature();
+  if (key === quadLabelKey) return;
+  quadLabelKey = key;
+  for (const entry of quadLabels) {
+    paintQuadLabel(entry.canvas, entry.n, STEM_CORNERS[entry.id]?.label || "");
+    entry.texture.needsUpdate = true;
+  }
+}
+
+/**
+ * Number and sample name as a flat texture on the upper-left edge of each
+ * quadrant. Reads left-to-right along that edge and yaws with the grid.
+ */
+function addQuadrantLabels() {
+  if (!surface) return;
+  const entries = [];
+  const geo = new THREE.PlaneGeometry(QUAD_LABEL_W, QUAD_LABEL_H);
+  const y = 0.03;
+  for (const mark of QUAD_MARKS) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1024;
+    canvas.height = 128;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = renderer?.capabilities.getMaxAnisotropy() || 1;
+    texture.generateMipmaps = true;
+    const mesh = new THREE.Mesh(
+      geo,
+      new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        depthWrite: false,
+        toneMapped: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      }),
+    );
+    const xMin = mark.x0 * PLAYFIELD_HALF;
+    const zMin = mark.z0 * PLAYFIELD_HALF;
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(
+      xMin + QUAD_LABEL_INSET + QUAD_LABEL_W / 2,
+      y,
+      zMin + QUAD_LABEL_INSET + QUAD_LABEL_H / 2,
+    );
+    mesh.renderOrder = 2;
+    surface.add(mesh);
+    entries.push({ id: mark.id, n: mark.n, canvas, texture });
+  }
+  quadLabels = entries;
+  quadLabelKey = "";
+  syncQuadLabels();
+  if (!unsubQuadLabels) unsubQuadLabels = subscribe(() => syncQuadLabels());
 }
 
 function initScene(nextCanvas) {
@@ -2830,7 +3073,7 @@ function captureAudioSnapshot(dt) {
       let top = 0;
       for (let k = 0; k < list.length; k += 1) {
         const i = list[k];
-        if (cells[i] <= 0) continue;
+        if (cells[i] <= 0 || !materialSonifies(cells[i])) continue;
         n += 1;
         const decoded = decodeCell(i);
         const half = atomExtent(decoded.x, decoded.y, decoded.z, cells[i]) * 0.5;
@@ -2852,7 +3095,7 @@ function captureAudioSnapshot(dt) {
     }
 
     for (const i of occupied) {
-      if (cells[i] <= 0) continue;
+      if (cells[i] <= 0 || !materialSonifies(cells[i])) continue;
       const resting = restingFlags?.[i] === 1;
       const onFloor = onFloorFlags?.[i] === 1;
       const sameAbove = sameAboveFlags?.[i] === 1;

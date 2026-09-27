@@ -105,12 +105,18 @@
           ]
         },
         {
-          "name": "dissolve",
-          "do": { "age": 10, "visual": "shrink", "then": "clear" }
+          "name": "lone-dissolve",
+          "when": { "resting": true, "onFloor": true, "sameAbove": false },
+          "do": { "age": 3.5, "visual": "shrink", "then": "clear" }
         },
         {
-          "name": "infect",
-          "do": { "infect": { "seconds": 6, "skipSurface": "liquid" } }
+          "name": "crush-support",
+          "when": { "resting": true, "onFloor": true, "sameAbove": true },
+          "do": { "age": 3.5, "then": "clear" }
+        },
+        {
+          "name": "vacuum",
+          "do": { "vacuum": { "skipSurface": "liquid" } }
         }
       ]
     }
