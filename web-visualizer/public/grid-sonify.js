@@ -3,7 +3,9 @@
  * Footprint (ground cells occupied) sets each sample's level.
  * Maximum column height opens that sample's Greyhole send.
  * More ground covered opens that sample's low-pass.
- * A landing repeats that quadrant's sample through a filter sweep lasting the atom's life. Face WAMs stay off.
+ * Closer to the center of the plane raises that sample's pitch, up to an octave.
+ * A landing repeats that quadrant's sample through a filter sweep lasting the atom's life,
+ * at the pitch of the cell that landed. Face WAMs stay off.
  */
 
 const CORNERS = ["tl", "tr", "bl", "br"];
@@ -41,7 +43,13 @@ function cutoffHz(amount) {
 
 const gains = { tl: 0, tr: 0, bl: 0, br: 0 };
 const heights = { tl: 0, tr: 0, bl: 0, br: 0 };
+const pitches = { tl: 1, tr: 1, bl: 1, br: 1 };
 let gen = -1;
+
+function hitLife(hit) {
+  if (typeof hit === "number") return hit;
+  return Number(hit?.life) || 0;
+}
 
 const DRY_BEDS = {
   activeFx: "cross",
@@ -67,6 +75,7 @@ export function resetFieldSonify() {
   for (const id of CORNERS) {
     gains[id] = 0;
     heights[id] = 0;
+    pitches[id] = 1;
   }
   gen = -1;
 }
@@ -87,6 +96,9 @@ export function fieldFrame(snap, dt) {
     gains[id] = gainTarget <= 0 ? 0 : follow(gains[id], gainTarget, dt, 0.08);
     heights[id] = reverbTarget <= 0 ? 0 : follow(heights[id], reverbTarget, dt, 0.25);
     cutoffs[id] = cutoffHz(gains[id]);
+    const rateTarget = Number(quad.rate);
+    const nextRate = Number.isFinite(rateTarget) && rateTarget > 0 ? rateTarget : 1;
+    pitches[id] = follow(pitches[id], nextRate, dt, 0.12);
   }
 
   let splash = null;
@@ -97,7 +109,7 @@ export function fieldFrame(snap, dt) {
     const lives = {};
     let any = 0;
     for (const id of CORNERS) {
-      const list = Array.isArray(hits[id]) ? hits[id].filter((n) => n > 0) : [];
+      const list = Array.isArray(hits[id]) ? hits[id].filter((hit) => hitLife(hit) > 0) : [];
       if (list.length) {
         lives[id] = list;
         any += list.length;
@@ -109,6 +121,7 @@ export function fieldFrame(snap, dt) {
   return {
     gains,
     cutoffs,
+    rates: pitches,
     reverbs: heights,
     pans: snap?.pans || { tl: 0, tr: 0, bl: 0, br: 0 },
     splash,

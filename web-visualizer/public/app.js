@@ -19,9 +19,9 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { clearBoard, hideFallingBlocks, readGridSnapshot, showFallingBlocks, toggleBrushCurveInvert } from "./falling-blocks.js?v=208";
-import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=14";
-import { audioEngine } from "./audio-engine.js?v=42";
+import { clearBoard, hideFallingBlocks, readGridSnapshot, showFallingBlocks, toggleBrushCurveInvert } from "./falling-blocks.js?v=214";
+import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=15";
+import { audioEngine } from "./audio-engine.js?v=43";
 import { gamepadInput } from "./gamepad-input.js?v=7";
 import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=4";
 import { openStemDropdown } from "./sample-picker.js?v=16";
@@ -786,6 +786,7 @@ function tick(now) {
         const shadow = fieldFrame(snap, frameDt);
         audioEngine.sync({ x: 0.5, y: 0.5 }, shadow.controller);
         audioEngine.setStemGains(shadow.gains, shadow.pans, shadow.cutoffs);
+        audioEngine.setStemPitch(shadow.rates);
         audioEngine.setStemReverb(shadow.reverbs);
         if (shadow.splash) audioEngine.playSplash(shadow.splash);
         audioEngine.setOutputLevel(1);
@@ -795,6 +796,7 @@ function tick(now) {
           setStatus("audio", label);
         }
       } else if (audioEngine.running && activeTab !== "falling-blocks") {
+        audioEngine.setStemPitch(null);
         audioEngine.setOutputLevel(1);
         audioEngine.setCameraPresence(0, 0);
         audioEngine.sync(state, controller);
@@ -835,7 +837,10 @@ async function setFallingAudioEnabled(enabled) {
     return;
   }
   resetFieldSonify();
-  if (audioEngine.running) await audioEngine.suspendPlayback();
+  if (audioEngine.running) {
+    audioEngine.setStemPitch(null);
+    await audioEngine.suspendPlayback();
+  }
   setStatus("offline", browserStatusLabel());
 }
 

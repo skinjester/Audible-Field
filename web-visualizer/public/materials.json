@@ -27,7 +27,6 @@
         }
       ]
     }
-    /*
     ,
     {
       "id": "sand",
@@ -52,12 +51,11 @@
         }
       ]
     }
-    */
     ,
     {
-      "id": "sand-rise",
-      "label": "Sand Rise",
-      "color": "#e0a84a",
+      "id": "diffuse",
+      "label": "Diffuse",
+      "color": "#f4d59a",
       "surface": "solid",
       "rules": [
         {
@@ -84,6 +82,10 @@
           "name": "crush-block",
           "when": { "resting": true, "onFloor": true, "blockAbove": true },
           "do": { "age": 3.5, "then": "clear" }
+        },
+        {
+          "name": "spread",
+          "do": { "convert": { "any": true } }
         }
       ]
     },
@@ -130,6 +132,38 @@
         }
       ]
     }
+    /*
+    ,
+    {
+      "id": "slime",
+      "label": "Slime",
+      "color": "#90ee90",
+      "opacity": 0.65,
+      "surface": "solid",
+      "rules": [
+        {
+          "name": "fall",
+          "diagram": [
+            "@ => _",
+            "_    @"
+          ]
+        },
+        {
+          "name": "ooze",
+          "maybe": 0.03333333333333333,
+          "any": "xz.rotations",
+          "diagram": [
+            "@_ => _@",
+            "x.    x."
+          ]
+        },
+        {
+          "name": "live",
+          "do": { "age": 3.5, "lifeScale": 2, "then": "clear" }
+        }
+      ]
+    }
+    */
     /*
     ,
     {

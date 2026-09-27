@@ -33,9 +33,10 @@
  * Effect rules (no diagram) live in the same rules array. `when` is a flat
  * predicate object (all must pass). `do` is one verb:
  *   { age, hold?: seconds, lifeScale?: number, visual?: "shrink" | "rise", slideLife?: "above", then: "clear" }
- * visual "rise": the grain waits `hold` seconds, then lifts and fades for
- * (poured lifetime, or `age` when none is stored) × `lifeScale`, then clears.
- * lifeScale defaults to 1. The wait is not taken out of that lifetime. The same
+ * The grain lasts (poured lifetime, or `age` when none is stored) × `lifeScale`,
+ * then clears. lifeScale defaults to 1.
+ * visual "rise": the grain waits `hold` seconds, then lifts and fades for that
+ * scaled lifetime. The wait is not taken out of that lifetime. The same
  * age clock measures the wait and the climb. The lift is drawn on top of the
  * cell; the cell stays put until it clears.
  * slideLife "above": the horizontal travel of a grain is the number of atoms
@@ -45,6 +46,9 @@
  * slide "closestOpen": a resting floor block with any atom above steps one cell
  * outward. The column above drops straight down into the cell it left.
  *   { infect: { seconds, skipSurface?: "liquid" } }
+ *   { convert: { id } } or { convert: { any: true } }
+ *   Face neighbors become this material. `id` limits that to one material.
+ *   `any` converts every other material. Empty cells stay empty.
  *   { vacuum: { skipSurface?: "liquid" } }
  *   vacuum clears each solid face neighbor. Every remaining face neighbor of
  *   that cell snaps to half size and stays there. Nothing is pulled toward
@@ -249,7 +253,7 @@ function normalizeEffect(rule) {
       kind: "age",
       seconds: age,
       hold: visual === "rise" ? holdRaw : Math.min(holdRaw, age),
-      lifeScale: visual === "rise" && Number.isFinite(scaleRaw) && scaleRaw > 0 ? scaleRaw : 1,
+      lifeScale: Number.isFinite(scaleRaw) && scaleRaw > 0 ? scaleRaw : 1,
       visual,
       slide: verb.visual === "shrink" && verb.slide === "closestOpen" ? "closestOpen" : null,
       thenClear: verb.then === "clear",
@@ -273,6 +277,12 @@ function normalizeEffect(rule) {
       seconds,
       skipSurface: verb.infect.skipSurface === "liquid" ? "liquid" : null,
     };
+  }
+  if (verb.convert && typeof verb.convert === "object") {
+    const any = verb.convert.any === true;
+    const targetId = String(verb.convert.id || "").trim();
+    if (!any && !targetId) return null;
+    return { ...base, kind: "convert", any, targetId };
   }
   if (verb.absorbSparse && typeof verb.absorbSparse === "object") {
     const seconds = positiveSeconds(verb.absorbSparse.seconds);
@@ -1695,6 +1705,43 @@ export function applyVacuum(grid, cells, catalog) {
 }
 
 /**
+ * Turn face-touching grains into this material.
+ * `id` converts one material. `any` converts every other material.
+ * The grain stays in its cell. Empty cells stay empty.
+ * @param {GridApi} grid
+ * @param {{ x: number, y: number, z: number, mat: number }[]} cells
+ * @param {MaterialCatalog} catalog
+ * @returns {boolean}
+ */
+export function applyConvert(grid, cells, catalog) {
+  if (!catalog || !cells?.length) return false;
+  let dirty = false;
+  for (const cell of cells) {
+    if (grid.get(cell.x, cell.y, cell.z) !== cell.mat) continue;
+    const material = materialByIndex(catalog, cell.mat);
+    if (!material?.effects?.length) continue;
+    for (const effect of material.effects) {
+      if (effect.kind !== "convert") continue;
+      if (!whenMatches(effect.when, effectContext(grid, cell, catalog, null))) continue;
+      const target = effect.any ? 0 : catalog.indexById.get(effect.targetId) || 0;
+      if (!effect.any && (target <= 0 || target === cell.mat)) continue;
+      for (const [dx, dy, dz] of EFFECT_DIRS) {
+        const nx = cell.x + dx;
+        const ny = cell.y + dy;
+        const nz = cell.z + dz;
+        if (!grid.inBounds(nx, ny, nz)) continue;
+        const nmat = grid.get(nx, ny, nz);
+        if (nmat <= 0 || nmat === cell.mat) continue;
+        if (!effect.any && nmat !== target) continue;
+        grid.set(nx, ny, nz, cell.mat);
+        dirty = true;
+      }
+    }
+  }
+  return dirty;
+}
+
+/**
  * Tag face neighbors from infect effects. Liquids are skipped when the rule says so.
  * @param {GridApi} grid
  * @param {{ x: number, y: number, z: number, mat: number }[]} cells
@@ -1877,6 +1924,9 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
           const base = baked > 0 ? baked : effect.seconds;
           const hold = Math.max(0, effect.hold || 0);
           limit = hold + Math.max(1e-4, base * scale);
+        } else {
+          const scale = effect.lifeScale > 0 ? effect.lifeScale : 1;
+          limit *= scale;
         }
         if (infection > 0) limit = Math.min(limit, infection);
         if (effect.thenClear && clock >= limit) {

@@ -63,9 +63,20 @@ function tanhCurve(n) {
   return curve;
 }
 
-/** Up to `max` lifetimes spread from shortest to longest. */
+function strikeLife(hit) {
+  if (typeof hit === "number") return hit;
+  return Number(hit?.life) || 0;
+}
+
+function strikeRate(hit) {
+  const rate = typeof hit === "number" ? 1 : Number(hit?.rate);
+  if (!Number.isFinite(rate) || rate <= 0) return 1;
+  return Math.min(4, Math.max(0.25, rate));
+}
+
+/** Up to `max` strikes spread from shortest life to longest. */
 function sampleLifetimes(lives, max) {
-  const sorted = lives.filter((n) => n > 0).sort((a, b) => a - b);
+  const sorted = lives.filter((hit) => strikeLife(hit) > 0).sort((a, b) => strikeLife(a) - strikeLife(b));
   if (sorted.length <= max) return sorted;
   const out = [];
   for (let i = 0; i < max; i += 1) {
@@ -1186,6 +1197,9 @@ export class EchoScapeAudioEngine {
     const el = new Audio();
     el.loop = true;
     el.preload = "auto";
+    el.preservesPitch = false;
+    el.mozPreservesPitch = false;
+    el.webkitPreservesPitch = false;
     el.src = url;
 
     await waitForMedia(el);
@@ -1254,6 +1268,7 @@ export class EchoScapeAudioEngine {
     }
 
     this.stems[corner] = { el, source, gain, mono, pan, tone, meta };
+    this._primeStrikeBuffer(corner, url);
 
     if (opts.resume !== false && this.running) {
       try {
@@ -1513,9 +1528,55 @@ export class EchoScapeAudioEngine {
   }
 
   /**
+   * Decode a copy of the bed so a landing can play at its own pitch.
+   * @param {string} corner
+   * @param {string} url
+   */
+  _primeStrikeBuffer(corner, url) {
+    if (!this.ctx || !url) return;
+    if (!this._strikeBuffers) this._strikeBuffers = {};
+    if (!this._strikeToken) this._strikeToken = {};
+    const next = (this._strikeToken[corner] || 0) + 1;
+    this._strikeToken[corner] = next;
+    this._strikeBuffers[corner] = null;
+    const ctx = this.ctx;
+    fetch(url)
+      .then((res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        return res.arrayBuffer();
+      })
+      .then((raw) => ctx.decodeAudioData(raw))
+      .then((buffer) => {
+        if (this._strikeToken[corner] !== next) return;
+        this._strikeBuffers[corner] = buffer;
+      })
+      .catch((err) => {
+        console.warn("[EchoScape audio] strike buffer", corner, err?.message || err);
+      });
+  }
+
+  /**
+   * Pitch each quadrant's looping bed. 1 is the file's pitch.
+   * Pass null to return every bed to its original pitch.
+   * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} rates
+   */
+  setStemPitch(rates) {
+    if (!this.running) return;
+    for (const corner of CORNERS) {
+      const el = this.stems[corner]?.el;
+      if (!el) continue;
+      const raw = rates ? Number(rates[corner]) : 1;
+      const next = Number.isFinite(raw) && raw > 0 ? Math.min(4, Math.max(0.25, raw)) : 1;
+      if (el.preservesPitch !== false) el.preservesPitch = false;
+      if (Math.abs(el.playbackRate - next) > 0.002) el.playbackRate = next;
+    }
+  }
+
+  /**
    * Repeat each landed quadrant's own sample. The repeat's low-pass sweeps
    * shut across that atom's lifetime: a short life closes fast, a long one lingers.
-   * @param {Record<string, number[]> | null} hits lifetimes in seconds, per corner
+   * Each repeat plays at the pitch of the cell that landed.
+   * @param {Record<string, ({ life: number, rate?: number } | number)[]> | null} hits
    */
   playSplash(hits) {
     if (!this.running || !this.ctx || !this._splashOut || !hits) return;
@@ -1536,8 +1597,10 @@ export class EchoScapeAudioEngine {
     if (room <= 0) return;
     const chosen = sampleLifetimes(lives, room);
     stem.sweepCount = active + chosen.length;
+    const buffer = this._strikeBuffers?.[corner] || null;
     for (let i = 0; i < chosen.length; i += 1) {
-      const dur = Math.min(3.5, Math.max(0.1, Number(chosen[i]) || 0.1));
+      const dur = Math.min(3.5, Math.max(0.1, strikeLife(chosen[i]) || 0.1));
+      const rate = strikeRate(chosen[i]);
       const gain = ctx.createGain();
       const delay = ctx.createDelay(0.2);
       delay.delayTime.value = 0.05;
@@ -1549,16 +1612,30 @@ export class EchoScapeAudioEngine {
       const pan = ctx.createStereoPanner();
       pan.pan.value = panValue;
       const release = Math.min(0.15, dur * 0.3);
+      const peak = 0.42 / Math.sqrt(rate);
       gain.gain.setValueAtTime(0.001, t);
-      gain.gain.exponentialRampToValueAtTime(0.42, t + 0.012);
-      if (dur > release + 0.04) gain.gain.setValueAtTime(0.42, t + dur - release);
+      gain.gain.exponentialRampToValueAtTime(peak, t + 0.012);
+      if (dur > release + 0.04) gain.gain.setValueAtTime(peak, t + dur - release);
       gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
-      stem.source.connect(gain);
+      const nodes = [gain, delay, filter, pan];
+      let voice = null;
+      if (buffer) {
+        voice = ctx.createBufferSource();
+        voice.buffer = buffer;
+        voice.loop = true;
+        voice.playbackRate.value = rate;
+        const offset = buffer.duration > 0 ? (Number(stem.el?.currentTime) || 0) % buffer.duration : 0;
+        voice.connect(gain);
+        voice.start(t, offset);
+        voice.stop(t + dur + 0.08);
+        nodes.push(voice);
+      } else {
+        stem.source.connect(gain);
+      }
       gain.connect(delay);
       delay.connect(filter);
       filter.connect(pan);
       pan.connect(this._splashOut);
-      const nodes = [gain, delay, filter, pan];
       window.setTimeout(() => {
         stem.sweepCount = Math.max(0, (stem.sweepCount || 1) - 1);
         for (const node of nodes) {

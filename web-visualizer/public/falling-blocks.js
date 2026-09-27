@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=66";
-import { applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=67";
+import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=70";
 import { inputBindings } from "./input-bindings.js?v=1";
 import { fallingInput } from "./falling-input.js?v=8";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
@@ -960,6 +960,13 @@ function cellScale(x, y, z) {
   return scale;
 }
 
+/** Drawn size while climbing. Full size at the start, gone at the end. */
+function riseDrawScale(x, y, z) {
+  const t = getRiseT(x, y, z);
+  if (t <= 0) return 1;
+  return Math.max(0.02, 1 - t);
+}
+
 function atomExtent(x, y, z, matIndex) {
   return cellAtomSize(idx(x, y, z)) * cellScale(x, y, z, matIndex);
 }
@@ -1741,7 +1748,7 @@ function paintInstances(mesh, coords, matIndex) {
     const x = coords[o];
     const y = coords[o + 1];
     const z = coords[o + 2];
-    const scale = cellScale(x, y, z, matIndex) * cellAtomSize(idx(x, y, z));
+    const scale = cellScale(x, y, z, matIndex) * cellAtomSize(idx(x, y, z)) * riseDrawScale(x, y, z);
     cellWorld(x, y, z, scratchPos, scale);
     scratchScale.set(scale, scale, scale);
     scratchMat4.compose(scratchPos, scratchQuat, scratchScale);
@@ -2297,20 +2304,26 @@ function runRules() {
   }
   const culledShuffle = applyPostMoves(gridApi, moves, catalog);
   const vacuumed = applyVacuum(gridApi, collectOccupied(), catalog);
+  const converted = applyConvert(gridApi, collectOccupied(), catalog);
 
   consumeOutOfBounds();
   reconcileMeshes();
   for (const cell of splashCells) {
     audioSplash += 1;
-    audioSplashAt.push({ x: cell.x, z: cell.z, life: getLife(cell.x, cell.y, cell.z) });
-    const pitch = cellAtomSize(idx(cell.x, cell.y, cell.z));
-    const wx = worldXForCell(cell.x, pitch);
-    const wy = (cell.y + 0.5) * pitch;
-    const wz = worldZForCell(cell.z, pitch);
-    if (!isDrawnInSim(wx, wy, wz, pitch * 0.5)) continue;
+    const cellPitch = cellAtomSize(idx(cell.x, cell.y, cell.z));
+    const wx = worldXForCell(cell.x, cellPitch);
+    const wy = (cell.y + 0.5) * cellPitch;
+    const wz = worldZForCell(cell.z, cellPitch);
+    audioSplashAt.push({
+      x: cell.x,
+      z: cell.z,
+      life: getLife(cell.x, cell.y, cell.z),
+      rate: pitchForWorld(wx, wz),
+    });
+    if (!isDrawnInSim(wx, wy, wz, cellPitch * 0.5)) continue;
     spawnSplash(cell.x, cell.y, cell.z);
   }
-  return culledShuffle || vacuumed;
+  return culledShuffle || vacuumed || converted;
 }
 
 function step(dt) {
@@ -2443,7 +2456,7 @@ function startRenderLoop() {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=78`);
+  const res = await fetch(`/materials.json?v=83`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(parseMaterialsJson(await res.text()));
@@ -2941,6 +2954,14 @@ function clockProgress(i) {
     if (effect.kind === "age" && effect.seconds > limit) limit = effect.seconds;
   }
   if (lifeSpans && lifeSpans[i] > 0) limit = lifeSpans[i];
+  let scale = 1;
+  for (let e = 0; e < effects.length; e += 1) {
+    const effect = effects[e];
+    if (effect.kind === "age" && effect.visual !== "rise" && effect.lifeScale > scale) {
+      scale = effect.lifeScale;
+    }
+  }
+  limit *= scale;
   if (!(limit > 0)) return 0;
   let clock = 0;
   for (let c = 0; c < effectClocks.length; c += 1) {
@@ -2948,6 +2969,17 @@ function clockProgress(i) {
     if (value > clock) clock = value;
   }
   return Math.min(1, clock / limit);
+}
+
+/** Edge of the plane stays at the sample's pitch. The center is an octave up. */
+const CENTER_PITCH = 2;
+
+/** Playback rate from distance to the playfield center. */
+function pitchForWorld(wx, wz) {
+  const dist = Math.hypot(wx, wz);
+  const maxDist = PLAYFIELD_HALF * Math.SQRT2;
+  const closeness = maxDist > 0 ? 1 - Math.min(1, dist / maxDist) : 0;
+  return CENTER_PITCH ** closeness;
 }
 
 /**
@@ -2987,7 +3019,10 @@ function captureAudioSnapshot(dt) {
   for (let i = 0; i < splashHits.length; i += 1) {
     const hit = splashHits[i];
     const id = hit.x < splashMid ? (hit.z < splashMid ? "tl" : "bl") : hit.z < splashMid ? "tr" : "br";
-    splash[id].push(hit.life > 0 ? hit.life : 3.5);
+    splash[id].push({
+      life: hit.life > 0 ? hit.life : 3.5,
+      rate: hit.rate > 0 ? hit.rate : 1,
+    });
   }
   const zoomSpan = CAMERA_DIST_MAX - CAMERA_DIST_MIN;
   const zoom = zoomSpan > 0 ? (cameraDist - CAMERA_DIST_MIN) / zoomSpan : 0;
@@ -3011,6 +3046,7 @@ function captureAudioSnapshot(dt) {
   const fp = { tl: 0, tr: 0, bl: 0, br: 0 };
   const peak = { tl: 0, tr: 0, bl: 0, br: 0 };
   const panSum = { tl: 0, tr: 0, bl: 0, br: 0 };
+  const pitchSum = { tl: 0, tr: 0, bl: 0, br: 0 };
   const activity = emptyActivity();
 
   if (cells && occupied.size > 0 && posX && posZ && posY) {
@@ -3037,7 +3073,10 @@ function captureAudioSnapshot(dt) {
         const id = colX < mid ? (colZ < mid ? "tl" : "bl") : (colZ < mid ? "tr" : "br");
         fp[id] += 1;
         if (top > peak[id]) peak[id] = top;
-        panSum[id] += screenPan(worldXForCell(colX, ATOM_SIZE), worldZForCell(colZ, ATOM_SIZE), yaw);
+        const colXw = worldXForCell(colX, ATOM_SIZE);
+        const colZw = worldZForCell(colZ, ATOM_SIZE);
+        panSum[id] += screenPan(colXw, colZw, yaw);
+        pitchSum[id] += pitchForWorld(colXw, colZw);
       }
     }
 
@@ -3107,10 +3146,10 @@ function captureAudioSnapshot(dt) {
     weight: sumW,
     mass: count,
     quads: {
-      tl: { coverage: fp.tl / quadCells, height: Math.min(1, peak.tl / EMIT_HEIGHT_MAX_U), cells: fp.tl, peak: peak.tl },
-      tr: { coverage: fp.tr / quadCells, height: Math.min(1, peak.tr / EMIT_HEIGHT_MAX_U), cells: fp.tr, peak: peak.tr },
-      bl: { coverage: fp.bl / quadCells, height: Math.min(1, peak.bl / EMIT_HEIGHT_MAX_U), cells: fp.bl, peak: peak.bl },
-      br: { coverage: fp.br / quadCells, height: Math.min(1, peak.br / EMIT_HEIGHT_MAX_U), cells: fp.br, peak: peak.br },
+      tl: { coverage: fp.tl / quadCells, height: Math.min(1, peak.tl / EMIT_HEIGHT_MAX_U), cells: fp.tl, peak: peak.tl, rate: fp.tl > 0 ? pitchSum.tl / fp.tl : 1 },
+      tr: { coverage: fp.tr / quadCells, height: Math.min(1, peak.tr / EMIT_HEIGHT_MAX_U), cells: fp.tr, peak: peak.tr, rate: fp.tr > 0 ? pitchSum.tr / fp.tr : 1 },
+      bl: { coverage: fp.bl / quadCells, height: Math.min(1, peak.bl / EMIT_HEIGHT_MAX_U), cells: fp.bl, peak: peak.bl, rate: fp.bl > 0 ? pitchSum.bl / fp.bl : 1 },
+      br: { coverage: fp.br / quadCells, height: Math.min(1, peak.br / EMIT_HEIGHT_MAX_U), cells: fp.br, peak: peak.br, rate: fp.br > 0 ? pitchSum.br / fp.br : 1 },
     },
     activity,
     pans: {
@@ -3145,10 +3184,10 @@ const GRID_SNAP_IDLE = {
   weight: 0,
   mass: 0,
   quads: {
-    tl: { coverage: 0, height: 0, cells: 0, peak: 0 },
-    tr: { coverage: 0, height: 0, cells: 0, peak: 0 },
-    bl: { coverage: 0, height: 0, cells: 0, peak: 0 },
-    br: { coverage: 0, height: 0, cells: 0, peak: 0 },
+    tl: { coverage: 0, height: 0, cells: 0, peak: 0, rate: 1 },
+    tr: { coverage: 0, height: 0, cells: 0, peak: 0, rate: 1 },
+    bl: { coverage: 0, height: 0, cells: 0, peak: 0, rate: 1 },
+    br: { coverage: 0, height: 0, cells: 0, peak: 0, rate: 1 },
   },
   activity: {
     tl: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
