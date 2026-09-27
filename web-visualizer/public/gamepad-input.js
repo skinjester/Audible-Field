@@ -2,7 +2,7 @@
  * DualSense (and generic gamepad) → mixer-core, for browser-audio mode
  * without Max / OSC.
  *
- * Gamepad API: sticks / face / D-pad / shoulders / triggers.
+ * Button and axis indices live in input-bindings.js.
  * Touchpad XY needs WebHID — see dualsense-hid.js (Connect button in UI).
  */
 
@@ -16,13 +16,14 @@ import {
   setTrigger,
   setFxStick,
 } from "./mixer-core.js?v=65";
+import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=1";
 
 function lerp(inMin, inMax, outMin, outMax, value) {
   if (inMax === inMin) return outMin;
   return outMin + ((value - inMin) / (inMax - inMin)) * (outMax - outMin);
 }
 
-function deadzone(v, z = 0.08) {
+function deadzone(v, z = inputBindings.gamepad.mixerStickDeadzone) {
   return Math.abs(v) < z ? 0 : v;
 }
 
@@ -99,10 +100,11 @@ export class GamepadInput {
     this.padIndex = pad.index;
 
     const ax = pad.axes || [];
-    const lx = deadzone(Number(ax[0]) || 0);
-    const ly = deadzone(-(Number(ax[1]) || 0)); // Max-style: up positive for FX Y scaling
-    const rx = deadzone(Number(ax[2]) || 0);
-    const ry = deadzone(-(Number(ax[3]) || 0));
+    const dead = inputBindings.gamepad.mixerStickDeadzone;
+    const lx = deadzone(Number(ax[gamepadAxes.leftX]) || 0, dead);
+    const ly = deadzone(-(Number(ax[gamepadAxes.leftY]) || 0), dead); // Max-style: up positive for FX Y scaling
+    const rx = deadzone(Number(ax[gamepadAxes.rightX]) || 0, dead);
+    const ry = deadzone(-(Number(ax[gamepadAxes.rightY]) || 0), dead);
 
     if (!this.uiLock.leftStick) applyRawStick(lx, ly);
     if (!this.uiLock.rightStick) setRightStick(rx, ry);
@@ -111,12 +113,11 @@ export class GamepadInput {
     const pressed = (i) => !!(b[i] && (b[i].pressed || b[i].value > 0.5));
     const value = (i) => (b[i] ? Number(b[i].value) || (b[i].pressed ? 1 : 0) : 0);
 
-    // Standard mapping: 0 A/Cross, 1 B/Circle, 2 X/Square, 3 Y/Triangle
     const face = {
-      cross: pressed(0),
-      circle: pressed(1),
-      square: pressed(2),
-      triangle: pressed(3),
+      cross: pressed(gamepadButtons.cross),
+      circle: pressed(gamepadButtons.circle),
+      square: pressed(gamepadButtons.square),
+      triangle: pressed(gamepadButtons.triangle),
     };
     for (const [btn, on] of Object.entries(face)) {
       if (on && !this._prev[btn]) setActiveFx(btn);
@@ -124,22 +125,22 @@ export class GamepadInput {
     }
 
     const dpad = {
-      up: pressed(12),
-      down: pressed(13),
-      left: pressed(14),
-      right: pressed(15),
+      up: pressed(gamepadButtons.dpadUp),
+      down: pressed(gamepadButtons.dpadDown),
+      left: pressed(gamepadButtons.dpadLeft),
+      right: pressed(gamepadButtons.dpadRight),
     };
     for (const [dir, on] of Object.entries(dpad)) {
       if (on !== this._prev[dir]) setDpad(dir, on ? 1 : 0);
       this._prev[dir] = on;
     }
 
-    if (!this.uiLock.l1) setShoulder("l1", pressed(4) ? 1 : 0);
-    if (!this.uiLock.r1) setShoulder("r1", pressed(5) ? 1 : 0);
-    setTrigger("lt", value(6));
-    setTrigger("rt", value(7));
-    setStickClick("ls", pressed(10) ? 1 : 0);
-    setStickClick("rs", pressed(11) ? 1 : 0);
+    if (!this.uiLock.l1) setShoulder("l1", pressed(gamepadButtons.l1) ? 1 : 0);
+    if (!this.uiLock.r1) setShoulder("r1", pressed(gamepadButtons.r1) ? 1 : 0);
+    setTrigger("lt", value(gamepadButtons.lt));
+    setTrigger("rt", value(gamepadButtons.rt));
+    setStickClick("ls", pressed(gamepadButtons.ls) ? 1 : 0);
+    setStickClick("rs", pressed(gamepadButtons.rs) ? 1 : 0);
 
     return true;
   }

@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { controller, mix } from "./mixer-core.js?v=66";
-import { applyInfect, applyPostMoves, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=53";
-import { fallingBindings, fallingInput } from "./falling-input.js?v=7";
+import { applyInfect, applyPostMoves, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=58";
+import { inputBindings } from "./input-bindings.js?v=1";
+import { fallingInput } from "./falling-input.js?v=8";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -9,8 +10,6 @@ import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
  * denser grid (Sand1-style room to paint).
  */
 const ATOM_SIZE = 0.25;
-/** Rise visual climbs this many atom-heights while it fades out. */
-const RISE_CELLS = 3;
 /** Max emitter height above the ground plane (world units). */
 const EMIT_HEIGHT_MAX_U = 12;
 /** Tall enough for the emitter to sit at EMIT_HEIGHT_MAX_U. */
@@ -134,9 +133,12 @@ let shrinkFlags = null;
 /** Shrink progress 0..1 for the mesh scale. */
 /** @type {Float32Array | null} */
 let shrinkT = null;
-/** Rise/fade progress 0..1. Drawn above the cell; 0 means not rising. */
+/** Rise/fade progress 0..1. 0 means not rising. */
 /** @type {Float32Array | null} */
 let riseT = null;
+/** Seconds spent climbing. Lift is this times one inverse-size atomic unit. */
+/** @type {Float32Array | null} */
+let riseElapsed = null;
 /** Column snapshot: resting on the atom or floor below. */
 /** @type {Uint8Array | null} */
 let restingFlags = null;
@@ -146,6 +148,9 @@ let onFloorFlags = null;
 /** Column snapshot: same material exists above in this column. */
 /** @type {Uint8Array | null} */
 let sameAboveFlags = null;
+/** Column snapshot: any atom, any material, is higher in this column. */
+/** @type {Uint8Array | null} */
+let aboveFlags = null;
 /** Continuous world-space Y of each atom center (gravity / contact). */
 /** @type {Float32Array | null} */
 let posY = null;
@@ -190,7 +195,7 @@ const instances = new Map();
 /** In-flight atoms — same materials, but without the projected target. */
 /** @type {Map<number, THREE.InstancedMesh>} */
 const fallingInstances = new Map();
-/** Grains in the rise visual: transparent, lifted, no landing projection. */
+/** Rising grains draw on the opaque falling meshes and are removed when the age clock ends. */
 /** @type {Map<number, THREE.InstancedMesh>} */
 const risingInstances = new Map();
 /** Column lists reused across flags, gravity, and mesh classify. Key is z * GRID_MAX + x. */
@@ -639,6 +644,7 @@ function clearEffectCell(i) {
   if (shrinkFlags) shrinkFlags[i] = 0;
   if (shrinkT) shrinkT[i] = 0;
   if (riseT) riseT[i] = 0;
+  if (riseElapsed) riseElapsed[i] = 0;
 }
 
 function getEffectClock(x, y, z, channel) {
@@ -680,14 +686,21 @@ function setShrink(x, y, z, shrinking, t) {
   if (shrinkT) shrinkT[i] = shrinking ? Math.max(0, Math.min(1, Number(t) || 0)) : 0;
 }
 
-function setRise(x, y, z, rising, t) {
-  if (!riseT || !inBounds(x, y, z)) return;
-  riseT[idx(x, y, z)] = rising ? Math.max(0, Math.min(1, Number(t) || 0)) : 0;
+function setRise(x, y, z, rising, t, elapsed) {
+  if (!inBounds(x, y, z)) return;
+  const i = idx(x, y, z);
+  if (riseT) riseT[i] = rising ? Math.max(0, Math.min(1, Number(t) || 0)) : 0;
+  if (riseElapsed) riseElapsed[i] = rising ? Math.max(0, Number(elapsed) || 0) : 0;
 }
 
 function getRiseT(x, y, z) {
   if (!riseT || !inBounds(x, y, z)) return 0;
   return riseT[idx(x, y, z)] || 0;
+}
+
+function getRiseElapsed(x, y, z) {
+  if (!riseElapsed || !inBounds(x, y, z)) return 0;
+  return riseElapsed[idx(x, y, z)] || 0;
 }
 
 function getShrink(x, y, z) {
@@ -864,6 +877,7 @@ const gridApi = {
   getShrinkT,
   setRise,
   getRiseT,
+  getRiseElapsed,
   getResting,
   getOnFloor,
   getSameAbove,
@@ -909,13 +923,28 @@ function atomExtent(x, y, z, matIndex) {
   return cellAtomSize(idx(x, y, z)) * cellScale(x, y, z, matIndex);
 }
 
+/**
+ * World lift for a rising grain. Step size is inverse to the grain's size, and
+ * the climb rate is that grain's own lifetime, so neighbors peel off at
+ * different speeds. The climb still speeds up the longer it has been rising.
+ */
+function riseOffset(x, y, z) {
+  const i = idx(x, y, z);
+  const elapsed = riseElapsed?.[i] || 0;
+  if (elapsed <= 0) return 0;
+  const extent = atomExtent(x, y, z, getCell(x, y, z));
+  const units = extent > 1e-6 ? ATOM_SIZE / extent : 1;
+  const life = lifeSpans?.[i] > 0 ? lifeSpans[i] : 1;
+  const distance = elapsed * (1 + elapsed) * life;
+  return distance * units * ATOM_SIZE;
+}
+
 function cellWorld(x, y, z, target, scale = 1) {
   const i = idx(x, y, z);
   const pitch = cellAtomSize(i);
   target.x = posX ? posX[i] : worldXForCell(x, pitch);
   target.y = posY ? posY[i] : (y + 0.5) * pitch;
-  const rise = riseT ? riseT[i] : 0;
-  if (rise > 0) target.y += pitch * RISE_CELLS * rise;
+  target.y += riseOffset(x, y, z);
   target.z = posZ ? posZ[i] : worldZForCell(z, pitch);
   return target;
 }
@@ -1152,7 +1181,7 @@ function clamp01(n) {
  * Map analog 0…1 → odd brush edge 1…BRUSH_MAX (pressure curve).
  */
 function brushSizeFromTrigger(rt) {
-  const threshold = fallingBindings.gamepad.emitAnalogThreshold ?? 0.08;
+  const threshold = inputBindings.gamepad.emitAnalogThreshold ?? 0.08;
   const span = 1 - threshold;
   const linear = span > 0 ? clamp01((clamp01(rt) - threshold) / span) : 1;
   const t = Math.pow(linear, BRUSH_RT_GAMMA);
@@ -1309,9 +1338,11 @@ export function clearBoard() {
   if (shrinkFlags) shrinkFlags.fill(0);
   if (shrinkT) shrinkT.fill(0);
   if (riseT) riseT.fill(0);
+  if (riseElapsed) riseElapsed.fill(0);
   if (restingFlags) restingFlags.fill(0);
   if (onFloorFlags) onFloorFlags.fill(0);
   if (sameAboveFlags) sameAboveFlags.fill(0);
+  if (aboveFlags) aboveFlags.fill(0);
   if (posY) posY.fill(0);
   if (posX) posX.fill(0);
   if (posZ) posZ.fill(0);
@@ -1477,8 +1508,8 @@ function updateEmitStream(dt, active) {
 /**
  * Sand1-style brush: scatter atoms across a flat N×N field centered on aim.
  * Each cell rolls EMIT_CHANCE so the column cascades instead of falling as one slab.
- * Brush edge comes from RT pressure. Mouse buttons pin that same curve
- * to full squeeze (left) or the lightest press (right).
+ * Brush edge comes from RT pressure. Left click pins that curve to full
+ * width. Shift+left click emits a single column. Right-drag yaws the view.
  */
 function pourBrush(ix, iz) {
   if (!cells || !catalog) return;
@@ -1852,7 +1883,7 @@ function writeMeshesFromColumns(resize) {
       floorTop += size;
       if (catalog?.idByIndex[mat] === "block-exp") continue;
       if ((riseT?.[i] || 0) > 0) {
-        risingBucket(mat).push(x, y, z);
+        fallingBucket(mat).push(x, y, z);
       } else if (landed) {
         classStamp[i] = classGen;
         if (landedSlot[i] >= 0 && landedMatOf[i] !== mat) removeLanded(i);
@@ -1914,6 +1945,9 @@ const columnQueries = {
   sameAbove(i) {
     return sameAboveFlags?.[i] === 1;
   },
+  above(i) {
+    return aboveFlags?.[i] === 1;
+  },
 };
 
 /** Resting / floor / same-material-above flags from continuous column positions. */
@@ -1921,6 +1955,7 @@ function rebuildColumnFlags() {
   if (restingFlags) restingFlags.fill(0);
   if (onFloorFlags) onFloorFlags.fill(0);
   if (sameAboveFlags) sameAboveFlags.fill(0);
+  if (aboveFlags) aboveFlags.fill(0);
   if (!cells || !posY || !restingFlags || occupied.size === 0) return;
 
   for (let c = 0; c < columnKeys.length; c += 1) {
@@ -1945,6 +1980,7 @@ function rebuildColumnFlags() {
       if (resting) restingFlags[i] = 1;
       if (onGround) onFloorFlags[i] = 1;
       if (sameAbove) sameAboveFlags[i] = 1;
+      if (n + 1 < list.length && aboveFlags) aboveFlags[i] = 1;
       const placed = yCenter > restCenter + 1e-4 ? yCenter : restCenter;
       floorTop = placed + size * 0.5;
     }
@@ -2339,7 +2375,7 @@ function startRenderLoop() {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=70`);
+  const res = await fetch(`/materials.json?v=73`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(parseMaterialsJson(await res.text()));
@@ -2359,9 +2395,11 @@ function ensureEffectStorage() {
   shrinkFlags = new Uint8Array(n);
   shrinkT = new Float32Array(n);
   riseT = new Float32Array(n);
+  riseElapsed = new Float32Array(n);
   restingFlags = new Uint8Array(n);
   onFloorFlags = new Uint8Array(n);
   sameAboveFlags = new Uint8Array(n);
+  aboveFlags = new Uint8Array(n);
 }
 
 /** Cross on the playfield: the four quadrants are the four sample beds. */
@@ -2545,7 +2583,8 @@ function installSimHook() {
           scale: cellScale(x, y, z),
           shrinking: shrinkFlags?.[i] === 1,
           rise: riseT?.[i] || 0,
-          yDraw: (posY?.[i] || 0) + (riseT?.[i] || 0) * cellAtomSize(i) * RISE_CELLS,
+          riseElapsed: riseElapsed?.[i] || 0,
+          yDraw: (posY?.[i] || 0) + riseOffset(x, y, z),
           onFloor: onFloorFlags?.[i] === 1,
           sameAbove: sameAboveFlags?.[i] === 1,
           resting: restingFlags?.[i] === 1,

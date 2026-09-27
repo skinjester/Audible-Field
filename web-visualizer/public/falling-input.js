@@ -1,62 +1,11 @@
 /**
- * Falling Blocks — mouse & controller bindings (edit here, not the sim).
- *
- * Mouse (default):
- *   move           → aim emitter (world / screen space)
- *   LMB hold       → emit at full RT pressure (wide end of the curve)
- *   RMB hold       → emit at the lightest RT pressure (narrow end)
- *   MMB drag       → yaw the playfield surface (grid); emitter stays put
- *   wheel          → zoom
- *
- * Triangle still mirrors that curve, so the two buttons swap ends with it.
- * Gamepad / keys stay configurable below; the engine only consumes
- * FallingInput.sample() each frame.
+ * Falling Blocks input sampler. Bindings live in input-bindings.js.
+ * The sim only consumes FallingInput.sample() each frame.
  */
 
-/** @typedef {"pressure" | "max" | "single"} BrushMode */
+import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=1";
 
-/**
- * Mutable binding table — change on the fly:
- *   import { fallingBindings } from "./falling-input.js";
- *   fallingBindings.mouse.emitFullButton = 0;
- */
-export const fallingBindings = {
-  mouse: {
-    /** 0 = left, 1 = middle, 2 = right */
-    /** Deep-squeeze end of the RT pressure curve. */
-    emitFullButton: 0,
-    /** Lightest-press end of the same curve. */
-    emitLightButton: 2,
-    orbitButton: 1,
-    /** Pointer move always aims the emitter (unless orbiting). */
-    moveAimsEmitter: true,
-    wheelZooms: true,
-    /** MMB drag: radians of surface yaw per pixel (grid rotates under emitter). */
-    orbitRadiansPerPx: 0.005,
-    wheelZoomExp: 0.0012,
-  },
-  keyboard: {
-    /** KeyboardEvent.code — hold to emit. Empty string disables. */
-    emit: "KeyX",
-    emitBrush: /** @type {BrushMode} */ ("max"),
-  },
-  gamepad: {
-    /** Standard mapping indices. */
-    emitDigitalButton: 0, // Cross / A / X
-    emitAnalogButton: 7, // RT
-    emitAnalogThreshold: 0.08,
-    emitDigitalBrush: /** @type {BrushMode} */ ("max"),
-    clearButton: 1, // Circle
-    invertCurveButton: 3, // Triangle
-    cyclePrevButton: 4, // L1
-    cycleNextButton: 5, // R1
-    stickDeadzone: 0.12,
-    /** Right-stick X → surface yaw rate (rad/s at full deflection). */
-    orbitStickRate: 1.15,
-    /** Right-stick Y → zoom exp rate. */
-    zoomStickRate: 1.15,
-  },
-};
+/** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
 
 /**
  * @typedef {{
@@ -76,12 +25,14 @@ export const fallingBindings = {
 
 export class FallingInput {
   /**
-   * @param {typeof fallingBindings} [bindings]
+   * @param {typeof inputBindings} [bindings]
    */
-  constructor(bindings = fallingBindings) {
+  constructor(bindings = inputBindings) {
     this.bindings = bindings;
     /** @type {HTMLElement | null} */
     this._canvas = null;
+    this._emitHeld = false;
+    this._shiftHeld = false;
     this._mouseFull = false;
     this._mouseLight = false;
     this._orbiting = false;
@@ -140,6 +91,8 @@ export class FallingInput {
   }
 
   resetTransient() {
+    this._emitHeld = false;
+    this._shiftHeld = false;
     this._mouseFull = false;
     this._mouseLight = false;
     this._orbiting = false;
@@ -180,18 +133,18 @@ export class FallingInput {
 
     // Standard mapping: 0/1 left stick, 2/3 right; Y inverted like Max / gamepad-input.
     const ax = pad?.axes || [];
-    const padLx = axis(Number(ax[0]) || 0);
-    const padLy = axis(-(Number(ax[1]) || 0));
-    const padRx = axis(Number(ax[2]) || 0);
-    const padRy = axis(-(Number(ax[3]) || 0));
+    const padLx = axis(Number(ax[gamepadAxes.leftX]) || 0);
+    const padLy = axis(-(Number(ax[gamepadAxes.leftY]) || 0));
+    const padRx = axis(Number(ax[gamepadAxes.rightX]) || 0);
+    const padRy = axis(-(Number(ax[gamepadAxes.rightY]) || 0));
 
     const lx = mergeAxis(axis(mixer?.rawX), padLx);
     const ly = mergeAxis(axis(mixer?.rawY), padLy);
     const dpad = dpadAxes(mixer?.dpad, {
-      up: pressed(12),
-      down: pressed(13),
-      left: pressed(14),
-      right: pressed(15),
+      up: pressed(gamepadButtons.dpadUp),
+      down: pressed(gamepadButtons.dpadDown),
+      left: pressed(gamepadButtons.dpadLeft),
+      right: pressed(gamepadButtons.dpadRight),
     });
     const aimStickX = clamp(lx + dpad.lx, -1, 1);
     const aimStickY = clamp(ly + dpad.ly, -1, 1);
@@ -208,15 +161,15 @@ export class FallingInput {
       if (ry) zoomFactor *= Math.exp(-ry * g.zoomStickRate * dt);
     }
 
-    const analogPad = readAnalogTrigger(mixer, pad, g.emitAnalogButton);
-    const digitalPad = pressed(g.emitDigitalButton);
+    const analogPad = readAnalogTrigger(mixer, pad, gamepadButtons[g.emitAnalog]);
+    const digitalPad = pressed(gamepadButtons[g.emitDigital]);
     const mouseFull = this._mouseFull;
     const mouseLight = this._mouseLight;
     const mouseEmit = mouseFull || mouseLight;
     const keyEmit = this._keyEmit;
 
-    // Mouse has no pressure axis. Pin it to an end of the same RT curve
-    // Triangle mirrors, so full and light swap when the curve is inverted.
+    // Plain LMB pins the RT curve to full width. Shift+LMB is a 1×1 stream
+    // (brushMode "single") and does not use this analog.
     const analog = mouseEmit
       ? mouseFull
         ? 1
@@ -228,13 +181,14 @@ export class FallingInput {
 
     /** @type {BrushMode} */
     let brushMode = "pressure";
-    if (!mouseEmit && keyEmit) brushMode = k.emitBrush;
+    if (mouseLight) brushMode = "single";
+    else if (!mouseEmit && keyEmit) brushMode = k.emitBrush;
     else if (!mouseEmit && digitalPad && !analogActive) brushMode = g.emitDigitalBrush;
 
-    const clearDown = pressed(g.clearButton);
-    const invertDown = pressed(g.invertCurveButton);
-    const cyclePrev = !!(mixer?.l1 || pressed(g.cyclePrevButton));
-    const cycleNext = !!(mixer?.r1 || pressed(g.cycleNextButton));
+    const clearDown = pressed(gamepadButtons[g.clear]);
+    const invertDown = pressed(gamepadButtons[g.invertCurve]);
+    const cyclePrev = !!(mixer?.l1 || pressed(gamepadButtons[g.cyclePrev]));
+    const cycleNext = !!(mixer?.r1 || pressed(gamepadButtons[g.cycleNext]));
 
     const clearEdge = clearDown && !this._prevClear;
     const invertEdge = invertDown && !this._prevInvert;
@@ -265,8 +219,21 @@ export class FallingInput {
     };
   }
 
+  _syncMouseEmit() {
+    const single =
+      this._emitHeld &&
+      this._shiftHeld &&
+      this.bindings.mouse.emitSingleModifier === "shift";
+    this._mouseFull = this._emitHeld && !single;
+    this._mouseLight = single;
+  }
+
   _onPointerMove(event) {
     const m = this.bindings.mouse;
+    if (this._emitHeld && event.shiftKey !== this._shiftHeld) {
+      this._shiftHeld = event.shiftKey;
+      this._syncMouseEmit();
+    }
     if (this._orbiting) {
       this._orbitAccum += -event.movementX * m.orbitRadiansPerPx;
       return;
@@ -286,9 +253,10 @@ export class FallingInput {
       canvas?.setPointerCapture?.(event.pointerId);
       return;
     }
-    if (event.button === m.emitFullButton || event.button === m.emitLightButton) {
-      if (event.button === m.emitFullButton) this._mouseFull = true;
-      if (event.button === m.emitLightButton) this._mouseLight = true;
+    if (event.button === m.emitButton) {
+      this._emitHeld = true;
+      this._shiftHeld = event.shiftKey;
+      this._syncMouseEmit();
       this._pointer = { x: event.clientX, y: event.clientY };
       this._pointerFresh = true;
       event.preventDefault();
@@ -302,14 +270,16 @@ export class FallingInput {
       this._orbiting = false;
       return;
     }
-    if (event.button === m.emitFullButton) this._mouseFull = false;
-    if (event.button === m.emitLightButton) this._mouseLight = false;
+    if (event.button === m.emitButton) {
+      this._emitHeld = false;
+      this._syncMouseEmit();
+    }
   }
 
   _onPointerCancel() {
     this._orbiting = false;
-    this._mouseFull = false;
-    this._mouseLight = false;
+    this._emitHeld = false;
+    this._syncMouseEmit();
   }
 
   _onWheel(event) {
@@ -323,6 +293,10 @@ export class FallingInput {
   }
 
   _onKeyDown(event) {
+    if (event.key === "Shift") {
+      this._shiftHeld = true;
+      this._syncMouseEmit();
+    }
     const code = this.bindings.keyboard.emit;
     if (!code || event.code !== code || event.repeat) return;
     if (event.target && /^(INPUT|TEXTAREA|SELECT)$/i.test(event.target.tagName)) {
@@ -333,6 +307,10 @@ export class FallingInput {
   }
 
   _onKeyUp(event) {
+    if (event.key === "Shift") {
+      this._shiftHeld = false;
+      this._syncMouseEmit();
+    }
     const code = this.bindings.keyboard.emit;
     if (!code || event.code !== code) return;
     this._keyEmit = false;

@@ -77,8 +77,8 @@
         },
         {
           "name": "blow",
-          "when": { "resting": true, "onFloor": false, "belowMinNeighbors": 3 },
-          "do": { "age": 4.5, "hold": 2, "lifeScale": 3, "visual": "rise", "then": "clear" }
+          "when": { "resting": true, "above": false },
+          "do": { "age": 4.5, "hold": 2, "lifeScale": 0.5, "visual": "rise", "then": "clear" }
         }
       ]
     },

@@ -45,11 +45,13 @@
  * slide "closestOpen": a resting floor block with any atom above steps one cell
  * outward. The column above drops straight down into the cell it left.
  *   { infect: { seconds, skipSurface?: "liquid" } }
+ *   A poured lifetime on the infecting grain replaces seconds.
  *   { absorbSparse: { seconds, minNeighbors } }
  *   { dryUnbounded: { seconds, resetOn?: "gainedTouch" } }
  *   { cullShuffle: { hops, span } }
- * Predicates: resting, onFloor, sameAbove, flow, boundedCatchment, infection,
- * belowMinNeighbors. Host column queries supply resting / onFloor / sameAbove.
+ * Predicates: resting, onFloor, sameAbove, above, flow, boundedCatchment, infection,
+ * belowMinNeighbors. Host column queries supply resting / onFloor / sameAbove / above.
+ * `above` is any atom higher in the same column, any material.
  * All matching effects run. Each age / absorb / dry rule has its own clock.
  * One infection channel caps a matching age, or shrinks a cell that has none.
  */
@@ -205,7 +207,7 @@ function normalizeWhen(when) {
   if (!when || typeof when !== "object" || Array.isArray(when)) return {};
   /** @type {Record<string, boolean | number>} */
   const out = {};
-  for (const key of ["resting", "onFloor", "sameAbove", "boundedCatchment", "infection", "flow"]) {
+  for (const key of ["resting", "onFloor", "sameAbove", "above", "boundedCatchment", "infection", "flow"]) {
     if (when[key] === true || when[key] === false) out[key] = when[key];
   }
   const below = Number(when.belowMinNeighbors);
@@ -1003,6 +1005,8 @@ function transferGrain(grid, x, y, z, toX, toY, toZ, matIndex, catalog) {
   const shuffleOz = grid.getShuffleOriginZ?.(x, y, z) ?? 0;
   const shrinking = grid.getShrink?.(x, y, z) === true;
   const shrinkT = grid.getShrinkT?.(x, y, z) ?? 0;
+  const risingT = grid.getRiseT?.(x, y, z) ?? 0;
+  const risingElapsed = grid.getRiseElapsed?.(x, y, z) ?? 0;
 
   grid.set(toX, toY, toZ, matIndex);
   grid.set(x, y, z, 0);
@@ -1018,6 +1022,7 @@ function transferGrain(grid, x, y, z, toX, toY, toZ, matIndex, catalog) {
   grid.setShuffleOriginX?.(toX, toY, toZ, shuffleOx);
   grid.setShuffleOriginZ?.(toX, toY, toZ, shuffleOz);
   grid.setShrink?.(toX, toY, toZ, shrinking, shrinkT);
+  if (risingElapsed > 0 || risingT > 0) grid.setRise?.(toX, toY, toZ, true, risingT, risingElapsed);
 }
 
 /**
@@ -1329,6 +1334,8 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
   const shuffleOz = grid.getShuffleOriginZ?.(x, y, z) ?? 0;
   const flowDirX = grid.getFlowDx?.(x, y, z) ?? 0;
   const flowDirZ = grid.getFlowDz?.(x, y, z) ?? 0;
+  const risingT = grid.getRiseT?.(x, y, z) ?? 0;
+  const risingElapsed = grid.getRiseElapsed?.(x, y, z) ?? 0;
 
   /** @type {CellPos | null} */
   let to = null;
@@ -1361,6 +1368,7 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
     grid.setShuffleOriginZ?.(to.x, to.y, to.z, shuffleOz);
     grid.setFlowDx?.(to.x, to.y, to.z, flowDirX);
     grid.setFlowDz?.(to.x, to.y, to.z, flowDirZ);
+    if (risingElapsed > 0 || risingT > 0) grid.setRise?.(to.x, to.y, to.z, true, risingT, risingElapsed);
     return to;
   }
   // Applied with no @ in result (e.g. etch consumes self + neighbor).
@@ -1527,6 +1535,7 @@ function whenMatches(when, ctx) {
   if (when.resting != null && ctx.resting !== when.resting) return false;
   if (when.onFloor != null && ctx.onFloor !== when.onFloor) return false;
   if (when.sameAbove != null && ctx.sameAbove !== when.sameAbove) return false;
+  if (when.above != null && ctx.above !== when.above) return false;
   if (when.flow != null && ctx.flow !== when.flow) return false;
   if (when.boundedCatchment != null && ctx.boundedCatchment !== when.boundedCatchment) return false;
   if (when.infection != null && ctx.infection !== when.infection) return false;
@@ -1540,6 +1549,7 @@ function effectContext(grid, cell, catalog, queries) {
     resting: queries?.resting?.(index) === true,
     onFloor: queries?.onFloor?.(index) === true,
     sameAbove: queries?.sameAbove?.(index) === true,
+    above: queries?.above?.(index) === true,
     flow: (grid.getFlowDx?.(cell.x, cell.y, cell.z) ?? 0) !== 0 || (grid.getFlowDz?.(cell.x, cell.y, cell.z) ?? 0) !== 0,
     boundedCatchment: isBoundedCatchment(grid, cell.x, cell.y, cell.z, catalog),
     sameNeighbors: countSameTouches(grid, cell.x, cell.y, cell.z, cell.mat),
@@ -1614,7 +1624,9 @@ export function applyInfect(grid, cells, catalog) {
         if ((grid.getInfection?.(nx, ny, nz) ?? 0) > 0) continue;
         const neighbor = materialByIndex(catalog, nmat);
         if (effect.skipSurface && neighbor?.surface === effect.skipSurface) continue;
-        grid.setInfection?.(nx, ny, nz, effect.seconds);
+        const baked = grid.getLife?.(cell.x, cell.y, cell.z) ?? 0;
+        const seconds = baked > 0 ? baked : effect.seconds;
+        grid.setInfection?.(nx, ny, nz, seconds);
         dirty = true;
       }
     }
@@ -1694,7 +1706,7 @@ export function applyPostMoves(grid, moves, catalog) {
  * @param {GridApi} grid
  * @param {{ x: number, y: number, z: number, mat: number, i?: number }[]} cells
  * @param {MaterialCatalog} catalog
- * @param {{ resting?: (i: number) => boolean, onFloor?: (i: number) => boolean, sameAbove?: (i: number) => boolean }} queries
+ * @param {{ resting?: (i: number) => boolean, onFloor?: (i: number) => boolean, sameAbove?: (i: number) => boolean, above?: (i: number) => boolean }} queries
  * @param {number} dt
  * @returns {boolean}
  */
@@ -1713,17 +1725,27 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
     let shrinkT = 0;
     let rise = false;
     let riseT = 0;
+    let riseElapsed = 0;
     const prevRise = grid.getRiseT?.(cell.x, cell.y, cell.z) ?? 0;
     const infection = grid.getInfection?.(cell.x, cell.y, cell.z) ?? 0;
 
     for (const effect of material?.effects || []) {
       if (effect.kind === "age") {
         if (!whenMatches(effect.when, ctx)) {
-          if (getClock(grid, cell.x, cell.y, cell.z, effect.clockId) > 0) {
-            setClock(grid, cell.x, cell.y, cell.z, effect.clockId, 0);
-            dirty = true;
+          const clockNow = getClock(grid, cell.x, cell.y, cell.z, effect.clockId);
+          let keepRising = false;
+          if (effect.visual === "rise" && clockNow > (effect.hold || 0)) {
+            const relaxed = { ...effect.when };
+            delete relaxed.resting;
+            keepRising = whenMatches(relaxed, ctx);
           }
-          continue;
+          if (!keepRising) {
+            if (clockNow > 0) {
+              setClock(grid, cell.x, cell.y, cell.z, effect.clockId, 0);
+              dirty = true;
+            }
+            continue;
+          }
         }
         matchedAge = true;
         let clock = getClock(grid, cell.x, cell.y, cell.z, effect.clockId) + dt;
@@ -1776,8 +1798,10 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
           const hold = Math.min(effect.hold || 0, limit);
           if (clock > hold) {
             const span = Math.max(1e-4, limit - hold);
+            const elapsed = Math.max(0, clock - hold);
             rise = true;
-            riseT = Math.max(riseT, Math.min(1, (clock - hold) / span));
+            riseT = Math.max(riseT, Math.min(1, elapsed / span));
+            riseElapsed = Math.max(riseElapsed, elapsed);
           }
         }
       } else if (effect.kind === "absorbSparse") {
@@ -1837,7 +1861,7 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
 
     grid.setShrink?.(cell.x, cell.y, cell.z, shrink, shrink ? shrinkT : 0);
     if (rise || prevRise > 0) dirty = true;
-    grid.setRise?.(cell.x, cell.y, cell.z, rise, rise ? riseT : 0);
+    grid.setRise?.(cell.x, cell.y, cell.z, rise, rise ? riseT : 0, rise ? riseElapsed : 0);
   }
 
   for (const cell of doomed) {
