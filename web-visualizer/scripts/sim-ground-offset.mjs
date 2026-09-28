@@ -34,7 +34,12 @@ function lookLocked(v) {
 
 const rest = await view();
 check("rest look-at", lookLocked(rest), JSON.stringify(rest));
-check("rest ground", Math.hypot(rest.surfaceX, rest.surfaceZ) < 0.02, JSON.stringify(rest));
+check("rest target centered", Math.abs(rest.ndcX) < 0.12 && Math.abs(rest.ndcY) < 0.12, JSON.stringify(rest));
+check(
+  "rest pours the center cell",
+  Math.hypot(rest.localX, rest.localZ) < 0.2,
+  JSON.stringify(rest),
+);
 check("rest above emitter", rest.cameraDist + 1e-3 >= rest.clearance, JSON.stringify(rest));
 
 await page.mouse.move(cx, cy);
@@ -137,19 +142,21 @@ for (let i = 0; i < 40; i += 1) {
 }
 const wide = await view();
 check("zoomed wide", wide.wide === true, JSON.stringify(wide));
-const homeLocal = { x: wide.localX, z: wide.localZ, cellX: wide.cellX, cellZ: wide.cellZ };
-let home = wide;
-for (let i = 0; i < 40; i += 1) {
-  await page.waitForTimeout(80);
-  home = await view();
-  if (Math.hypot(home.surfaceX, home.surfaceZ) < 0.05) break;
-}
-check("home returns the ground", Math.hypot(home.surfaceX, home.surfaceZ) < 0.08, JSON.stringify(home));
+check("wide target stays centered", targetCentered(wide), JSON.stringify(wide));
+const wideLocal = { x: wide.localX, z: wide.localZ };
+await page.waitForTimeout(500);
+const heldWide = await view();
 check(
-  "home keeps the pour cell",
-  Math.hypot(home.localX - homeLocal.x, home.localZ - homeLocal.z) < 0.05,
-  JSON.stringify({ homeLocal, home }),
+  "zoom-out keeps the ground offset",
+  Math.hypot(heldWide.surfaceX - wide.surfaceX, heldWide.surfaceZ - wide.surfaceZ) < 0.08,
+  JSON.stringify({ wide, heldWide }),
 );
+check(
+  "zoom-out keeps the pour cell",
+  Math.hypot(heldWide.localX - wideLocal.x, heldWide.localZ - wideLocal.z) < 0.05,
+  JSON.stringify({ wideLocal, heldWide }),
+);
+check("zoom-out keeps the target centered", targetCentered(heldWide), JSON.stringify(heldWide));
 
 await page.mouse.move(box.x + box.width * 0.72, box.y + box.height * 0.38);
 await page.waitForTimeout(80);
@@ -212,7 +219,14 @@ const report = {
   edgeTravel,
   preRadius,
   postRadius,
-  home: { surfaceX: home.surfaceX, surfaceZ: home.surfaceZ, localX: home.localX, localZ: home.localZ },
+  wide: {
+    surfaceX: heldWide.surfaceX,
+    surfaceZ: heldWide.surfaceZ,
+    localX: heldWide.localX,
+    localZ: heldWide.localZ,
+    ndcX: heldWide.ndcX,
+    ndcY: heldWide.ndcY,
+  },
   high: { cameraDist: high.cameraDist, clearance: high.clearance, cameraY: high.cameraY },
 };
 console.log(JSON.stringify(report, null, 2));
