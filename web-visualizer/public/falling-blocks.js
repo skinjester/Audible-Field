@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=65";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=9";
-import { fallingInput } from "./falling-input.js?v=24";
+import { fallingInput } from "./falling-input.js?v=25";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -114,6 +114,12 @@ let cameraDist = CAMERA_DIST_DEFAULT;
 const CAMERA_LOOK = new THREE.Vector3(0, 0.35, 0);
 /** Pixels from the view edge where a pinned cursor keeps the current pan speed. */
 const EDGE_HOLD_PX = 20;
+/**
+ * A short pointer move slides this much ground. 1:1 only covers the patch
+ * already on screen, so reaching the rest of the grid runs the mouse off the desk.
+ */
+const PAN_SHORT_FRACTION = 0.08;
+const PAN_SHORT_UNITS = 6;
 /** Travel while closer than this fraction of the full-grid distance. */
 const TRAVEL_FIT = 0.92;
 /** Full-grid camera distance from the last zoom or resize. 0 until measured. */
@@ -1317,7 +1323,18 @@ function pointerAtEdge(pointer) {
 }
 
 /**
+ * How far a pixel of pointer travel slides the ground.
+ * Tuned so a short move (PAN_SHORT_FRACTION of the canvas) covers PAN_SHORT_UNITS,
+ * which stays large when zoomed in and each pixel would otherwise cover little ground.
+ */
+function pointerPanGain(visibleWidth) {
+  const gain = PAN_SHORT_UNITS / (PAN_SHORT_FRACTION * Math.max(visibleWidth, 0.5));
+  return Math.min(24, Math.max(1, gain));
+}
+
+/**
  * Slide the ground by a pointer delta in canvas pixels.
+ * The delta is amplified so a small motion drifts a long stretch of the surface.
  * Records the speed so a cursor pinned at the screen edge can continue it.
  */
 function slidePointer(dx, dy, dt) {
@@ -1329,9 +1346,12 @@ function slidePointer(dx, dy, dt) {
   const origin = worldOnPlane(0, 0, 0);
   const right = worldOnPlane(ndcDx, 0, 0);
   const up = worldOnPlane(0, ndcDy, 0);
-  if (!origin || !right || !up) return;
-  const wx = right.x - origin.x + (up.x - origin.x);
-  const wz = right.z - origin.z + (up.z - origin.z);
+  const span = worldOnPlane(1, 0, 0);
+  if (!origin || !right || !up || !span) return;
+  const visibleWidth = Math.hypot(span.x - origin.x, span.z - origin.z) * 2;
+  const gain = pointerPanGain(visibleWidth);
+  const wx = (right.x - origin.x + (up.x - origin.x)) * gain;
+  const wz = (right.z - origin.z + (up.z - origin.z)) * gain;
   slideGround(wx, wz);
   if (dt > 0) {
     panVx = wx / dt;

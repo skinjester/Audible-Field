@@ -304,6 +304,44 @@ h1 {
   overflow: hidden;
 }
 
+.falling-stage {
+  flex-direction: column;
+  gap: 10px;
+}
+
+.falling-stage > .viz-canvas-wrap {
+  height: auto;
+}
+
+.falling-dock {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "about materials"
+    "hud hud";
+  align-items: center;
+  column-gap: 16px;
+  row-gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.falling-dock > .falling-about {
+  grid-area: about;
+  justify-self: start;
+}
+
+.falling-dock > .falling-material-bar {
+  grid-area: materials;
+  justify-self: center;
+}
+
+.falling-dock > .falling-hud {
+  grid-area: hud;
+  justify-self: center;
+}
+
 /* Visualize uses the same shell chrome as Diagnostics; only the panel fills. */
 
 .pad {
@@ -1219,10 +1257,6 @@ dd {
 }
 
 .falling-about {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 3;
   cursor: pointer;
 }
 
@@ -1339,17 +1373,12 @@ dd {
 }
 
 .falling-material-bar {
-  position: absolute;
-  top: 14px;
-  left: 50%;
-  z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  max-width: calc(100% - 24px);
-  transform: translateX(-50%);
+  max-width: 100%;
   pointer-events: none;
 }
 
@@ -1362,7 +1391,7 @@ dd {
 }
 
 .falling-material-bar .pad-glyph {
-  color: #000;
+  color: rgba(255, 255, 255, 0.72);
   font-size: 44px;
 }
 
@@ -1392,14 +1421,11 @@ dd {
 }
 
 .falling-hud {
-  position: absolute;
-  left: 12px;
-  bottom: 12px;
-  z-index: 2;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
+  max-width: 100%;
   pointer-events: none;
 }
 

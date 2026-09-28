@@ -324,24 +324,31 @@ export class FallingInput {
   }
 
   /**
-   * Relative pointer motion. A drag on a form control does not pan the grid.
+   * Relative pointer motion. Only the 3D viewport pans; the control dock does not.
    */
   _onWindowPointerMove(event) {
     if (this._orbiting) {
       this._lastClient = { x: event.clientX, y: event.clientY };
       return;
     }
-    const target = event.target;
-    const onControl = target instanceof Element && target.closest("input, textarea, select");
+    const canvas = this._canvas;
+    const overCanvas =
+      !!canvas &&
+      event.target instanceof Node &&
+      (event.target === canvas || canvas.contains(event.target));
     let dx = event.movementX || 0;
     let dy = event.movementY || 0;
-    if (!dx && !dy && this._lastClient && !onControl) {
+    if (!dx && !dy && this._lastClient && overCanvas) {
       dx = event.clientX - this._lastClient.x;
       dy = event.clientY - this._lastClient.y;
     }
     this._lastClient = { x: event.clientX, y: event.clientY };
+    if (!overCanvas) {
+      this._pointerAt = null;
+      return;
+    }
     this._pointerAt = { x: event.clientX, y: event.clientY };
-    if (onControl || !this.bindings.mouse.moveAimsEmitter) return;
+    if (!this.bindings.mouse.moveAimsEmitter) return;
     this._moveX += dx;
     this._moveY += dy;
   }
