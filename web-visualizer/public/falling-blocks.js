@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=65";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
-import { inputBindings } from "./input-bindings.js?v=11";
-import { fallingInput } from "./falling-input.js?v=32";
+import { inputBindings } from "./input-bindings.js?v=13";
+import { fallingInput } from "./falling-input.js?v=34";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -46,6 +46,11 @@ const CAMERA_DIST_DEFAULT = 30;
 const CAMERA_DIST_MIN = 10;
 const CAMERA_DIST_MAX = 60;
 const AIM_SPEED = 9;
+/**
+ * Stick and D-pad keep the ground target inside this NDC box.
+ * Motion past the box scrolls the plane instead of leaving the view.
+ */
+const AIM_VIEW_LIMIT = 0.8;
 /**
  * Max Sand1-style brush edge (odd). RT maps a light pull from 1×1 up to this
  * N×N field; LT uses the opposite curve. Each cell rolls a chance so atoms
@@ -260,6 +265,11 @@ let splashes = [];
 let aim = null;
 /** Emitter aim in world XZ (decoupled from rotating surface / grid). */
 let aimWorldX = 0;
+/**
+ * Pointer position captured while the stick or D-pad is aiming.
+ * A resting cursor does not pull the emitter back until the mouse moves.
+ */
+let stickAimPointer = null;
 let aimWorldZ = 0;
 let emitAcc = 0;
 let emitting = false;
@@ -1356,6 +1366,18 @@ function groundAtPixels(px, py, rect) {
   return worldOnPlane(ndcX, ndcY, 0);
 }
 
+/** Put the emitter on a world XZ point, clamped to the playfield. The grid stays put. */
+function placeEmitterAtWorld(wx, wz) {
+  if (!surface) return;
+  const limit = PLAYFIELD_HALF - 0.001;
+  let { x: lx, z: lz } = worldToSurfaceXZ(wx, wz);
+  lx = Math.min(limit, Math.max(-limit, lx));
+  lz = Math.min(limit, Math.max(-limit, lz));
+  const world = surfaceToWorldXZ(lx, lz);
+  aimWorldX = world.x;
+  aimWorldZ = world.z;
+}
+
 /** Put the emitter on the ground under the pointer. The grid stays where it is. */
 function placeEmitterAtPointer(pointer) {
   if (!canvas || !pointer || !surface) return;
@@ -1363,13 +1385,7 @@ function placeEmitterAtPointer(pointer) {
   if (rect.width < 1 || rect.height < 1) return;
   const hit = groundAtPixels(pointer.x - rect.left, pointer.y - rect.top, rect);
   if (!hit) return;
-  const limit = PLAYFIELD_HALF - 0.001;
-  let { x: lx, z: lz } = worldToSurfaceXZ(hit.x, hit.z);
-  lx = Math.min(limit, Math.max(-limit, lx));
-  lz = Math.min(limit, Math.max(-limit, lz));
-  const world = surfaceToWorldXZ(lx, lz);
-  aimWorldX = world.x;
-  aimWorldZ = world.z;
+  placeEmitterAtWorld(hit.x, hit.z);
 }
 
 /** Yaw the playfield around the emitter target. */
@@ -1479,8 +1495,57 @@ function setAimFromWorld() {
 }
 
 /**
- * Move the emitter in screen-relative world XZ (not glued to the grid).
- * Stick / D-pad left-right: +lx = right on screen, +ly = up on screen.
+ * True when every playfield corner is inside the viewport.
+ * Uses the ground offset, so a panned plane does not count as fitting.
+ */
+function playfieldFitsView() {
+  if (!camera || !surface) return true;
+  camera.updateMatrixWorld(true);
+  const half = PLAYFIELD_HALF;
+  const corners = [
+    [-half, -half],
+    [half, -half],
+    [half, half],
+    [-half, half],
+  ];
+  for (let i = 0; i < corners.length; i += 1) {
+    const world = surfaceToWorldXZ(corners[i][0], corners[i][1]);
+    emitterNdc.set(world.x, 0, world.z);
+    emitterNdc.project(camera);
+    if (
+      emitterNdc.z > 1 ||
+      Math.abs(emitterNdc.x) > 0.98 ||
+      Math.abs(emitterNdc.y) > 0.98
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * If the ground target is outside the view, move it and the plane together
+ * until the target sits on the view edge. The cell under the emitter stays put.
+ * A fully framed playfield is left alone so the emitter can still sit on any cell.
+ */
+function pullEmitterIntoView() {
+  if (!camera || !surface || playfieldFitsView()) return;
+  const ndc = projectTarget();
+  if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y) || !Number.isFinite(ndc.z)) return;
+  const behind = ndc.z > 1;
+  const nx = behind ? 0 : Math.min(AIM_VIEW_LIMIT, Math.max(-AIM_VIEW_LIMIT, ndc.x));
+  const ny = behind ? 0 : Math.min(AIM_VIEW_LIMIT, Math.max(-AIM_VIEW_LIMIT, ndc.y));
+  if (!behind && nx === ndc.x && ny === ndc.y) return;
+  const hit = worldOnPlane(nx, ny, 0);
+  if (!hit) return;
+  glideCouple(hit.x - aimWorldX, hit.z - aimWorldZ);
+}
+
+/**
+ * Move the emitter across the plane above the grid.
+ * +lx = right on screen, +ly = up on screen.
+ * Inside the view the plane stays put. Past the edge of the view, the leftover
+ * motion scrolls the plane so the rest of the surface can come under the emitter.
  */
 function moveAim(lx, ly, dt) {
   if (dt <= 0 || (!lx && !ly)) return;
@@ -1489,7 +1554,8 @@ function moveAim(lx, ly, dt) {
   const step = AIM_SPEED * dt;
   const dx = (camCos * lx - camSin * ly) * step;
   const dz = (-camSin * lx - camCos * ly) * step;
-  slideGround(dx, dz);
+  placeEmitterAtWorld(aimWorldX + dx, aimWorldZ + dz);
+  pullEmitterIntoView();
   setAimFromWorld();
   syncEmitter();
 }
@@ -1797,6 +1863,7 @@ export function clearBoard() {
 
   aimWorldX = 0;
   aimWorldZ = 0;
+  stickAimPointer = null;
   syncCamera();
   holdTargetAtCenter();
   emitting = false;
@@ -1857,9 +1924,24 @@ function applyInput(dt) {
 
   const stickAim = !!(frame.aimStickX || frame.aimStickY);
   const dragging = !!frame.pointerDelta;
+  const aim = frame.aimAt;
+
+  if (stickAim) {
+    stickAimPointer = aim ? { x: aim.x, y: aim.y } : stickAimPointer;
+  } else if (
+    stickAimPointer &&
+    aim &&
+    (aim.x !== stickAimPointer.x || aim.y !== stickAimPointer.y)
+  ) {
+    stickAimPointer = null;
+  }
+  if (dragging) stickAimPointer = null;
 
   // A bare move places the emitter on the ground. Right-drag slides the grid.
-  if (frame.aimAt && !dragging) placeEmitterAtPointer(frame.aimAt);
+  // Stick and D-pad move the emitter on that same plane and are not snapped
+  // back to a cursor that is just resting.
+  const stickHoldsAim = stickAim || !!stickAimPointer;
+  if (aim && !dragging && !stickHoldsAim) placeEmitterAtPointer(aim);
   if (dragging) slidePointer(frame.pointerDelta.x, frame.pointerDelta.y, frame.pointerAt);
   if (stickAim) moveAim(frame.aimStickX, frame.aimStickY, dt);
   if (frame.orbitDelta) rotateSurface(frame.orbitDelta);

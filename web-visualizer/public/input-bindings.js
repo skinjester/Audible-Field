@@ -17,7 +17,8 @@
  * Left trigger emits on the opposite curve: a hard pull is a single stream.
  * Square toggles field audio. Circle clears the board.
  *
- * D-pad left / right aims across the playfield.
+ * Left stick and D-pad move the emitter across the plane above the grid.
+ * At the edge of the view they scroll the plane, so the whole surface stays reachable.
  *
  * Keyboard:
  *   X hold          → emit

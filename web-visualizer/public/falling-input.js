@@ -4,7 +4,7 @@
  */
 
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
-import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=11";
+import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=13";
 
 /** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
 
@@ -191,11 +191,11 @@ export class FallingInput {
 
     const lx = mergeAxis(axis(mixer?.rawX), padLx);
     const ly = mergeAxis(axis(mixer?.rawY), padLy);
-    const dpad = dpadAxes(null, {
-      up: false,
-      down: false,
-      left: !!(mixer?.dpad?.left || pressed(gamepadButtons.dpadLeft)),
-      right: !!(mixer?.dpad?.right || pressed(gamepadButtons.dpadRight)),
+    const dpad = dpadAxes(mixer?.dpad, {
+      up: pressed(gamepadButtons.dpadUp),
+      down: pressed(gamepadButtons.dpadDown),
+      left: pressed(gamepadButtons.dpadLeft),
+      right: pressed(gamepadButtons.dpadRight),
     });
     const aimStickX = clamp(lx + dpad.lx, -1, 1);
     const aimStickY = clamp(ly + dpad.ly, -1, 1);
