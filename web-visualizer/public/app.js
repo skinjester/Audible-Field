@@ -21,7 +21,7 @@ import {
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
 import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks, aimMarkRightPx } from "./falling-blocks.js?v=296";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=17";
-import { audioEngine } from "./audio-engine.js?v=46";
+import { audioEngine } from "./audio-engine.js?v=47";
 import { gamepadInput } from "./gamepad-input.js?v=16";
 import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=5";
 import { openStemDropdown } from "./sample-picker.js?v=16";

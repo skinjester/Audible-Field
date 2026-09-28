@@ -77,10 +77,31 @@ function strikeRate(hit) {
 /** Concurrent landing repeats per quadrant. Each one lasts the ground-ring lifetime. */
 const STRIKE_VOICES = 24;
 
-/** Up to `max` strikes spread from shortest life to longest. */
+/**
+ * How many repeats this burst should start.
+ * A few landings each get a voice while the pool has room. A heavier pour
+ * that no longer fits keeps a pitch spread, and the caller cuts the oldest
+ * repeats so the new landings still attack instead of going silent.
+ * @param {number} count
+ * @param {number} room
+ */
+function strikePlan(count, room) {
+  const n = Math.max(0, count | 0);
+  if (!n) return 0;
+  const free = Math.max(0, room | 0);
+  if (n <= free) return n;
+  const spread = Math.min(n, Math.max(1, Math.round(Math.log2(n) + 2)));
+  return Math.min(STRIKE_VOICES, Math.max(free, spread));
+}
+
+/** Up to `max` strikes spread across lifetime, then pitch. */
 function sampleLifetimes(lives, max) {
-  const sorted = lives.filter((hit) => strikeLife(hit) > 0).sort((a, b) => strikeLife(a) - strikeLife(b));
+  const sorted = lives
+    .filter((hit) => strikeLife(hit) > 0)
+    .sort((a, b) => strikeLife(a) - strikeLife(b) || strikeRate(a) - strikeRate(b));
+  if (max <= 0 || !sorted.length) return [];
   if (sorted.length <= max) return sorted;
+  if (max === 1) return [sorted[(sorted.length / 2) | 0]];
   const out = [];
   for (let i = 0; i < max; i += 1) {
     const idx = Math.round((i * (sorted.length - 1)) / (max - 1));
@@ -525,6 +546,7 @@ export class EchoScapeAudioEngine {
       if (pending) this._releaseBedElement(pending);
       const stem = this.stems[corner];
       if (!stem) continue;
+      this._releaseStrikes(stem);
       try {
         stem.el.pause();
         stem.el.removeAttribute("src");
@@ -1323,6 +1345,7 @@ export class EchoScapeAudioEngine {
     if (reverbSend) tone.connect(reverbSend);
 
     if (prev) {
+      this._releaseStrikes(prev);
       try {
         prev.source.disconnect();
       } catch {
@@ -1362,7 +1385,7 @@ export class EchoScapeAudioEngine {
       }
     }
 
-    this.stems[corner] = { el, source, gain, mono, pan, tone, meta };
+    this.stems[corner] = { el, source, gain, mono, pan, tone, meta, strikes: [] };
     this._primeStrikeBuffer(corner, url);
 
     el.volume = 1;
@@ -1681,6 +1704,8 @@ export class EchoScapeAudioEngine {
   /**
    * Repeat each landed quadrant's own sample. The repeat's low-pass sweeps
    * shut across the ground-ring lifetime, at the pitch of the cell that landed.
+   * A few landings each get a voice. A heavier pour that fills the pool cuts
+   * the oldest repeats so the new landings still attack.
    * @param {Record<string, ({ life: number, rate?: number } | number)[]> | null} hits
    */
   playSplash(hits) {
@@ -1691,18 +1716,67 @@ export class EchoScapeAudioEngine {
     }
   }
 
+  _releaseStrike(stem, strike) {
+    if (!stem || !strike || strike.released) return;
+    strike.released = true;
+    if (strike.timer) {
+      window.clearTimeout(strike.timer);
+      strike.timer = 0;
+    }
+    const list = stem.strikes;
+    if (list) {
+      const index = list.indexOf(strike);
+      if (index >= 0) list.splice(index, 1);
+    }
+    if (strike.voice) {
+      try {
+        strike.voice.stop();
+      } catch {
+        /* already stopped */
+      }
+    }
+    if (strike.tap && strike.gain) {
+      try {
+        strike.tap.disconnect(strike.gain);
+      } catch {
+        /* already disconnected */
+      }
+    }
+    for (const node of strike.nodes) {
+      try {
+        node.disconnect();
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
+  _releaseStrikes(stem) {
+    if (!stem?.strikes) return;
+    while (stem.strikes.length) this._releaseStrike(stem, stem.strikes[0]);
+  }
+
   _strikeStem(corner, lives) {
     const stem = this.stems[corner];
     if (!stem?.source) return;
+    if (!stem.strikes) stem.strikes = [];
+    const audible = lives.filter((hit) => strikeLife(hit) > 0);
+    const active = stem.strikes.length;
+    const want = strikePlan(audible.length, STRIKE_VOICES - active);
+    if (want <= 0) return;
+    const overflow = active + want - STRIKE_VOICES;
+    if (overflow > 0) {
+      const oldest = stem.strikes.slice(0, overflow);
+      for (const strike of oldest) this._releaseStrike(stem, strike);
+    }
+    const chosen = sampleLifetimes(audible, want);
+    if (!chosen.length) return;
     const ctx = this.ctx;
     const t = ctx.currentTime;
     const panValue = stem.pan ? stem.pan.pan.value : 0;
-    const active = stem.sweepCount || 0;
-    const room = STRIKE_VOICES - active;
-    if (room <= 0) return;
-    const chosen = sampleLifetimes(lives, room);
-    stem.sweepCount = active + chosen.length;
     const buffer = this._strikeBuffers?.[corner] || null;
+    const folded = Math.max(1, audible.length / chosen.length);
+    const weight = Math.min(1.5, Math.pow(folded, 0.35));
     for (let i = 0; i < chosen.length; i += 1) {
       const dur = Math.min(5, Math.max(0.1, strikeLife(chosen[i]) || 0.1));
       const rate = strikeRate(chosen[i]);
@@ -1717,13 +1791,16 @@ export class EchoScapeAudioEngine {
       const pan = ctx.createStereoPanner();
       pan.pan.value = panValue;
       const release = Math.min(0.15, dur * 0.3);
-      const peak = 0.42 / Math.sqrt(rate);
+      const peak = (0.42 / Math.sqrt(rate)) * weight;
       gain.gain.setValueAtTime(0.001, t);
       gain.gain.exponentialRampToValueAtTime(peak, t + 0.012);
       if (dur > release + 0.04) gain.gain.setValueAtTime(peak, t + dur - release);
       gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
       const nodes = [gain, delay, filter, pan];
+      /** @type {AudioBufferSourceNode | null} */
       let voice = null;
+      /** @type {AudioNode | null} */
+      let tap = null;
       if (buffer) {
         voice = ctx.createBufferSource();
         voice.buffer = buffer;
@@ -1735,21 +1812,17 @@ export class EchoScapeAudioEngine {
         voice.stop(t + dur + 0.08);
         nodes.push(voice);
       } else {
-        stem.source.connect(gain);
+        tap = stem.source;
+        tap.connect(gain);
       }
       gain.connect(delay);
       delay.connect(filter);
       filter.connect(pan);
       pan.connect(this._splashOut);
-      window.setTimeout(() => {
-        stem.sweepCount = Math.max(0, (stem.sweepCount || 1) - 1);
-        for (const node of nodes) {
-          try {
-            node.disconnect();
-          } catch {
-            /* already gone */
-          }
-        }
+      const strike = { nodes, voice, tap, gain, timer: 0, released: false };
+      stem.strikes.push(strike);
+      strike.timer = window.setTimeout(() => {
+        this._releaseStrike(stem, strike);
       }, (dur + 0.08) * 1000);
     }
   }
