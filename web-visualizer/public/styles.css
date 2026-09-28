@@ -1186,8 +1186,16 @@ dd {
 }
 
 [data-panel="falling-blocks"] canvas {
-  cursor: none;
+  cursor: crosshair;
   touch-action: none;
+}
+
+[data-panel="falling-blocks"] canvas.is-grabbing {
+  cursor: grabbing;
+}
+
+[data-panel="falling-blocks"] canvas.is-yawing {
+  cursor: url("/cursor-yaw.svg") 16 16, crosshair;
 }
 
 .falling-pill {

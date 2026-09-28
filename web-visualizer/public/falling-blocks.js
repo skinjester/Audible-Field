@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=65";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
-import { inputBindings } from "./input-bindings.js?v=9";
-import { fallingInput } from "./falling-input.js?v=26";
+import { inputBindings } from "./input-bindings.js?v=10";
+import { fallingInput } from "./falling-input.js?v=28";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -112,22 +112,10 @@ let ruleAcc = 0;
 let cameraDist = CAMERA_DIST_DEFAULT;
 /** Fixed look-at. Zoom changes distance; the ground offset does the traveling. */
 const CAMERA_LOOK = new THREE.Vector3(0, 0.35, 0);
-/**
- * A short pointer move slides this much ground. 1:1 only covers the patch
- * already on screen, so reaching the rest of the grid runs the mouse off the desk.
- */
-const PAN_SHORT_FRACTION = 0.08;
-const PAN_SHORT_UNITS = 6;
-/** After a nudge, the ground keeps this speed and eases to a stop. */
-const PAN_DRIFT_MAX = 10;
-const PAN_DRIFT_TAU = 0.65;
 /** Travel while closer than this fraction of the full-grid distance. */
 const TRAVEL_FIT = 0.92;
 /** Full-grid camera distance from the last zoom or resize. 0 until measured. */
 let gridFitDist = 0;
-/** World units per second left by the latest pointer nudge. It coasts, then eases off. */
-let panVx = 0;
-let panVz = 0;
 /** Corner NDC limit used to find a full-grid framing. */
 const GRID_NDC_LIMIT = 1;
 /**
@@ -1305,65 +1293,30 @@ function keepPinOnField() {
 }
 
 /**
- * How far a pixel of pointer travel slides the ground.
- * Tuned so a short move (PAN_SHORT_FRACTION of the canvas) covers PAN_SHORT_UNITS,
- * which stays large when zoomed in and each pixel would otherwise cover little ground.
+ * Move the ground with this pointer drag, in the same sample.
+ * The plane follows the hand: the ground under the cursor moves with the cursor,
+ * and a bit farther, so a short drag still crosses the grid.
  */
-function pointerPanGain(visibleWidth) {
-  const gain = PAN_SHORT_UNITS / (PAN_SHORT_FRACTION * Math.max(visibleWidth, 0.5));
-  return Math.min(24, Math.max(1, gain));
-}
+const DRAG_GAIN = 2.5;
 
-/**
- * Slide the ground by a pointer delta in canvas pixels.
- * The delta is amplified, and its speed is kept so the surface can drift after the pointer stops.
- */
-function slidePointer(dx, dy, dt) {
+function slidePointer(dx, dy, pointer) {
   if ((!dx && !dy) || !canvas) return;
   const rect = canvas.getBoundingClientRect();
   if (rect.width < 1 || rect.height < 1) return;
-  const ndcDx = (dx / rect.width) * 2;
-  const ndcDy = -(dy / rect.height) * 2;
-  const origin = worldOnPlane(0, 0, 0);
-  const right = worldOnPlane(ndcDx, 0, 0);
-  const up = worldOnPlane(0, ndcDy, 0);
-  const span = worldOnPlane(1, 0, 0);
-  if (!origin || !right || !up || !span) return;
-  const visibleWidth = Math.hypot(span.x - origin.x, span.z - origin.z) * 2;
-  const gain = pointerPanGain(visibleWidth);
-  const wx = (right.x - origin.x + (up.x - origin.x)) * gain;
-  const wz = (right.z - origin.z + (up.z - origin.z)) * gain;
-  slideGround(wx, wz);
-  if (dt <= 0) return;
-  let vx = wx / dt;
-  let vz = wz / dt;
-  const speed = Math.hypot(vx, vz);
-  if (speed > PAN_DRIFT_MAX) {
-    const scale = PAN_DRIFT_MAX / speed;
-    vx *= scale;
-    vz *= scale;
-  }
-  panVx = vx;
-  panVz = vz;
+  const x1 = pointer ? pointer.x - rect.left : rect.width / 2;
+  const y1 = pointer ? pointer.y - rect.top : rect.height / 2;
+  const from = groundAtPixels(x1 - dx, y1 - dy, rect);
+  const to = groundAtPixels(x1, y1, rect);
+  if (!from || !to) return;
+  // slideGround subtracts its step. Passing the reverse makes the grid follow the drag.
+  slideGround((from.x - to.x) * DRAG_GAIN, (from.z - to.z) * DRAG_GAIN);
 }
 
-/**
- * Keep sliding at the nudge's speed, then ease to a stop.
- * A new pointer move replaces this; it does not pile on.
- */
-function driftGround(dt) {
-  if (dt <= 0) return false;
-  const speed = Math.hypot(panVx, panVz);
-  if (speed < 0.08) {
-    panVx = 0;
-    panVz = 0;
-    return false;
-  }
-  slideGround(panVx * dt, panVz * dt);
-  const decay = Math.exp(-dt / PAN_DRIFT_TAU);
-  panVx *= decay;
-  panVz *= decay;
-  return true;
+/** Ground point under a canvas pixel. */
+function groundAtPixels(px, py, rect) {
+  const ndcX = (px / rect.width) * 2 - 1;
+  const ndcY = 1 - (py / rect.height) * 2;
+  return worldOnPlane(ndcX, ndcY, 0);
 }
 
 /** Yaw the playfield around the emitter target, from −n to +n. */
@@ -1833,8 +1786,6 @@ export function clearBoard() {
 
   aimWorldX = 0;
   aimWorldZ = 0;
-  panVx = 0;
-  panVz = 0;
   syncCamera();
   holdTargetAtCenter();
   emitting = false;
@@ -1895,24 +1846,16 @@ function applyInput(dt) {
   const frame = fallingInput.sample(dt, controller, connectedPad());
 
   const stickAim = !!(frame.aimStickX || frame.aimStickY);
-  const aiming = !!(frame.pointerDelta || stickAim);
+  const dragging = !!frame.pointerDelta;
+  const aiming = dragging || stickAim;
 
   // Mouse / pad / keys are additive — none blocks the others.
-  if (frame.pointerDelta) slidePointer(frame.pointerDelta.x, frame.pointerDelta.y, dt);
-  if (stickAim) {
-    panVx = 0;
-    panVz = 0;
-    moveAim(frame.aimStickX, frame.aimStickY, dt);
-  }
-  if (frame.orbitDelta) {
-    panVx = 0;
-    panVz = 0;
-    rotateSurface(frame.orbitDelta);
-  }
+  if (dragging) slidePointer(frame.pointerDelta.x, frame.pointerDelta.y, frame.pointerAt);
+  if (stickAim) moveAim(frame.aimStickX, frame.aimStickY, dt);
+  if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
   if (frame.zoomFactor !== 1) zoomCamera(frame.zoomFactor);
 
-  const drifting = !frame.pointerDelta && !frame.orbitDelta && !stickAim && driftGround(dt);
-  if (!aiming && !drifting) holdTargetAtCenter();
+  if (!aiming && !frame.orbitDelta) holdTargetAtCenter();
   setAimFromWorld();
   syncEmitter();
 
@@ -3075,7 +3018,6 @@ function addQuadrantLabels() {
 function initScene(nextCanvas) {
   canvas = nextCanvas;
   wrap = canvas.parentElement;
-  canvas.style.cursor = "crosshair";
   canvas.style.touchAction = "none";
   fpsEl = document.querySelector("[data-falling-fps]");
   atomsEl = document.querySelector("[data-falling-atoms]");

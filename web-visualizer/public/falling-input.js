@@ -4,7 +4,7 @@
  */
 
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
-import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=9";
+import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=10";
 
 /** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
 
@@ -44,7 +44,7 @@ export class FallingInput {
     this._shiftHeld = false;
     this._mouseFull = false;
     this._mouseLight = false;
-    this._orbiting = false;
+    this._rightHeld = false;
     this._keyEmit = false;
     this._orbitAccum = 0;
     this._zoomAccum = 1;
@@ -84,6 +84,7 @@ export class FallingInput {
    */
   attach(canvas) {
     this.detach();
+    if (document.pointerLockElement) document.exitPointerLock();
     this._canvas = canvas;
     dualsenseHid.routeTouchToMixer = false;
     canvas.addEventListener("pointermove", this._onPointerMove);
@@ -102,6 +103,7 @@ export class FallingInput {
   detach() {
     const canvas = this._canvas;
     if (canvas) {
+      canvas.classList.remove("is-grabbing", "is-yawing");
       canvas.removeEventListener("pointermove", this._onPointerMove);
       canvas.removeEventListener("pointerdown", this._onPointerDown);
       canvas.removeEventListener("pointerup", this._onPointerUp);
@@ -115,6 +117,7 @@ export class FallingInput {
     window.removeEventListener("blur", this._onPointerGone);
     document.documentElement.removeEventListener("pointerleave", this._onPointerGone);
     dualsenseHid.routeTouchToMixer = true;
+    if (document.pointerLockElement) document.exitPointerLock();
     this._canvas = null;
     this.resetTransient();
   }
@@ -124,7 +127,7 @@ export class FallingInput {
     this._shiftHeld = false;
     this._mouseFull = false;
     this._mouseLight = false;
-    this._orbiting = false;
+    this._rightHeld = false;
     this._keyEmit = false;
     this._orbitAccum = 0;
     this._zoomAccum = 1;
@@ -314,7 +317,6 @@ export class FallingInput {
   }
 
   _onPointerGone() {
-    if (document.pointerLockElement === this._canvas) return;
     this._pointerAt = null;
     this._pointer = null;
     this._pointerFresh = false;
@@ -325,26 +327,11 @@ export class FallingInput {
   }
 
   /**
-   * Relative pointer motion. A drag on a form control does not pan the grid.
+   * Pointer position only. The grid does not follow a bare move.
    */
   _onWindowPointerMove(event) {
-    if (this._orbiting) {
-      this._lastClient = { x: event.clientX, y: event.clientY };
-      return;
-    }
-    const target = event.target;
-    const onControl = target instanceof Element && target.closest("input, textarea, select");
-    let dx = event.movementX || 0;
-    let dy = event.movementY || 0;
-    if (!dx && !dy && this._lastClient && !onControl) {
-      dx = event.clientX - this._lastClient.x;
-      dy = event.clientY - this._lastClient.y;
-    }
     this._lastClient = { x: event.clientX, y: event.clientY };
     this._pointerAt = { x: event.clientX, y: event.clientY };
-    if (onControl || !this.bindings.mouse.moveAimsEmitter) return;
-    this._moveX += dx;
-    this._moveY += dy;
   }
 
   _onPointerMove(event) {
@@ -353,24 +340,34 @@ export class FallingInput {
       this._shiftHeld = event.shiftKey;
       this._syncMouseEmit();
     }
-    if (this._orbiting) {
+    if (!this._rightHeld) return;
+    const yawing = event.shiftKey;
+    this._setDragCursor(yawing ? "yaw" : "pan");
+    if (yawing) {
       this._orbitAccum += -event.movementX * m.orbitRadiansPerPx;
       return;
     }
+    this._moveX += event.movementX || 0;
+    this._moveY += event.movementY || 0;
   }
 
-  _engagePointerLock() {
+  /**
+   * @param {"pan" | "yaw" | null} mode
+   */
+  _setDragCursor(mode) {
     const canvas = this._canvas;
-    if (!canvas || document.pointerLockElement === canvas) return;
-    canvas.requestPointerLock?.();
+    if (!canvas) return;
+    canvas.classList.toggle("is-grabbing", mode === "pan");
+    canvas.classList.toggle("is-yawing", mode === "yaw");
   }
 
   _onPointerDown(event) {
     const m = this.bindings.mouse;
     const canvas = this._canvas;
-    this._engagePointerLock();
     if (event.button === m.orbitButton) {
-      this._orbiting = true;
+      this._rightHeld = true;
+      this._shiftHeld = event.shiftKey;
+      this._setDragCursor(event.shiftKey ? "yaw" : "pan");
       event.preventDefault();
       canvas?.setPointerCapture?.(event.pointerId);
       return;
@@ -389,7 +386,8 @@ export class FallingInput {
   _onPointerUp(event) {
     const m = this.bindings.mouse;
     if (event.button === m.orbitButton) {
-      this._orbiting = false;
+      this._rightHeld = false;
+      this._setDragCursor(null);
       return;
     }
     if (event.button === m.emitButton) {
@@ -399,7 +397,8 @@ export class FallingInput {
   }
 
   _onPointerCancel() {
-    this._orbiting = false;
+    this._rightHeld = false;
+    this._setDragCursor(null);
     this._emitHeld = false;
     this._syncMouseEmit();
   }
@@ -418,6 +417,7 @@ export class FallingInput {
     if (event.key === "Shift") {
       this._shiftHeld = true;
       this._syncMouseEmit();
+      if (this._rightHeld) this._setDragCursor("yaw");
     }
     const k = this.bindings.keyboard;
     // Tab only selects materials. It never moves focus, including in fields and dialogs.
@@ -440,6 +440,7 @@ export class FallingInput {
     if (event.key === "Shift") {
       this._shiftHeld = false;
       this._syncMouseEmit();
+      if (this._rightHeld) this._setDragCursor("pan");
     }
     const k = this.bindings.keyboard;
     if (!k.emit || event.code !== k.emit) return;

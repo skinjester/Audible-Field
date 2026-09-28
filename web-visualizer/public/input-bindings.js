@@ -65,8 +65,8 @@ export const inputBindings = {
     /** Held with emitButton: smallest emitter instead of the largest. */
     emitSingleModifier: "shift",
     orbitButton: 2,
-    /** Pointer move always aims the emitter (unless orbiting). */
-    moveAimsEmitter: true,
+    /** Right-drag pans. Shift+right-drag yaws. A bare move does not. */
+    moveAimsEmitter: false,
     wheelZooms: true,
     /** RMB drag: radians of surface yaw per pixel (grid rotates under emitter). */
     orbitRadiansPerPx: 0.005,
