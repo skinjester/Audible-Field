@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=65";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=8";
-import { fallingInput } from "./falling-input.js?v=20";
+import { fallingInput } from "./falling-input.js?v=21";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -110,18 +110,28 @@ let sizeTries = 0;
 let lastNow = 0;
 let ruleAcc = 0;
 let cameraDist = CAMERA_DIST_DEFAULT;
-/** Look-at point. Rests on the playfield center; glides to the emitter after aim stops. */
-const cameraFocus = new THREE.Vector3(0, 0.35, 0);
-const cameraFocusVel = new THREE.Vector3();
-const CAMERA_FOCUS_Y = 0.35;
-/** Wait after the last aim move before the view starts centering. */
-const CAMERA_CENTER_DELAY = 0.32;
-/** Seconds for that glide to settle. It never runs while aim is changing. */
-const CAMERA_CENTER_SMOOTH = 0.6;
-const CAMERA_CENTER_MAX_SPEED = 8;
-let centerIdle = 0;
+/** Fixed look-at. Zoom changes distance; the ground offset does the traveling. */
+const CAMERA_LOOK = new THREE.Vector3(0, 0.35, 0);
+/** Coupled emitter+ground glide while zooming back out to the full grid. */
+const VIEW_GLIDE_MAX_SPEED = 7;
+/** How fast an off-center ground target returns to the screen center while zoomed in. */
+const CENTER_GLIDE_MAX_SPEED = 16;
+/** Pointer distance from the canvas edge that keeps sliding the ground. */
+const EDGE_SCROLL_PX = 28;
+/** Yaw may not shove the ground center farther than this in one step. */
+const YAW_SHIFT_CAP = 0.45;
+/** Travel while closer than this fraction of the full-grid distance. */
+const TRAVEL_FIT = 0.92;
 /** Full-grid camera distance from the last zoom or resize. 0 until measured. */
 let gridFitDist = 0;
+/** Keeps gliding the emitter to screen center after a zoom-in. */
+let zoomFrameActive = false;
+/** Previous pointer, so the first zoomed-in sample is a zero step. */
+/** @type {{ x: number, y: number } | null} */
+let stepAimPointer = null;
+/** Last pointer, including while it rests on the canvas edge. */
+/** @type {{ x: number, y: number } | null} */
+let heldPointer = null;
 /** Corner NDC limit used to find a full-grid framing. */
 const GRID_NDC_LIMIT = 1;
 /**
@@ -296,7 +306,7 @@ const gridXZ = GRID_XZ;
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
 const emitterNdc = new THREE.Vector3();
-/** Horizontal plane at the emitter height. Pointer aims this, not the ground target. */
+/** Horizontal plane. Pointer aims the ground target, and the emitter sits above it. */
 const emitterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const hitPoint = new THREE.Vector3();
 const scratchPos = new THREE.Vector3();
@@ -1096,12 +1106,19 @@ function syncCamera() {
   if (!camera) return;
   const horizontal = Math.cos(CAMERA_PITCH) * cameraDist;
   camera.position.set(
-    cameraFocus.x + Math.sin(CAMERA_YAW) * horizontal,
-    cameraFocus.y + Math.sin(CAMERA_PITCH) * cameraDist,
-    cameraFocus.z + Math.cos(CAMERA_YAW) * horizontal,
+    CAMERA_LOOK.x + Math.sin(CAMERA_YAW) * horizontal,
+    CAMERA_LOOK.y + Math.sin(CAMERA_PITCH) * cameraDist,
+    CAMERA_LOOK.z + Math.cos(CAMERA_YAW) * horizontal,
   );
-  camera.lookAt(cameraFocus);
+  camera.lookAt(CAMERA_LOOK);
   syncViewBrightness();
+}
+
+/** Closest distance that still keeps the camera above the emitter. */
+function emitterClearanceDist() {
+  const rise = emitWorldY() - CAMERA_LOOK.y;
+  if (rise <= 0.05) return CAMERA_DIST_MIN;
+  return (rise + 0.05) / Math.sin(CAMERA_PITCH);
 }
 
 /** Default distance stays at full picture brightness. Pulling back darkens the view. */
@@ -1128,7 +1145,7 @@ function gridCornersFit() {
     [-half, half],
   ];
   for (let i = 0; i < corners.length; i += 1) {
-    const world = surfaceToWorldXZ(corners[i][0], corners[i][1]);
+    const world = surfaceYawXZ(corners[i][0], corners[i][1]);
     emitterNdc.set(world.x, 0, world.z);
     emitterNdc.project(camera);
     if (
@@ -1168,7 +1185,11 @@ function closestGridDist() {
 
 function setCameraDist(next) {
   gridFitDist = closestGridDist();
-  const minDist = Math.max(CAMERA_DIST_MIN, gridFitDist * CAMERA_ZOOM_PAST_FIT);
+  const minDist = Math.max(
+    CAMERA_DIST_MIN,
+    gridFitDist * CAMERA_ZOOM_PAST_FIT,
+    emitterClearanceDist(),
+  );
   const clamped = Math.min(CAMERA_DIST_MAX, Math.max(minDist, next));
   if (Math.abs(clamped - cameraDist) < 1e-4) return cameraDist;
   cameraDist = clamped;
@@ -1183,95 +1204,221 @@ function zoomCamera(factor) {
   return setCameraDist(next);
 }
 
-function smoothDamp(current, target, vel, dt) {
-  const smooth = Math.max(0.0001, CAMERA_CENTER_SMOOTH);
-  const omega = 2 / smooth;
-  const x = omega * dt;
-  const exp = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
-  let change = current - target;
-  const maxChange = CAMERA_CENTER_MAX_SPEED * smooth;
-  change = Math.min(maxChange, Math.max(-maxChange, change));
-  const adjusted = current - change;
-  const temp = (vel + omega * change) * dt;
-  const nextVel = (vel - omega * temp) * exp;
-  let output = adjusted + (change + temp) * exp;
-  if (target - current > 0 === output > target) return { value: target, vel: 0 };
-  return { value: output, vel: nextVel };
+/**
+ * Zoom-in closes on the ground target. The closer the view gets past a full
+ * grid, the more of the target's offset from screen center is removed.
+ * The emitter and the ground move together, so the pour cell stays put.
+ */
+function zoomTargetTowardCenter(fromDist, toDist) {
+  if (!(gridFitDist > 0) || toDist > fromDist - 1e-6 || toDist >= gridFitDist) return;
+  const focus = groundFocus();
+  if (!focus) return;
+  const floor = Math.max(CAMERA_DIST_MIN, gridFitDist * CAMERA_ZOOM_PAST_FIT, emitterClearanceDist());
+  const start = Math.min(fromDist, gridFitDist);
+  const span = Math.max(1e-4, start - floor);
+  const gained = Math.min(1, (start - toDist) / span);
+  glideCouple((focus.x - aimWorldX) * gained, (focus.z - aimWorldZ) * gained);
 }
 
-function easeFocusToward(x, z, dt) {
-  const dx = x - cameraFocus.x;
-  const dy = CAMERA_FOCUS_Y - cameraFocus.y;
-  const dz = z - cameraFocus.z;
-  if (dx * dx + dy * dy + dz * dz < 0.02 * 0.02 && cameraFocusVel.lengthSq() < 1e-4) {
-    if (dx * dx + dy * dy + dz * dz > 1e-8) {
-      cameraFocus.set(x, CAMERA_FOCUS_Y, z);
-      cameraFocusVel.set(0, 0, 0);
-      syncCamera();
-    }
+function viewIsClose() {
+  return gridFitDist > 0 && cameraDist < gridFitDist * TRAVEL_FIT;
+}
+
+function viewIsWide() {
+  return gridFitDist > 0 && cameraDist > gridFitDist;
+}
+
+/** Step aim while inside the full-grid distance, including the hysteresis band. */
+function stepAimActive() {
+  return gridFitDist > 0 && cameraDist < gridFitDist;
+}
+
+/** Zoomed past a full-grid view: the ground target stays on screen center and the plane pans. */
+function centerLockActive() {
+  return stepAimActive();
+}
+
+function cancelViewGlide() {
+  zoomFrameActive = false;
+}
+
+/** Screen position of the ground target. That point is the zoom and pan focal. */
+function projectTarget() {
+  camera.updateMatrixWorld(true);
+  emitterNdc.set(aimWorldX, 0, aimWorldZ);
+  emitterNdc.project(camera);
+  return { x: emitterNdc.x, y: emitterNdc.y, z: emitterNdc.z };
+}
+
+function emitterOffCenter() {
+  const focus = groundFocus();
+  if (!focus) return false;
+  return Math.hypot(aimWorldX - focus.x, aimWorldZ - focus.z) > 0.04;
+}
+
+/** World XZ where a screen point meets a horizontal plane. */
+function worldOnPlane(ndcX, ndcY, y) {
+  emitterPlane.constant = -y;
+  pointerNdc.set(ndcX, ndcY);
+  raycaster.setFromCamera(pointerNdc, camera);
+  if (!raycaster.ray.intersectPlane(emitterPlane, hitPoint)) return null;
+  if (!Number.isFinite(hitPoint.x) || !Number.isFinite(hitPoint.z)) return null;
+  return { x: hitPoint.x, z: hitPoint.z };
+}
+
+/** Ground point at the center of the screen. Zoom and panning keep the target here. */
+function groundFocus() {
+  return worldOnPlane(0, 0, 0);
+}
+
+/** Emitter sits directly above the ground target, not on the view ray. */
+function emitterDrawXZ() {
+  return { x: aimWorldX, z: aimWorldZ };
+}
+
+/** Move the emitter and the ground by the same world delta so the cell stays put. */
+function glideCouple(dx, dz) {
+  if (!surface || !dx && !dz) return;
+  surface.position.x += dx;
+  surface.position.z += dz;
+  aimWorldX += dx;
+  aimWorldZ += dz;
+}
+
+function glideCoupleToward(tx, tz, dt, maxSpeed = VIEW_GLIDE_MAX_SPEED) {
+  let dx = tx - aimWorldX;
+  let dz = tz - aimWorldZ;
+  const len = Math.hypot(dx, dz);
+  if (len < 0.02) {
+    glideCouple(dx, dz);
+    return true;
+  }
+  const maxStep = maxSpeed * dt;
+  if (len > maxStep) {
+    dx *= maxStep / len;
+    dz *= maxStep / len;
+  }
+  glideCouple(dx, dz);
+  return false;
+}
+
+function glideCoupleTowardCenter(dt) {
+  if (!emitterOffCenter()) {
+    zoomFrameActive = false;
     return;
   }
-  const sx = smoothDamp(cameraFocus.x, x, cameraFocusVel.x, dt);
-  const sy = smoothDamp(cameraFocus.y, CAMERA_FOCUS_Y, cameraFocusVel.y, dt);
-  const sz = smoothDamp(cameraFocus.z, z, cameraFocusVel.z, dt);
-  cameraFocus.set(sx.value, sy.value, sz.value);
-  cameraFocusVel.set(sx.vel, sy.vel, sz.vel);
-  syncCamera();
+  const focus = groundFocus();
+  if (!focus) return;
+  if (glideCoupleToward(focus.x, focus.z, dt, CENTER_GLIDE_MAX_SPEED)) zoomFrameActive = false;
 }
 
-/** Look-at XZ that puts the emitter at the center of the screen. */
-function focusToCenterEmitter() {
-  camera.updateMatrixWorld(true);
-  const y = emitWorldY();
-  emitterNdc.set(aimWorldX, y, aimWorldZ);
-  emitterNdc.project(camera);
-  if (emitterNdc.z > 1) return { x: aimWorldX, z: aimWorldZ };
-  emitterPlane.constant = -y;
-  pointerNdc.set(emitterNdc.x, emitterNdc.y);
-  raycaster.setFromCamera(pointerNdc, camera);
-  if (!raycaster.ray.intersectPlane(emitterPlane, hitPoint)) return { x: aimWorldX, z: aimWorldZ };
-  const fromX = hitPoint.x;
-  const fromZ = hitPoint.z;
-  pointerNdc.set(0, 0);
-  raycaster.setFromCamera(pointerNdc, camera);
-  if (!raycaster.ray.intersectPlane(emitterPlane, hitPoint)) return { x: aimWorldX, z: aimWorldZ };
-  return {
-    x: cameraFocus.x + (fromX - hitPoint.x),
-    z: cameraFocus.z + (fromZ - hitPoint.z),
-  };
+function glideCoupleHome(dt) {
+  if (!surface) return;
+  const dx = -surface.position.x;
+  const dz = -surface.position.z;
+  if (Math.hypot(dx, dz) < 0.02) {
+    glideCouple(dx, dz);
+    return;
+  }
+  glideCoupleToward(aimWorldX + dx, aimWorldZ + dz, dt);
 }
 
 /**
- * Frame the emitter only once steering has stopped, and only when zoomed in
- * past a full-grid view. Aim locks the camera immediately so the ground
- * cannot slide under the pointer.
+ * Slide the ground under the screen center. dx/dz is the aim's world step.
+ * The cell currently at the center stays with that step, then the step pans.
+ * A step past the playfield stops at the edge instead of jumping there.
  */
-function settleCamera(dt, aiming, zooming) {
-  if (!camera || dt <= 0) return;
-  if (aiming) {
-    centerIdle = 0;
-    if (cameraFocusVel.lengthSq() > 0) cameraFocusVel.set(0, 0, 0);
-    return;
+function slideGround(dx, dz) {
+  if (!surface) return;
+  const focus = groundFocus();
+  if (!focus) return;
+  let nx = surface.position.x + (focus.x - aimWorldX) - dx;
+  let nz = surface.position.z + (focus.z - aimWorldZ) - dz;
+  const sy = surface.rotation.y;
+  const c = Math.cos(sy);
+  const s = Math.sin(sy);
+  let lx = c * (focus.x - nx) - s * (focus.z - nz);
+  let lz = s * (focus.x - nx) + c * (focus.z - nz);
+  const limit = PLAYFIELD_HALF - 0.001;
+  if (Math.abs(lx) > limit || Math.abs(lz) > limit) {
+    const clampedX = Math.min(limit, Math.max(-limit, lx));
+    const clampedZ = Math.min(limit, Math.max(-limit, lz));
+    const yawed = surfaceYawXZ(clampedX, clampedZ);
+    nx = focus.x - yawed.x;
+    nz = focus.z - yawed.z;
   }
-
-  const close = gridFitDist > 0 && cameraDist < gridFitDist - 0.2;
-  if (!close) {
-    centerIdle = 0;
-    easeFocusToward(0, 0, dt);
-    return;
-  }
-
-  centerIdle += dt;
-  if (!zooming && centerIdle < CAMERA_CENTER_DELAY) return;
-  const focus = focusToCenterEmitter();
-  easeFocusToward(focus.x, focus.z, dt);
+  surface.position.x = nx;
+  surface.position.z = nz;
+  aimWorldX = focus.x;
+  aimWorldZ = focus.z;
 }
 
-/** Yaw the playfield / grid; emitter stays fixed in world space. */
+/** If yaw carried the playfield off the screen center, stop at the edge. */
+function keepPinOnField() {
+  if (!surface || !centerLockActive()) return;
+  const focus = groundFocus();
+  if (!focus) return;
+  const local = worldToSurfaceXZ(focus.x, focus.z);
+  const limit = PLAYFIELD_HALF - 0.001;
+  if (Math.abs(local.x) <= limit && Math.abs(local.z) <= limit) return;
+  const lx = Math.min(limit, Math.max(-limit, local.x));
+  const lz = Math.min(limit, Math.max(-limit, local.z));
+  const yawed = surfaceYawXZ(lx, lz);
+  surface.position.x = focus.x - yawed.x;
+  surface.position.z = focus.z - yawed.z;
+  aimWorldX = focus.x;
+  aimWorldZ = focus.z;
+}
+
+/**
+ * Screen-edge hold. sx/sy are -1..1, +sx right, +sy up.
+ * Zero when the pointer sits in the middle of the view.
+ */
+function edgeScrollAxes(pointer) {
+  if (!canvas) return { sx: 0, sy: 0 };
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return { sx: 0, sy: 0 };
+  const x = pointer.x - rect.left;
+  const y = pointer.y - rect.top;
+  const m = Math.min(EDGE_SCROLL_PX, rect.width * 0.08, rect.height * 0.08);
+  let sx = 0;
+  let sy = 0;
+  if (x < m) sx = -Math.min(1, (m - x) / m);
+  else if (x > rect.width - m) sx = Math.min(1, (x - (rect.width - m)) / m);
+  if (y < m) sy = Math.min(1, (m - y) / m);
+  else if (y > rect.height - m) sy = -Math.min(1, (y - (rect.height - m)) / m);
+  return { sx, sy };
+}
+
+/** Keep panning while the pointer rests on the edge. A centered pointer does nothing. */
+function edgeSlide(dt) {
+  if (!heldPointer || dt <= 0 || !centerLockActive()) return false;
+  const { sx, sy } = edgeScrollAxes(heldPointer);
+  if (!sx && !sy) return false;
+  const step = AIM_SPEED * dt;
+  const camSin = Math.sin(CAMERA_YAW);
+  const camCos = Math.cos(CAMERA_YAW);
+  slideGround((camCos * sx - camSin * sy) * step, (-camSin * sx - camCos * sy) * step);
+  return true;
+}
+
+/** Yaw the playfield around the origin. The emitter stays in world space. */
 function rotateSurface(deltaYaw) {
   if (!surface || !deltaYaw) return;
-  surface.rotation.y += deltaYaw;
-  // Grid spun under the fixed world aim — refresh which cell is targeted.
+  let applied = deltaYaw;
+  const radius = Math.hypot(surface.position.x, surface.position.z);
+  if (radius > 1e-4) {
+    const shift = radius * Math.abs(deltaYaw);
+    if (shift > YAW_SHIFT_CAP) applied = Math.sign(deltaYaw) * (YAW_SHIFT_CAP / radius);
+  }
+  const c = Math.cos(applied);
+  const s = Math.sin(applied);
+  const x = surface.position.x;
+  const z = surface.position.z;
+  surface.position.x = c * x + s * z;
+  surface.position.z = -s * x + c * z;
+  surface.rotation.y += applied;
+  keepPinOnField();
   setAimFromWorld();
   syncEmitter();
   syncSceneBackground();
@@ -1311,24 +1458,36 @@ function syncSceneBackground() {
   renderer?.setClearColor(scratchBg, 1);
 }
 
-/**
- * World XZ → surface-local XZ.
- * Inverse of Three.js Y rotation: local (lx, lz) becomes
- * world (cos θ · lx + sin θ · lz, −sin θ · lx + cos θ · lz).
- */
-function worldToSurfaceXZ(wx, wz) {
-  const sy = surface ? surface.rotation.y : 0;
-  const c = Math.cos(sy);
-  const s = Math.sin(sy);
-  return { x: c * wx - s * wz, z: s * wx + c * wz };
-}
-
-/** Surface-local XZ → world XZ (same Y rotation as the playfield group). */
-function surfaceToWorldXZ(lx, lz) {
+/** Yaw only. Ignores the ground offset so the full-grid fit test stays stable. */
+function surfaceYawXZ(lx, lz) {
   const sy = surface ? surface.rotation.y : 0;
   const c = Math.cos(sy);
   const s = Math.sin(sy);
   return { x: c * lx + s * lz, z: -s * lx + c * lz };
+}
+
+/**
+ * World XZ → surface-local XZ.
+ * Inverse of position + Y rotation: world = position + R · local.
+ */
+function worldToSurfaceXZ(wx, wz) {
+  const px = surface ? surface.position.x : 0;
+  const pz = surface ? surface.position.z : 0;
+  const sy = surface ? surface.rotation.y : 0;
+  const c = Math.cos(sy);
+  const s = Math.sin(sy);
+  const dx = wx - px;
+  const dz = wz - pz;
+  return { x: c * dx - s * dz, z: s * dx + c * dz };
+}
+
+/** Surface-local XZ → world XZ, including the ground offset. */
+function surfaceToWorldXZ(lx, lz) {
+  const yawed = surfaceYawXZ(lx, lz);
+  return {
+    x: yawed.x + (surface ? surface.position.x : 0),
+    z: yawed.z + (surface ? surface.position.z : 0),
+  };
 }
 
 /**
@@ -1338,13 +1497,16 @@ function surfaceToWorldXZ(lx, lz) {
 function setAimFromWorld() {
   const limit = PLAYFIELD_HALF - 0.001;
   let { x: lx, z: lz } = worldToSurfaceXZ(aimWorldX, aimWorldZ);
-  // Keep the emitter over the square playfield when it would drift off.
-  if (Math.abs(lx) > limit || Math.abs(lz) > limit) {
+  // Wide view keeps the emitter on the square. A close slide must not pull it.
+  if (!stepAimActive() && (Math.abs(lx) > limit || Math.abs(lz) > limit)) {
     lx = Math.min(limit, Math.max(-limit, lx));
     lz = Math.min(limit, Math.max(-limit, lz));
     const world = surfaceToWorldXZ(lx, lz);
     aimWorldX = world.x;
     aimWorldZ = world.z;
+  } else {
+    lx = Math.min(limit, Math.max(-limit, lx));
+    lz = Math.min(limit, Math.max(-limit, lz));
   }
   let ix = Math.floor((lx + PLAYFIELD_HALF) / atomSize);
   let iz = Math.floor((lz + PLAYFIELD_HALF) / atomSize);
@@ -1362,10 +1524,39 @@ function moveAim(lx, ly, dt) {
   const camSin = Math.sin(CAMERA_YAW);
   const camCos = Math.cos(CAMERA_YAW);
   const step = AIM_SPEED * dt;
-  aimWorldX += (camCos * lx - camSin * ly) * step;
-  aimWorldZ += (-camSin * lx - camCos * ly) * step;
+  const dx = (camCos * lx - camSin * ly) * step;
+  const dz = (-camSin * lx - camCos * ly) * step;
+  if (centerLockActive()) {
+    slideGround(dx, dz);
+    setAimFromWorld();
+    syncEmitter();
+    return;
+  }
+  aimWorldX += dx;
+  aimWorldZ += dz;
   setAimFromWorld();
   syncEmitter();
+}
+
+/** Zoomed-in pointer aim: a screen step, with a zero step on the first sample. */
+function stepAimFromPointer(pointer) {
+  if (!stepAimPointer) {
+    stepAimPointer = { x: pointer.x, y: pointer.y };
+    return;
+  }
+  const dx = pointer.x - stepAimPointer.x;
+  const dy = pointer.y - stepAimPointer.y;
+  stepAimPointer = { x: pointer.x, y: pointer.y };
+  if (!dx && !dy || !canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return;
+  const ndcDx = (dx / rect.width) * 2;
+  const ndcDy = -(dy / rect.height) * 2;
+  const origin = worldOnPlane(0, 0, 0);
+  const right = worldOnPlane(ndcDx, 0, 0);
+  const up = worldOnPlane(0, ndcDy, 0);
+  if (!origin || !right || !up) return;
+  slideGround(right.x - origin.x + (up.x - origin.x), right.z - origin.z + (up.z - origin.z));
 }
 
 function aimFromClient(clientX, clientY) {
@@ -1375,7 +1566,7 @@ function aimFromClient(clientX, clientY) {
   pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointerNdc, camera);
-  emitterPlane.constant = -emitWorldY();
+  emitterPlane.constant = 0;
   if (!raycaster.ray.intersectPlane(emitterPlane, hitPoint)) return;
   // Store world hit — do not bake into surface-local (decoupled from grid yaw).
   aimWorldX = hitPoint.x;
@@ -1516,7 +1707,8 @@ function rebuildEmitterGeometry() {
 
 function syncEmitter() {
   if (!emitter) return;
-  emitter.position.set(aimWorldX, emitWorldY(), aimWorldZ);
+  const draw = emitterDrawXZ();
+  emitter.position.set(draw.x, emitWorldY(), draw.z);
   // Footprint follows the grid yaw so the box covers the cells pourBrush fills.
   emitter.rotation.y = surface ? surface.rotation.y : 0;
   const matIndex = catalog?.indexById.get(activeMaterialId) || 0;
@@ -1686,9 +1878,9 @@ export function clearBoard() {
 
   aimWorldX = 0;
   aimWorldZ = 0;
-  cameraFocus.set(0, 0.35, 0);
-  cameraFocusVel.set(0, 0, 0);
-  centerIdle = 0;
+  zoomFrameActive = false;
+  stepAimPointer = null;
+  heldPointer = null;
   syncCamera();
   emitting = false;
   emitAcc = 0;
@@ -1746,15 +1938,44 @@ function applyInput(dt) {
 
   const frame = fallingInput.sample(dt, controller, connectedPad());
 
-  // Mouse / pad / keys are additive — none blocks the others.
-  if (frame.pointer) aimFromClient(frame.pointer.x, frame.pointer.y);
-  if (frame.aimStickX || frame.aimStickY) {
-    moveAim(frame.aimStickX, frame.aimStickY, dt);
+  const stickAim = !!(frame.aimStickX || frame.aimStickY);
+  const aiming = !!(frame.pointer || stickAim);
+  const zoomingIn = frame.zoomFactor < 1 - 1e-6;
+  if (aiming) cancelViewGlide();
+  if (frame.pointerAt) heldPointer = { x: frame.pointerAt.x, y: frame.pointerAt.y };
+  else {
+    heldPointer = null;
+    stepAimPointer = null;
   }
+
+  // Mouse / pad / keys are additive — none blocks the others.
+  if (frame.pointer) {
+    if (centerLockActive()) stepAimFromPointer(frame.pointer);
+    else {
+      stepAimPointer = { x: frame.pointer.x, y: frame.pointer.y };
+      aimFromClient(frame.pointer.x, frame.pointer.y);
+    }
+  }
+  if (stickAim) moveAim(frame.aimStickX, frame.aimStickY, dt);
   if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
-  if (frame.zoomFactor !== 1) zoomCamera(frame.zoomFactor);
-  const aiming = !!(frame.pointer || frame.aimStickX || frame.aimStickY);
-  settleCamera(dt, aiming, frame.zoomFactor !== 1);
+  if (frame.zoomFactor !== 1) {
+    const fromDist = cameraDist;
+    zoomCamera(frame.zoomFactor);
+    if (zoomingIn && !aiming) {
+      zoomTargetTowardCenter(fromDist, cameraDist);
+      if (centerLockActive()) zoomFrameActive = true;
+    }
+  }
+
+  const edged = centerLockActive() && !frame.orbitDelta && !frame.pointer && !stickAim && edgeSlide(dt);
+  if (!aiming && !edged && viewIsWide()) {
+    zoomFrameActive = false;
+    glideCoupleHome(dt);
+  } else if (!aiming && !edged && (zoomFrameActive || centerLockActive())) {
+    glideCoupleTowardCenter(dt);
+  }
+  setAimFromWorld();
+  syncEmitter();
 
   // Shift previews a single stream. A trigger pull resizes with pressure.
   // Atoms wait until that footprint stops changing.
@@ -1861,7 +2082,24 @@ function pourBrush(ix, iz) {
 /** Ground-plane ripple. Sits just above the floor mesh for every settled arrival. */
 const SPLASH_PLANE_Y = 0.02;
 
-function spawnSplash(x, y, z) {
+/**
+ * World XZ where a landing ring belongs.
+ * A cleared cell stores position 0, and 0,0 is the center of the ground, so an
+ * empty cell uses its grid center instead of that cleared origin.
+ */
+function splashAnchor(x, y, z) {
+  const i = idx(x, y, z);
+  const pitch = cellAtomSize(i);
+  const centerX = worldXForCell(x, pitch);
+  const centerZ = worldZForCell(z, pitch);
+  if (getCell(x, y, z) <= 0 || !posX || !posZ) return { wx: centerX, wz: centerZ };
+  const px = posX[i];
+  const pz = posZ[i];
+  if (!Number.isFinite(px) || !Number.isFinite(pz)) return { wx: centerX, wz: centerZ };
+  return { wx: px, wz: pz };
+}
+
+function spawnSplash(x, z, wx, wz) {
   if (!surface || !splashGeo) return;
   const material = new THREE.MeshBasicMaterial({
     color: 0xf0d8cc,
@@ -1872,9 +2110,8 @@ function spawnSplash(x, y, z) {
   });
   const mesh = new THREE.Mesh(splashGeo, material);
   mesh.rotation.x = -Math.PI / 2;
-  cellWorld(x, y, z, mesh.position);
-  mesh.position.y = SPLASH_PLANE_Y;
-  const sz = cellAtomSize(idx(x, y, z));
+  mesh.position.set(wx, SPLASH_PLANE_Y, wz);
+  const sz = cellAtomSize(idx(x, 0, z));
   mesh.scale.setScalar(atomSize > 1e-6 ? sz / atomSize : 1);
   surface.add(mesh);
   splashes.push({ mesh, age: 0 });
@@ -2559,6 +2796,14 @@ function runRules() {
   if (!catalog) return false;
   const occupiedList = collectOccupied();
   const { splashes: splashCells, moves } = stepWorld(gridApi, occupiedList, catalog);
+  // Later steps can delete the landing grain and zero its position. Read the
+  // landing spot first so the ring does not fall back to the ground origin.
+  for (let s = 0; s < splashCells.length; s += 1) {
+    const cell = splashCells[s];
+    const anchor = splashAnchor(cell.x, cell.y, cell.z);
+    cell.wx = anchor.wx;
+    cell.wz = anchor.wz;
+  }
   for (let m = 0; m < moves.length; m += 1) {
     if (moves[m].to.y < moves[m].from.y && materialSonifies(moves[m].mat)) audioFall += 1;
   }
@@ -2569,11 +2814,11 @@ function runRules() {
   consumeOutOfBounds();
   reconcileMeshes();
   for (const cell of splashCells) {
+    const wx = cell.wx;
+    const wz = cell.wz;
     const cellPitch = cellAtomSize(idx(cell.x, cell.y, cell.z));
-    const wx = worldXForCell(cell.x, cellPitch);
-    const wz = worldZForCell(cell.z, cellPitch);
-    // Cull with the cell center. The ring itself sits on the floor, and that
-    // height minus the atom half-size falls outside the playfield.
+    // The ring sits on the floor. Test the landing point at the cell's own
+    // height so the floor plane itself is not treated as outside the sim.
     const wy = (cell.y + 0.5) * cellPitch;
     if (!isDrawnInSim(wx, wy, wz, cellPitch * 0.5)) continue;
     audioSplash += 1;
@@ -2583,7 +2828,7 @@ function runRules() {
       life: SPLASH_LIFE,
       rate: pitchForWorld(wx, wz),
     });
-    spawnSplash(cell.x, cell.y, cell.z);
+    spawnSplash(cell.x, cell.z, wx, wz);
   }
   return culledShuffle || vacuumed || converted;
 }
@@ -3037,6 +3282,48 @@ function installSimHook() {
       reconcileMeshes();
       rebuildColumnFlags();
     },
+    setEmitHeight(units) {
+      emitHeightU = Math.min(EMIT_HEIGHT_MAX_U, Math.max(0.5, Number(units) || EMIT_HEIGHT_DEFAULT_U));
+      setCameraDist(cameraDist);
+      syncEmitter();
+      return emitHeightU;
+    },
+    view() {
+      const ndc = camera ? projectTarget() : { x: 0, y: 0, z: 0 };
+      let lookX = 0;
+      let lookZ = 0;
+      if (camera) {
+        const dir = new THREE.Vector3();
+        camera.getWorldDirection(dir);
+        if (Math.abs(dir.y) > 1e-6) {
+          const t = (CAMERA_LOOK.y - camera.position.y) / dir.y;
+          lookX = camera.position.x + dir.x * t;
+          lookZ = camera.position.z + dir.z * t;
+        }
+      }
+      const local = worldToSurfaceXZ(aimWorldX, aimWorldZ);
+      return {
+        cameraDist,
+        gridFitDist,
+        clearance: emitterClearanceDist(),
+        lookX,
+        lookZ,
+        cameraY: camera ? camera.position.y : 0,
+        surfaceX: surface ? surface.position.x : 0,
+        surfaceZ: surface ? surface.position.z : 0,
+        yaw: surface ? surface.rotation.y : 0,
+        aimX: aimWorldX,
+        aimZ: aimWorldZ,
+        localX: local.x,
+        localZ: local.z,
+        cellX: aim ? aim.ix : -1,
+        cellZ: aim ? aim.iz : -1,
+        ndcX: ndc.x,
+        ndcY: ndc.y,
+        close: viewIsClose(),
+        wide: viewIsWide(),
+      };
+    },
     state() {
       const samples = [];
       for (const i of occupied) {
@@ -3255,8 +3542,8 @@ function pitchForWorld(wx, wz) {
 function screenPan(lx, lz, yaw) {
   const c = Math.cos(yaw);
   const s = Math.sin(yaw);
-  const wx = c * lx + s * lz;
-  const wz = -s * lx + c * lz;
+  const wx = c * lx + s * lz + (surface ? surface.position.x : 0);
+  const wz = -s * lx + c * lz + (surface ? surface.position.z : 0);
   const camC = Math.cos(CAMERA_YAW);
   const camS = Math.sin(CAMERA_YAW);
   const screenX = wx * camC - wz * camS;

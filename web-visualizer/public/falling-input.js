@@ -11,6 +11,7 @@ import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?
 /**
  * @typedef {{
  *   pointer: { x: number, y: number } | null,
+ *   pointerAt: { x: number, y: number } | null,
  *   emit: boolean,
  *   brushMode: BrushMode,
  *   analog: number,
@@ -51,6 +52,9 @@ export class FallingInput {
     this._pointer = null;
     /** True only for frames where the pointer actually moved (or clicked). */
     this._pointerFresh = false;
+    /** Last pointer, kept while it rests so the view edge can keep panning. */
+    /** @type {{ x: number, y: number } | null} */
+    this._pointerAt = null;
     this._prevClear = false;
     this._prevAudio = false;
     this._prevCyclePrev = false;
@@ -63,6 +67,8 @@ export class FallingInput {
     this._onContextMenu = this._onContextMenu.bind(this);
     this._onKeyDown = this._onKeyDown.bind(this);
     this._onKeyUp = this._onKeyUp.bind(this);
+    this._onWindowPointerMove = this._onWindowPointerMove.bind(this);
+    this._onPointerGone = this._onPointerGone.bind(this);
   }
 
   /**
@@ -80,6 +86,9 @@ export class FallingInput {
     canvas.addEventListener("contextmenu", this._onContextMenu);
     window.addEventListener("keydown", this._onKeyDown);
     window.addEventListener("keyup", this._onKeyUp);
+    window.addEventListener("pointermove", this._onWindowPointerMove);
+    window.addEventListener("blur", this._onPointerGone);
+    document.documentElement.addEventListener("pointerleave", this._onPointerGone);
   }
 
   detach() {
@@ -94,6 +103,9 @@ export class FallingInput {
     }
     window.removeEventListener("keydown", this._onKeyDown);
     window.removeEventListener("keyup", this._onKeyUp);
+    window.removeEventListener("pointermove", this._onWindowPointerMove);
+    window.removeEventListener("blur", this._onPointerGone);
+    document.documentElement.removeEventListener("pointerleave", this._onPointerGone);
     dualsenseHid.routeTouchToMixer = true;
     this._canvas = null;
     this.resetTransient();
@@ -110,6 +122,7 @@ export class FallingInput {
     this._zoomAccum = 1;
     this._pointer = null;
     this._pointerFresh = false;
+    this._pointerAt = null;
     this._prevClear = false;
     this._prevAudio = false;
     this._prevCyclePrev = false;
@@ -234,6 +247,7 @@ export class FallingInput {
 
     return {
       pointer,
+      pointerAt: this._pointerAt,
       emit,
       brushMode,
       analog,
@@ -277,6 +291,29 @@ export class FallingInput {
       this.bindings.mouse.emitSingleModifier === "shift";
     this._mouseFull = this._emitHeld && !single;
     this._mouseLight = single;
+  }
+
+  _onPointerGone() {
+    this._pointerAt = null;
+    this._pointer = null;
+    this._pointerFresh = false;
+  }
+
+  /**
+   * Track the pointer past the canvas so a zoomed-in pan can continue up to
+   * the window edge, and keep the last point when the cursor stops there.
+   */
+  _onWindowPointerMove(event) {
+    if (this._orbiting) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest("button, a, input, textarea, select, label")) {
+      this._pointerAt = null;
+      return;
+    }
+    this._pointerAt = { x: event.clientX, y: event.clientY };
+    if (!this.bindings.mouse.moveAimsEmitter) return;
+    this._pointer = this._pointerAt;
+    this._pointerFresh = true;
   }
 
   _onPointerMove(event) {
