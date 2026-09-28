@@ -11,15 +11,13 @@
  *
  * Touchpad (DualSense, after Connect touchpad):
  *   finger          → aim the emitter on the emit-height plane
- *   finger hold     → emit atoms (largest brush, same as Cross / LMB)
- *   touchpad click  → emit atoms while the pad is pressed in
+ *   touchpad click  → emit a clump (largest brush) while the pad is pressed in
  *
- * Triangle mirrors the RT width curve (emitter profile).
+ * Right trigger emits. A light pull is a single stream; a full pull is the wide field.
+ * Left trigger emits on the opposite curve: a hard pull is a single stream.
  * Square toggles field audio. Circle clears the board.
  *
- * D-pad up / down, and the up / down arrow keys, step the emitter height
- * (tap = one row, hold repeats).
- * D-pad left / right still aims across the playfield.
+ * D-pad left / right aims across the playfield.
  */
 
 /** @typedef {"pressure" | "max" | "single"} BrushMode */
@@ -73,9 +71,6 @@ export const inputBindings = {
     /** KeyboardEvent.code — hold to emit. Empty string disables. */
     emit: "KeyX",
     emitBrush: /** @type {BrushMode} */ ("max"),
-    /** Same height steps as D-pad up / down. */
-    heightUp: "ArrowUp",
-    heightDown: "ArrowDown",
   },
   gamepad: {
     /** Deadzone for the mixer poll in gamepad-input.js. */
@@ -84,23 +79,17 @@ export const inputBindings = {
     stickDeadzone: 0.12,
     /** Names from gamepadButtons. */
     emitDigital: "cross",
-    emitAnalog: "rt",
+    /** Either trigger emits once it passes this. RT and LT use opposite curves. */
     emitAnalogThreshold: 0.08,
     emitDigitalBrush: /** @type {BrushMode} */ ("max"),
     clear: "circle",
     /** Toggles sonification of the field. */
     audioToggle: "square",
-    /** Mirrors the emitter pressure curve. */
-    invertCurve: "triangle",
     cyclePrev: "l1",
     cycleNext: "r1",
     /** Right-stick X → surface yaw rate (rad/s at full deflection). */
     orbitStickRate: 1.15,
     /** Right-stick Y → zoom exp rate. */
     zoomStickRate: 1.15,
-    /** D-pad up/down: seconds before a hold starts repeating height steps. */
-    heightInitialDelay: 0.22,
-    /** D-pad up/down: seconds between height steps while held. */
-    heightRepeat: 0.06,
   },
 };

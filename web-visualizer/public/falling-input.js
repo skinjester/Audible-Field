@@ -4,7 +4,7 @@
  */
 
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
-import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=5";
+import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=8";
 
 /** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
 
@@ -14,17 +14,19 @@ import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?
  *   emit: boolean,
  *   brushMode: BrushMode,
  *   analog: number,
+ *   curveInvert: boolean,
  *   orbitDelta: number,
  *   zoomFactor: number,
  *   aimStickX: number,
  *   aimStickY: number,
  *   clearEdge: boolean,
  *   audioEdge: boolean,
- *   invertEdge: boolean,
  *   cycleDelta: number,
  *   cyclePrevHeld: boolean,
  *   cycleNextHeld: boolean,
- *   heightDelta: number,
+ *   ltHeld: boolean,
+ *   rtHeld: boolean,
+ *   shiftHeld: boolean,
  *   touchAim: boolean,
  * }} FallingInputFrame
  */
@@ -43,8 +45,6 @@ export class FallingInput {
     this._mouseLight = false;
     this._orbiting = false;
     this._keyEmit = false;
-    this._keyHeightUp = false;
-    this._keyHeightDown = false;
     this._orbitAccum = 0;
     this._zoomAccum = 1;
     /** @type {{ x: number, y: number } | null} */
@@ -53,16 +53,8 @@ export class FallingInput {
     this._pointerFresh = false;
     this._prevClear = false;
     this._prevAudio = false;
-    this._prevInvert = false;
     this._prevCyclePrev = false;
     this._prevCycleNext = false;
-    this._prevDpadUp = false;
-    this._prevDpadDown = false;
-    /** Signed height direction currently held (-1, 0, +1). */
-    this._heightDir = 0;
-    this._heightHold = 0;
-    this._heightRepeating = false;
-
     this._onPointerMove = this._onPointerMove.bind(this);
     this._onPointerDown = this._onPointerDown.bind(this);
     this._onPointerUp = this._onPointerUp.bind(this);
@@ -114,22 +106,14 @@ export class FallingInput {
     this._mouseLight = false;
     this._orbiting = false;
     this._keyEmit = false;
-    this._keyHeightUp = false;
-    this._keyHeightDown = false;
     this._orbitAccum = 0;
     this._zoomAccum = 1;
     this._pointer = null;
     this._pointerFresh = false;
     this._prevClear = false;
     this._prevAudio = false;
-    this._prevInvert = false;
     this._prevCyclePrev = false;
     this._prevCycleNext = false;
-    this._prevDpadUp = false;
-    this._prevDpadDown = false;
-    this._heightDir = 0;
-    this._heightHold = 0;
-    this._heightRepeating = false;
   }
 
   /**
@@ -165,8 +149,6 @@ export class FallingInput {
 
     const lx = mergeAxis(axis(mixer?.rawX), padLx);
     const ly = mergeAxis(axis(mixer?.rawY), padLy);
-    const dpadUp = !!(mixer?.dpad?.up || pressed(gamepadButtons.dpadUp));
-    const dpadDown = !!(mixer?.dpad?.down || pressed(gamepadButtons.dpadDown));
     const dpad = dpadAxes(null, {
       up: false,
       down: false,
@@ -175,11 +157,6 @@ export class FallingInput {
     });
     const aimStickX = clamp(lx + dpad.lx, -1, 1);
     const aimStickY = clamp(ly + dpad.ly, -1, 1);
-    const heightDelta = this._sampleHeightDelta(
-      dt,
-      dpadUp || this._keyHeightUp,
-      dpadDown || this._keyHeightDown,
-    );
 
     const rx = mergeAxis(axis(mixer?.rightX), padRx);
     const ry = mergeAxis(axis(mixer?.rightY), padRy);
@@ -193,7 +170,8 @@ export class FallingInput {
       if (ry) zoomFactor *= Math.exp(-ry * g.zoomStickRate * dt);
     }
 
-    const analogPad = readAnalogTrigger(mixer, pad, gamepadButtons[g.emitAnalog]);
+    const rt = readAnalogTrigger(mixer?.rt, pad, gamepadButtons.rt);
+    const lt = readAnalogTrigger(mixer?.lt, pad, gamepadButtons.lt);
     const digitalPad = pressed(gamepadButtons[g.emitDigital]);
     const touch = readTouchpad(pad, pressed);
     const mouseFull = this._mouseFull;
@@ -201,12 +179,29 @@ export class FallingInput {
     const mouseEmit = mouseFull || mouseLight;
     const keyEmit = this._keyEmit;
 
-    // LMB is always the largest emitter. Shift+LMB is always the smallest.
-    // Neither follows the RT curve (including when that curve is inverted).
-    // A finger or click on the touchpad is the same kind of digital hold.
-    const analog = mouseEmit ? (mouseFull ? 1 : g.emitAnalogThreshold) : analogPad;
+    // RT: light pull is a single stream. LT is the mirror: a hard pull is a single stream.
+    // The trigger pulled further wins. LMB is always the largest emitter.
+    // Shift+LMB is always the smallest. A touchpad click emits a clump.
+    // A finger on the pad only aims.
+    const rtActive = rt >= g.emitAnalogThreshold;
+    const ltActive = lt >= g.emitAnalogThreshold;
+    let analog = 0;
+    let curveInvert = false;
+    if (rtActive || ltActive) {
+      if (!ltActive || rt >= lt) {
+        analog = rt;
+        curveInvert = false;
+      } else {
+        analog = lt;
+        curveInvert = true;
+      }
+    }
+    if (mouseEmit) {
+      analog = mouseFull ? 1 : g.emitAnalogThreshold;
+      curveInvert = false;
+    }
 
-    const analogActive = analogPad >= g.emitAnalogThreshold;
+    const analogActive = rtActive || ltActive;
     const emit = mouseEmit || keyEmit || digitalPad || touch.emit || analogActive;
 
     /** @type {BrushMode} */
@@ -218,20 +213,17 @@ export class FallingInput {
 
     const clearDown = pressed(gamepadButtons[g.clear]);
     const audioDown = pressed(gamepadButtons[g.audioToggle]);
-    const invertDown = pressed(gamepadButtons[g.invertCurve]);
     const cyclePrev = !!(mixer?.l1 || pressed(gamepadButtons[g.cyclePrev]));
     const cycleNext = !!(mixer?.r1 || pressed(gamepadButtons[g.cycleNext]));
 
     const clearEdge = clearDown && !this._prevClear;
     const audioEdge = audioDown && !this._prevAudio;
-    const invertEdge = invertDown && !this._prevInvert;
     let cycleDelta = 0;
     if (cyclePrev && !this._prevCyclePrev) cycleDelta -= 1;
     if (cycleNext && !this._prevCycleNext) cycleDelta += 1;
 
     this._prevClear = clearDown;
     this._prevAudio = audioDown;
-    this._prevInvert = invertDown;
     this._prevCyclePrev = cyclePrev;
     this._prevCycleNext = cycleNext;
 
@@ -245,68 +237,21 @@ export class FallingInput {
       emit,
       brushMode,
       analog,
+      curveInvert,
       orbitDelta,
       zoomFactor,
       aimStickX,
       aimStickY,
       clearEdge,
       audioEdge,
-      invertEdge,
       cycleDelta,
       cyclePrevHeld: cyclePrev,
       cycleNextHeld: cycleNext,
-      heightDelta,
+      ltHeld: ltActive,
+      rtHeld: rtActive,
+      shiftHeld: this._shiftHeld,
       touchAim: !!touchPointer,
     };
-  }
-
-  /**
-   * D-pad up/down → emitter height steps. A tap moves one row; a hold
-   * waits, then repeats. Up and down together cancel.
-   * @param {number} dt
-   * @param {boolean} up
-   * @param {boolean} down
-   */
-  _sampleHeightDelta(dt, up, down) {
-    const dir = up && !down ? 1 : down && !up ? -1 : 0;
-    const edge =
-      (up && !this._prevDpadUp) || (down && !this._prevDpadDown);
-    this._prevDpadUp = up;
-    this._prevDpadDown = down;
-
-    let heightDelta = 0;
-    if (!dir) {
-      this._heightDir = 0;
-      this._heightHold = 0;
-      this._heightRepeating = false;
-      return 0;
-    }
-
-    if (edge || this._heightDir !== dir) {
-      this._heightDir = dir;
-      this._heightHold = 0;
-      this._heightRepeating = false;
-      return dir;
-    }
-
-    this._heightDir = dir;
-    this._heightHold += dt;
-    const initial = this.bindings.gamepad.heightInitialDelay;
-    const repeat = this.bindings.gamepad.heightRepeat;
-    if (!this._heightRepeating) {
-      if (this._heightHold < initial) return 0;
-      this._heightRepeating = true;
-      this._heightHold -= initial;
-      heightDelta += dir;
-    }
-    if (repeat > 0) {
-      const steps = Math.floor(this._heightHold / repeat);
-      if (steps > 0) {
-        this._heightHold -= steps * repeat;
-        heightDelta += dir * steps;
-      }
-    }
-    return heightDelta;
   }
 
   /**
@@ -408,16 +353,6 @@ export class FallingInput {
       return;
     }
     const k = this.bindings.keyboard;
-    if (event.code === k.heightUp) {
-      this._keyHeightUp = true;
-      event.preventDefault();
-      return;
-    }
-    if (event.code === k.heightDown) {
-      this._keyHeightDown = true;
-      event.preventDefault();
-      return;
-    }
     if (!k.emit || event.code !== k.emit || event.repeat) return;
     this._keyEmit = true;
     event.preventDefault();
@@ -429,14 +364,6 @@ export class FallingInput {
       this._syncMouseEmit();
     }
     const k = this.bindings.keyboard;
-    if (event.code === k.heightUp) {
-      this._keyHeightUp = false;
-      return;
-    }
-    if (event.code === k.heightDown) {
-      this._keyHeightDown = false;
-      return;
-    }
     if (!k.emit || event.code !== k.emit) return;
     this._keyEmit = false;
   }
@@ -471,8 +398,8 @@ function dpadAxes(mixerDpad, padDpad) {
   return { lx, ly };
 }
 
-function readAnalogTrigger(mixer, pad, buttonIndex) {
-  const fromCore = clamp01(Number(mixer?.rt) || 0);
+function readAnalogTrigger(mixerValue, pad, buttonIndex) {
+  const fromCore = clamp01(Number(mixerValue) || 0);
   const btn = pad?.buttons?.[buttonIndex];
   const fromPad = btn
     ? Number.isFinite(btn.value)
@@ -485,8 +412,7 @@ function readAnalogTrigger(mixer, pad, buttonIndex) {
 }
 
 /**
- * Finger contact aims and emits. A click emits even if the contact point
- * didn't parse, so a held press keeps pouring at the current aim.
+ * A finger aims the emitter. The mechanical click emits a clump at that aim.
  * @param {Gamepad | null} pad
  * @param {(index: number) => boolean} pressed
  */
@@ -497,7 +423,7 @@ function readTouchpad(pad, pressed) {
   const click =
     !!(hidReady && touch?.pressed) ||
     (isPlayStationPad(pad) && pressed(gamepadButtons.touchpad));
-  return { aim, emit: aim || click };
+  return { aim, emit: click };
 }
 
 function isPlayStationPad(pad) {

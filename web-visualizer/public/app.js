@@ -19,10 +19,10 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks, toggleBrushCurveInvert } from "./falling-blocks.js?v=235";
+import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks } from "./falling-blocks.js?v=247";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=17";
 import { audioEngine } from "./audio-engine.js?v=45";
-import { gamepadInput } from "./gamepad-input.js?v=9";
+import { gamepadInput } from "./gamepad-input.js?v=12";
 import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=5";
 import { openStemDropdown } from "./sample-picker.js?v=16";
 import { openFxDropdown } from "./fx-picker.js?v=3";
@@ -367,10 +367,6 @@ function activateFaceButton(button) {
   if (!controller.fx[button]) return;
   if (button === "circle" && activeTab === "falling-blocks") {
     clearBoard();
-    return;
-  }
-  if (button === "triangle" && activeTab === "falling-blocks") {
-    toggleBrushCurveInvert();
     return;
   }
   if (button === "square" && activeTab === "falling-blocks") {

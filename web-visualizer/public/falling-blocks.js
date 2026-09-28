@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=65";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
-import { inputBindings } from "./input-bindings.js?v=5";
-import { fallingInput } from "./falling-input.js?v=15";
+import { inputBindings } from "./input-bindings.js?v=8";
+import { fallingInput } from "./falling-input.js?v=20";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -47,13 +47,15 @@ const CAMERA_DIST_MIN = 10;
 const CAMERA_DIST_MAX = 60;
 const AIM_SPEED = 9;
 /**
- * Max Sand1-style brush edge (odd). RT pressure maps 1×1 → this N×N field;
- * each cell rolls a chance so atoms cascade instead of dropping as a slab.
+ * Max Sand1-style brush edge (odd). RT maps a light pull from 1×1 up to this
+ * N×N field; LT uses the opposite curve. Each cell rolls a chance so atoms
+ * cascade instead of dropping as a slab.
  */
 const BRUSH_MAX = 11;
 /**
- * RT→brush ease: >1 keeps light squeezes on a thin stream longer;
- * only deep pressure opens the wide field.
+ * Trigger→brush ease: >1 keeps the thin-stream end of each trigger longer.
+ * RT opens the wide field only on a deep pull. LT reaches a single stream
+ * only on a deep pull.
  */
 const BRUSH_RT_GAMMA = 2.6;
 /**
@@ -63,9 +65,9 @@ const BRUSH_RT_GAMMA = 2.6;
 const ATOM_SCALE_MIN = 0.5;
 const EMIT_INTERVAL = 1 / 40;
 const EMIT_CHANCE = 0.4;
-/** Lowest spawn height the slider can pick (world units). */
-const EMIT_HEIGHT_MIN_U = 0.5;
-/** Default spawn height (world units). */
+/** Atoms wait until the emitter footprint has stopped changing for this long. */
+const EMIT_SIZE_SETTLE = 0.16;
+/** Spawn height above the ground (world units). */
 const EMIT_HEIGHT_DEFAULT_U = 5.5;
 /** Continuous fall speed toward contact (world units / second). */
 const GRAVITY = 28;
@@ -108,12 +110,25 @@ let sizeTries = 0;
 let lastNow = 0;
 let ruleAcc = 0;
 let cameraDist = CAMERA_DIST_DEFAULT;
-/**
- * Look-at point. Starts at the playfield center.
- * Once zoom hides part of the surface, it locks onto the emitter.
- */
+/** Look-at point. Rests on the playfield center; glides to the emitter after aim stops. */
 const cameraFocus = new THREE.Vector3(0, 0.35, 0);
-const CAMERA_FOCUS_HOME_Y = 0.35;
+const cameraFocusVel = new THREE.Vector3();
+const CAMERA_FOCUS_Y = 0.35;
+/** Wait after the last aim move before the view starts centering. */
+const CAMERA_CENTER_DELAY = 0.32;
+/** Seconds for that glide to settle. It never runs while aim is changing. */
+const CAMERA_CENTER_SMOOTH = 0.6;
+const CAMERA_CENTER_MAX_SPEED = 8;
+let centerIdle = 0;
+/** Full-grid camera distance from the last zoom or resize. 0 until measured. */
+let gridFitDist = 0;
+/** Corner NDC limit used to find a full-grid framing. */
+const GRID_NDC_LIMIT = 1;
+/**
+ * Closest zoom as a fraction of the full-grid distance.
+ * 0.35 reaches the original close limit, so the grid can leave the frame.
+ */
+const CAMERA_ZOOM_PAST_FIT = 0.35;
 /** Frame counters for the audio snapshot. Reset after each capture. */
 let audioPour = 0;
 let audioFall = 0;
@@ -187,8 +202,11 @@ let emitSizes = null;
 let lifeSpans = null;
 const EMIT_LIFE_MIN = 0.1;
 const EMIT_LIFE_MAX = 5;
-/** Seconds for one cycle: minimum, through the maximum, back to the minimum. */
-const EMIT_LIFE_PERIOD = 1.7;
+/**
+ * Seconds for one cycle: minimum, through the maximum, back to the minimum.
+ * Short so a brief pour sweeps most of the 0.1–5s range.
+ */
+const EMIT_LIFE_PERIOD = 0.4;
 /** 0 at the minimum, 0.5 at the maximum, 1 back at the minimum. */
 let emitLifePhase = 0;
 /** Consecutive same-height hops (shuffle detection). */
@@ -251,16 +269,17 @@ let aimWorldX = 0;
 let aimWorldZ = 0;
 let emitAcc = 0;
 let emitting = false;
-/** Current emit / preview brush edge length (odd, 1…BRUSH_MAX). */
-let brushN = 1;
+/** Quantized emitter size last applied. A change restarts the settle wait. */
+let emitSizeKey = -1;
+let emitSizeHold = 0;
+/** Current emit / preview brush edge length (odd, 1…BRUSH_MAX). Rests at full size. */
+let brushN = BRUSH_MAX;
 /**
- * Current emit scale from RT pressure (ATOM_SCALE_MIN…1).
+ * Current emit scale (ATOM_SCALE_MIN…1).
  * Baked into each new atom so later trigger motion does not resize the pile.
  */
 let emitScale = 1;
-/** When true, RT pressure maps large→small (mirrored curve). */
-let brushCurveInvert = false;
-/** Spawn height above ground in world units (slider or D-pad up/down). */
+/** Spawn height above ground in world units. */
 let emitHeightU = EMIT_HEIGHT_DEFAULT_U;
 /** Last cell poured while dragging — used to fill trail between pulses. */
 let lastPourIx = -1;
@@ -1097,9 +1116,61 @@ function syncViewBrightness() {
   canvas.style.filter = `brightness(${brightness.toFixed(3)})`;
 }
 
+/** True when every corner of the surface grid is inside the viewport. */
+function gridCornersFit() {
+  if (!camera) return true;
+  camera.updateMatrixWorld(true);
+  const half = PLAYFIELD_HALF;
+  const corners = [
+    [-half, -half],
+    [half, -half],
+    [half, half],
+    [-half, half],
+  ];
+  for (let i = 0; i < corners.length; i += 1) {
+    const world = surfaceToWorldXZ(corners[i][0], corners[i][1]);
+    emitterNdc.set(world.x, 0, world.z);
+    emitterNdc.project(camera);
+    if (
+      emitterNdc.z > 1 ||
+      Math.abs(emitterNdc.x) > GRID_NDC_LIMIT ||
+      Math.abs(emitterNdc.y) > GRID_NDC_LIMIT
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Closest camera distance that still shows the whole grid. Depends on aspect and yaw. */
+function closestGridDist() {
+  const saved = cameraDist;
+  let lo = CAMERA_DIST_MIN;
+  let hi = CAMERA_DIST_MAX;
+  cameraDist = hi;
+  syncCamera();
+  if (!gridCornersFit()) {
+    cameraDist = saved;
+    syncCamera();
+    return CAMERA_DIST_MAX;
+  }
+  for (let i = 0; i < 14; i += 1) {
+    const mid = (lo + hi) * 0.5;
+    cameraDist = mid;
+    syncCamera();
+    if (gridCornersFit()) hi = mid;
+    else lo = mid;
+  }
+  cameraDist = saved;
+  syncCamera();
+  return hi;
+}
+
 function setCameraDist(next) {
-  const clamped = Math.min(CAMERA_DIST_MAX, Math.max(CAMERA_DIST_MIN, next));
-  if (Math.abs(clamped - cameraDist) < 1e-6) return cameraDist;
+  gridFitDist = closestGridDist();
+  const minDist = Math.max(CAMERA_DIST_MIN, gridFitDist * CAMERA_ZOOM_PAST_FIT);
+  const clamped = Math.min(CAMERA_DIST_MAX, Math.max(minDist, next));
+  if (Math.abs(clamped - cameraDist) < 1e-4) return cameraDist;
   cameraDist = clamped;
   syncCamera();
   return cameraDist;
@@ -1108,91 +1179,92 @@ function setCameraDist(next) {
 function zoomCamera(factor) {
   if (!Number.isFinite(factor) || factor <= 0) return cameraDist;
   const next = Math.min(CAMERA_DIST_MAX, Math.max(CAMERA_DIST_MIN, cameraDist * factor));
-  if (Math.abs(next - cameraDist) < 1e-6) return cameraDist;
+  if (Math.abs(next - cameraDist) < 1e-6 && next >= cameraDist) return cameraDist;
   return setCameraDist(next);
 }
 
-function clampCameraFocus() {
-  const limit = PLAYFIELD_HALF;
-  cameraFocus.x = Math.min(limit, Math.max(-limit, cameraFocus.x));
-  cameraFocus.z = Math.min(limit, Math.max(-limit, cameraFocus.z));
+function smoothDamp(current, target, vel, dt) {
+  const smooth = Math.max(0.0001, CAMERA_CENTER_SMOOTH);
+  const omega = 2 / smooth;
+  const x = omega * dt;
+  const exp = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+  let change = current - target;
+  const maxChange = CAMERA_CENTER_MAX_SPEED * smooth;
+  change = Math.min(maxChange, Math.max(-maxChange, change));
+  const adjusted = current - change;
+  const temp = (vel + omega * change) * dt;
+  const nextVel = (vel - omega * temp) * exp;
+  let output = adjusted + (change + temp) * exp;
+  if (target - current > 0 === output > target) return { value: target, vel: 0 };
+  return { value: output, vel: nextVel };
 }
 
-/**
- * True when a camera aimed at the playfield center still shows every corner of the surface.
- * Checked in that centered framing, so a follow pan does not change the result.
- */
-function surfacePlaneFitsView() {
-  if (!camera) return true;
-  const savedX = cameraFocus.x;
-  const savedY = cameraFocus.y;
-  const savedZ = cameraFocus.z;
-  cameraFocus.set(0, CAMERA_FOCUS_HOME_Y, 0);
-  syncCamera();
-  const half = PLAYFIELD_HALF;
-  const locals = [
-    [-half, -half],
-    [half, -half],
-    [half, half],
-    [-half, half],
-  ];
-  let fits = true;
-  for (let i = 0; i < locals.length; i += 1) {
-    const world = surfaceToWorldXZ(locals[i][0], locals[i][1]);
-    emitterNdc.set(world.x, 0, world.z);
-    emitterNdc.project(camera);
-    if (emitterNdc.z > 1 || Math.abs(emitterNdc.x) > 1 || Math.abs(emitterNdc.y) > 1) {
-      fits = false;
-      break;
+function easeFocusToward(x, z, dt) {
+  const dx = x - cameraFocus.x;
+  const dy = CAMERA_FOCUS_Y - cameraFocus.y;
+  const dz = z - cameraFocus.z;
+  if (dx * dx + dy * dy + dz * dz < 0.02 * 0.02 && cameraFocusVel.lengthSq() < 1e-4) {
+    if (dx * dx + dy * dy + dz * dz > 1e-8) {
+      cameraFocus.set(x, CAMERA_FOCUS_Y, z);
+      cameraFocusVel.set(0, 0, 0);
+      syncCamera();
     }
+    return;
   }
-  cameraFocus.set(savedX, savedY, savedZ);
+  const sx = smoothDamp(cameraFocus.x, x, cameraFocusVel.x, dt);
+  const sy = smoothDamp(cameraFocus.y, CAMERA_FOCUS_Y, cameraFocusVel.y, dt);
+  const sz = smoothDamp(cameraFocus.z, z, cameraFocusVel.z, dt);
+  cameraFocus.set(sx.value, sy.value, sz.value);
+  cameraFocusVel.set(sx.vel, sy.vel, sz.vel);
   syncCamera();
-  return fits;
 }
 
-/** Ease back to the playfield center once the whole surface fits again. */
-function easeCameraHome(dt) {
-  const atHome =
-    cameraFocus.x === 0 &&
-    cameraFocus.z === 0 &&
-    Math.abs(cameraFocus.y - CAMERA_FOCUS_HOME_Y) < 1e-4;
-  if (atHome) return;
-  const k = dt > 0 ? 1 - Math.exp(-7 * dt) : 1;
-  cameraFocus.x += -cameraFocus.x * k;
-  cameraFocus.y += (CAMERA_FOCUS_HOME_Y - cameraFocus.y) * k;
-  cameraFocus.z += -cameraFocus.z * k;
-  if (
-    Math.hypot(cameraFocus.x, cameraFocus.z) < 0.02 &&
-    Math.abs(cameraFocus.y - CAMERA_FOCUS_HOME_Y) < 0.02
-  ) {
-    cameraFocus.set(0, CAMERA_FOCUS_HOME_Y, 0);
-  }
-  syncCamera();
+/** Look-at XZ that puts the emitter at the center of the screen. */
+function focusToCenterEmitter() {
+  camera.updateMatrixWorld(true);
+  const y = emitWorldY();
+  emitterNdc.set(aimWorldX, y, aimWorldZ);
+  emitterNdc.project(camera);
+  if (emitterNdc.z > 1) return { x: aimWorldX, z: aimWorldZ };
+  emitterPlane.constant = -y;
+  pointerNdc.set(emitterNdc.x, emitterNdc.y);
+  raycaster.setFromCamera(pointerNdc, camera);
+  if (!raycaster.ray.intersectPlane(emitterPlane, hitPoint)) return { x: aimWorldX, z: aimWorldZ };
+  const fromX = hitPoint.x;
+  const fromZ = hitPoint.z;
+  pointerNdc.set(0, 0);
+  raycaster.setFromCamera(pointerNdc, camera);
+  if (!raycaster.ray.intersectPlane(emitterPlane, hitPoint)) return { x: aimWorldX, z: aimWorldZ };
+  return {
+    x: cameraFocus.x + (fromX - hitPoint.x),
+    z: cameraFocus.z + (fromZ - hitPoint.z),
+  };
 }
 
 /**
- * While the surface no longer fits, look directly at the emitter so it stays
- * at the center of the screen. The playfield slides underneath.
+ * Frame the emitter only once steering has stopped, and only when zoomed in
+ * past a full-grid view. Aim locks the camera immediately so the ground
+ * cannot slide under the pointer.
  */
-function keepEmitterInView(dt) {
-  if (!camera) return;
-  if (surfacePlaneFitsView()) {
-    easeCameraHome(dt);
+function settleCamera(dt, aiming, zooming) {
+  if (!camera || dt <= 0) return;
+  if (aiming) {
+    centerIdle = 0;
+    if (cameraFocusVel.lengthSq() > 0) cameraFocusVel.set(0, 0, 0);
     return;
   }
 
-  const y = emitWorldY();
-  if (
-    Math.abs(cameraFocus.x - aimWorldX) < 1e-4 &&
-    Math.abs(cameraFocus.y - y) < 1e-4 &&
-    Math.abs(cameraFocus.z - aimWorldZ) < 1e-4
-  ) {
+  const close = gridFitDist > 0 && cameraDist < gridFitDist - 0.2;
+  if (!close) {
+    centerIdle = 0;
+    easeFocusToward(0, 0, dt);
     return;
   }
-  cameraFocus.set(aimWorldX, y, aimWorldZ);
-  clampCameraFocus();
-  syncCamera();
+
+  centerIdle += dt;
+  if (!zooming && centerIdle < CAMERA_CENTER_DELAY) return;
+  const focus = focusToCenterEmitter();
+  easeFocusToward(focus.x, focus.z, dt);
 }
 
 /** Yaw the playfield / grid; emitter stays fixed in world space. */
@@ -1203,6 +1275,7 @@ function rotateSurface(deltaYaw) {
   setAimFromWorld();
   syncEmitter();
   syncSceneBackground();
+  setCameraDist(cameraDist);
 }
 
 /**
@@ -1331,6 +1404,7 @@ function resizeCanvas() {
   canvas.style.height = `${height}px`;
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+  setCameraDist(cameraDist);
   return true;
 }
 
@@ -1340,56 +1414,68 @@ function clamp01(n) {
 }
 
 /**
- * Eased RT amount 0…1. Zero is a light squeeze; one is a full pull.
- * Invert mirrors the curve (full pull becomes the light end).
+ * Eased trigger amount 0…1. Zero is the thin-stream end; one is the wide field.
+ * RT uses the curve as-is. LT passes invert so a hard pull is the thin stream.
  */
-function triggerAmount(rt) {
+function triggerAmount(amount, invert) {
   const threshold = inputBindings.gamepad.emitAnalogThreshold ?? 0.08;
   const span = 1 - threshold;
-  const linear = span > 0 ? clamp01((clamp01(rt) - threshold) / span) : 1;
+  const linear = span > 0 ? clamp01((clamp01(amount) - threshold) / span) : 1;
   const t = Math.pow(linear, BRUSH_RT_GAMMA);
-  return brushCurveInvert ? 1 - t : t;
+  return invert ? 1 - t : t;
 }
 
 /**
- * Map analog 0…1 → odd brush edge 1…BRUSH_MAX (pressure curve).
+ * Map analog 0…1 → odd brush edge 1…BRUSH_MAX.
  */
-function brushSizeFromTrigger(rt) {
-  const t = triggerAmount(rt);
+function brushSizeFromTrigger(amount, invert) {
+  const t = triggerAmount(amount, invert);
   const steps = ((BRUSH_MAX - 1) >> 1) + 1;
   const i = Math.min(steps - 1, Math.floor(t * steps));
   return 1 + i * 2;
 }
 
 /**
- * Map the same pressure curve onto atom scale. Light pull is ATOM_SCALE_MIN;
- * a full pull is full size. Never goes below the minimum.
+ * Map the same curve onto atom scale. The thin-stream end is ATOM_SCALE_MIN;
+ * the wide end is full size. Never goes below the minimum.
  */
-function emitScaleFromTrigger(rt) {
-  const t = triggerAmount(rt);
+function emitScaleFromTrigger(amount, invert) {
+  const t = triggerAmount(amount, invert);
   return ATOM_SCALE_MIN + t * (1 - ATOM_SCALE_MIN);
 }
 
-function brushSizeFromMode(mode, analog) {
+function brushSizeFromMode(mode, analog, invert) {
   if (mode === "single") return 1;
   if (mode === "max") return BRUSH_MAX;
-  return brushSizeFromTrigger(analog);
+  return brushSizeFromTrigger(analog, invert);
 }
 
-function emitScaleFromMode(mode, analog) {
+function emitScaleFromMode(mode, analog, invert) {
   if (mode === "max") return 1;
   if (mode === "single") return ATOM_SCALE_MIN;
-  return emitScaleFromTrigger(analog);
+  return emitScaleFromTrigger(analog, invert);
 }
 
-export function toggleBrushCurveInvert() {
-  brushCurveInvert = !brushCurveInvert;
-  syncProfileUi();
-  return brushCurveInvert;
+/** Coarse enough that analog noise does not keep resetting the settle wait. */
+function quantSizeKey(brush, scale) {
+  return brush * 1000 + Math.round(scale * 40);
 }
 
-export function getBrushCurveInvert() {
-  return brushCurveInvert;
+/**
+ * Apply the emitter footprint immediately. Returns true once that size has
+ * held still long enough to pour.
+ */
+function emitterSizeSettled(dt, brush, scale) {
+  setBrushN(brush);
+  setEmitScale(scale);
+  const key = quantSizeKey(brushN, emitScale);
+  if (key !== emitSizeKey) {
+    emitSizeKey = key;
+    emitSizeHold = 0;
+    return false;
+  }
+  emitSizeHold += dt;
+  return emitSizeHold >= EMIT_SIZE_SETTLE;
 }
 
 function setBrushN(n) {
@@ -1509,6 +1595,13 @@ function syncShoulderGlyphs(prevHeld, nextHeld) {
   next?.classList.toggle("is-lit", !!nextHeld);
 }
 
+function syncTriggerLabels(ltHeld, rtHeld) {
+  const lt = document.querySelector("[data-falling-trigger='lt']");
+  const rt = document.querySelector("[data-falling-trigger='rt']");
+  lt?.classList.toggle("is-pressed", !!ltHeld);
+  rt?.classList.toggle("is-pressed", !!rtHeld);
+}
+
 function buildPalette() {
   paletteEl = document.querySelector("[data-falling-palette]");
   if (!paletteEl || !catalog) return;
@@ -1517,6 +1610,7 @@ function buildPalette() {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.dataset.material = mat.id;
+    btn.className = "falling-pill";
     btn.textContent = mat.label;
     btn.style.setProperty("--swatch", mat.color);
     btn.addEventListener("click", (event) => {
@@ -1524,6 +1618,10 @@ function buildPalette() {
       setActiveMaterial(mat.id);
     });
     paletteEl.appendChild(btn);
+  }
+  for (const line of document.querySelectorAll(".falling-about-materials [data-material]")) {
+    const mat = catalog.byId.get(line.getAttribute("data-material"));
+    if (mat) line.style.setProperty("--swatch", mat.color);
   }
   syncPaletteUi();
   bindClearUi();
@@ -1589,6 +1687,8 @@ export function clearBoard() {
   aimWorldX = 0;
   aimWorldZ = 0;
   cameraFocus.set(0, 0.35, 0);
+  cameraFocusVel.set(0, 0, 0);
+  centerIdle = 0;
   syncCamera();
   emitting = false;
   emitAcc = 0;
@@ -1623,26 +1723,6 @@ function bindClearUi() {
   });
 }
 
-function syncProfileUi() {
-  const btn = document.querySelector("[data-falling-profile]");
-  const name = document.querySelector("[data-falling-profile-name]");
-  if (name) name.textContent = brushCurveInvert ? "Inverted" : "Pressure";
-  if (btn instanceof HTMLButtonElement) {
-    btn.setAttribute("aria-pressed", brushCurveInvert ? "true" : "false");
-  }
-}
-
-function bindProfileUi() {
-  const btn = document.querySelector("[data-falling-profile]");
-  syncProfileUi();
-  if (!(btn instanceof HTMLButtonElement) || btn.dataset.bound === "1") return;
-  btn.dataset.bound = "1";
-  btn.addEventListener("click", (event) => {
-    event.stopPropagation();
-    toggleBrushCurveInvert();
-  });
-}
-
 /** @type {(() => void) | null} */
 let audioToggleHandler = null;
 
@@ -1651,13 +1731,7 @@ export function onFallingAudioToggle(fn) {
   audioToggleHandler = fn;
 }
 
-function clampEmitHeightU(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return EMIT_HEIGHT_DEFAULT_U;
-  return Math.min(EMIT_HEIGHT_MAX_U, Math.max(EMIT_HEIGHT_MIN_U, n));
-}
-
-/** Discrete spawn row for the current emit height. */
+/** Discrete spawn row for the fixed emit height. */
 function emitY() {
   const row = Math.round(emitHeightU / atomSize - 0.5);
   return Math.min(MAX_Y - 1, Math.max(0, row));
@@ -1665,39 +1739,6 @@ function emitY() {
 
 function emitWorldY() {
   return emitHeightU;
-}
-
-function syncEmitHeightUi() {
-  const input = document.querySelector("[data-falling-emit-height]");
-  const label = document.querySelector("[data-falling-emit-height-val]");
-  if (input instanceof HTMLInputElement) {
-    input.min = String(EMIT_HEIGHT_MIN_U);
-    input.max = String(EMIT_HEIGHT_MAX_U);
-    input.step = String(atomSize);
-    input.value = String(emitHeightU);
-  }
-  if (label) label.textContent = `${emitHeightU.toFixed(1)}u`;
-}
-
-function setEmitHeight(value) {
-  emitHeightU = clampEmitHeightU(value);
-  // Snap to the slider step so 12.0 is reachable exactly.
-  const step = atomSize > 1e-9 ? atomSize : 0.25;
-  emitHeightU = Math.round(emitHeightU / step) * step;
-  emitHeightU = clampEmitHeightU(emitHeightU);
-  syncEmitHeightUi();
-  syncEmitter();
-}
-
-function bindEmitHeightUi() {
-  const input = document.querySelector("[data-falling-emit-height]");
-  if (!(input instanceof HTMLInputElement)) return;
-  syncEmitHeightUi();
-  if (input.dataset.bound === "1") return;
-  input.dataset.bound = "1";
-  const onChange = () => setEmitHeight(input.value);
-  input.addEventListener("input", onChange);
-  input.addEventListener("change", onChange);
 }
 
 function applyInput(dt) {
@@ -1712,22 +1753,31 @@ function applyInput(dt) {
   }
   if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
   if (frame.zoomFactor !== 1) zoomCamera(frame.zoomFactor);
-  // Touch aim is an absolute point on the current view. Chasing it with a
-  // pan would move the plane under the finger every frame.
-  if (!frame.touchAim) keepEmitterInView(dt);
+  const aiming = !!(frame.pointer || frame.aimStickX || frame.aimStickY);
+  settleCamera(dt, aiming, frame.zoomFactor !== 1);
 
-  setBrushN(brushSizeFromMode(frame.brushMode, frame.analog));
-  const threshold = inputBindings.gamepad.emitAnalogThreshold ?? 0.08;
-  const pressing = frame.emit || frame.analog >= threshold;
-  setEmitScale(pressing ? emitScaleFromMode(frame.brushMode, frame.analog) : 1);
-  updateEmitStream(dt, frame.emit);
+  // Shift previews a single stream. A trigger pull resizes with pressure.
+  // Atoms wait until that footprint stops changing.
+  let brush = BRUSH_MAX;
+  let scale = 1;
+  if (frame.shiftHeld) {
+    brush = 1;
+    scale = ATOM_SCALE_MIN;
+  } else if (frame.ltHeld || frame.rtHeld) {
+    brush = brushSizeFromTrigger(frame.analog, frame.curveInvert);
+    scale = emitScaleFromTrigger(frame.analog, frame.curveInvert);
+  } else if (frame.emit) {
+    brush = brushSizeFromMode(frame.brushMode, frame.analog, frame.curveInvert);
+    scale = emitScaleFromMode(frame.brushMode, frame.analog, frame.curveInvert);
+  }
+  const settled = emitterSizeSettled(dt, brush, scale);
+  updateEmitStream(dt, frame.emit && settled);
 
   syncShoulderGlyphs(frame.cyclePrevHeld, frame.cycleNextHeld);
+  syncTriggerLabels(frame.ltHeld, frame.rtHeld);
   if (frame.cycleDelta) cycleMaterial(frame.cycleDelta);
-  if (frame.heightDelta) setEmitHeight(emitHeightU + frame.heightDelta * atomSize);
   if (frame.clearEdge) clearBoard();
   if (frame.audioEdge) audioToggleHandler?.();
-  if (frame.invertEdge) toggleBrushCurveInvert();
 }
 
 function updateEmitStream(dt, active) {
@@ -1765,8 +1815,9 @@ function updateEmitStream(dt, active) {
 /**
  * Sand1-style brush: scatter atoms across a flat N×N field centered on aim.
  * Each cell rolls EMIT_CHANCE so the column cascades instead of falling as one slab.
- * Brush edge and atom size both come from RT pressure. Light pressure emits
- * half-size atoms; a full pull emits full-size atoms. Left click always
+ * Brush edge and atom size follow the active trigger. A light RT pull emits
+ * half-size atoms in a single stream; a full RT pull emits full-size atoms
+ * across the wide field. LT is the mirror of that curve. Left click always
  * uses the largest emitter. Shift+left click always uses the smallest.
  * Right-drag yaws the view.
  */
@@ -3464,8 +3515,6 @@ export async function showFallingBlocks(nextCanvas) {
     }
     bindAboutUi();
     bindClearUi();
-    bindProfileUi();
-    bindEmitHeightUi();
     fallingInput.attach(canvas);
     installSimHook();
     running = true;
