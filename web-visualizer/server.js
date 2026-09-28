@@ -12,6 +12,8 @@ const THREE_DIR = path.join(__dirname, "node_modules", "three");
 const BEDS_DIR = path.join(PUBLIC_DIR, "beds");
 const SAMPLES_DIR = path.join(__dirname, "..", "samples");
 const WAMS_DIR = path.join(PUBLIC_DIR, "wams");
+const STEM_DEFAULTS_FILE = path.join(PUBLIC_DIR, "stem-defaults.json");
+const STEM_CORNERS = ["tl", "tr", "bl", "br"];
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -360,6 +362,58 @@ function handleOsc(msg, broadcast) {
   }
 }
 
+function isSafeStemUrl(url) {
+  if (typeof url !== "string" || url.length > 512) return false;
+  if (!url.startsWith("/samples/") && !url.startsWith("/beds/")) return false;
+  if (url.includes("..") || url.includes("\\") || url.includes("\0")) return false;
+  return true;
+}
+
+function sanitizeStemDefaults(body) {
+  if (!body || typeof body !== "object") return null;
+  const corners = {};
+  for (const corner of STEM_CORNERS) {
+    const next = body[corner];
+    if (!next || typeof next !== "object") return null;
+    const label = String(next.label || "").trim().slice(0, 120);
+    const file = String(next.file || "").trim().slice(0, 180);
+    const url = String(next.url || "").trim();
+    const id = String(next.id || label).trim().slice(0, 240);
+    if (!label || !file || !isSafeStemUrl(url)) return null;
+    corners[corner] = { id, label, file, url };
+  }
+  const savedAt = Number(body.savedAt);
+  return {
+    savedAt: Number.isFinite(savedAt) ? savedAt : Date.now(),
+    ...corners,
+  };
+}
+
+function readJsonBody(req, limit = 16384) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(new Error("too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      try {
+        const text = Buffer.concat(chunks).toString("utf8");
+        resolve(text ? JSON.parse(text) : null);
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
   res.writeHead(status, {
@@ -376,6 +430,23 @@ const httpServer = http.createServer((req, res) => {
   const qIndex = rawUrl.indexOf("?");
   const urlPath = decodeURIComponent(qIndex >= 0 ? rawUrl.slice(0, qIndex) : rawUrl);
   const query = qIndex >= 0 ? new URLSearchParams(rawUrl.slice(qIndex + 1)) : new URLSearchParams();
+
+  if (urlPath === "/api/stem-defaults" && req.method === "POST") {
+    void (async () => {
+      try {
+        const next = sanitizeStemDefaults(await readJsonBody(req));
+        if (!next) {
+          sendJson(res, 400, { error: "Invalid stem defaults" });
+          return;
+        }
+        fs.writeFileSync(STEM_DEFAULTS_FILE, `${JSON.stringify(next, null, 2)}\n`);
+        sendJson(res, 200, next);
+      } catch (err) {
+        if (!res.headersSent) sendJson(res, 400, { error: "Invalid JSON" });
+      }
+    })();
+    return;
+  }
 
   if (urlPath === "/api/samples/all") {
     sendJson(res, 200, listAllSamplesGrouped());

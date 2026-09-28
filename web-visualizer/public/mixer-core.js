@@ -103,16 +103,26 @@ export function equalPowerMix(px, py) {
 
 const STEM_STORAGE_KEY = "echoscape.stemCorners";
 
-/** Built-in beds used when nothing is saved yet. */
+/** Built-in beds used until a saved default exists. In-app changes replace that default. */
 const DEFAULT_STEM_CORNERS = {
-  tl: { id: "beach", label: "Beach", file: "Beach-rx.wav", url: "/beds/Beach-rx.wav" },
-  tr: { id: "forest", label: "Forest", file: "Forest-rx.wav", url: "/beds/Forest-rx.wav" },
+  tl: {
+    id: "loops/tonal/Bowed Guitar G.wav",
+    label: "Bowed Guitar G",
+    file: "Bowed Guitar G.wav",
+    url: "/samples/loops/tonal/Bowed%20Guitar%20G.wav",
+  },
+  tr: {
+    id: "loops/percussive/Industry-01.wav",
+    label: "Industry-01",
+    file: "Industry-01.wav",
+    url: "/samples/loops/percussive/Industry-01.wav",
+  },
   bl: { id: "river", label: "River", file: "River-rx.wav", url: "/beds/River-rx.wav" },
   br: {
-    id: "synth",
-    label: "Meditation Synth",
-    file: "Meditation Synth-rx.wav",
-    url: "/beds/Meditation%20Synth-rx.wav",
+    id: "pads/ambient/Atmos Hi Ho.wav",
+    label: "Atmos Hi Ho",
+    file: "Atmos Hi Ho.wav",
+    url: "/samples/pads/ambient/Atmos%20Hi%20Ho.wav",
   },
 };
 
@@ -137,16 +147,97 @@ function loadSavedStemCorners() {
   }
 }
 
-function persistStemCorners() {
+function stemMapStamp(map) {
+  const n = Number(map?.savedAt);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function stemMapReady(map) {
+  if (!map || typeof map !== "object") return false;
+  return Object.keys(DEFAULT_STEM_CORNERS).every((corner) => map[corner]?.url);
+}
+
+function stemPayload(savedAt) {
+  const payload = { savedAt };
+  for (const corner of Object.keys(DEFAULT_STEM_CORNERS)) {
+    payload[corner] = cloneStem(STEM_CORNERS[corner]);
+  }
+  return payload;
+}
+
+function writeStemCache(payload) {
   try {
-    const payload = {};
-    for (const corner of Object.keys(DEFAULT_STEM_CORNERS)) {
-      payload[corner] = cloneStem(STEM_CORNERS[corner]);
-    }
     localStorage.setItem(STEM_STORAGE_KEY, JSON.stringify(payload));
   } catch (err) {
     console.warn("[EchoScape] could not save stem corners:", err);
   }
+}
+
+function persistStemCorners(savedAt = Date.now()) {
+  const payload = stemPayload(savedAt);
+  writeStemCache(payload);
+  void fetch("/api/stem-defaults", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).catch((err) => {
+    console.warn("[EchoScape] could not save stem defaults:", err);
+  });
+}
+
+function applyStemMap(map) {
+  if (!stemMapReady(map)) return false;
+  for (const corner of Object.keys(DEFAULT_STEM_CORNERS)) {
+    applyStemCorner(corner, map[corner]);
+  }
+  return true;
+}
+
+function loadMigratedStemCorners() {
+  try {
+    const raw = localStorage.getItem("echoscape.stemCorners.v2");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function hydrateStemDefaults() {
+  const local = loadSavedStemCorners();
+  const migrated = loadMigratedStemCorners();
+  let remote = null;
+  try {
+    const res = await fetch("/stem-defaults.json", { cache: "no-store" });
+    if (res.ok) remote = await res.json();
+  } catch {
+    remote = null;
+  }
+
+  const localStamp = stemMapStamp(local);
+  const remoteStamp = stemMapStamp(remote);
+  if (stemMapReady(migrated) && remoteStamp === 0) {
+    applyStemMap(migrated);
+    persistStemCorners(Date.now());
+    try {
+      localStorage.removeItem("echoscape.stemCorners.v2");
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  if (stemMapReady(local) && localStamp > remoteStamp) {
+    applyStemMap(local);
+    persistStemCorners(localStamp);
+    return;
+  }
+  if (stemMapReady(remote)) {
+    applyStemMap(remote);
+    writeStemCache(stemPayload(remoteStamp));
+    return;
+  }
+  if (stemMapReady(local)) applyStemMap(local);
 }
 
 function applyStemCorner(corner, next) {
@@ -166,20 +257,13 @@ export const STEM_CORNERS = Object.fromEntries(
   Object.entries(DEFAULT_STEM_CORNERS).map(([corner, meta]) => [corner, cloneStem(meta)])
 );
 
-{
-  const saved = loadSavedStemCorners();
-  if (saved) {
-    for (const corner of Object.keys(DEFAULT_STEM_CORNERS)) {
-      if (saved[corner]) applyStemCorner(corner, saved[corner]);
-    }
-  }
-}
+await hydrateStemDefaults();
 
 /** Update a corner's sample assignment (label + playback URL). */
 export function setStemCorner(corner, next) {
   const meta = applyStemCorner(corner, next);
   if (!meta) return null;
-  persistStemCorners();
+  persistStemCorners(Date.now());
   notify();
   return meta;
 }

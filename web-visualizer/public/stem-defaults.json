@@ -1,0 +1,27 @@
+{
+  "savedAt": 0,
+  "tl": {
+    "id": "loops/tonal/Bowed Guitar G.wav",
+    "label": "Bowed Guitar G",
+    "file": "Bowed Guitar G.wav",
+    "url": "/samples/loops/tonal/Bowed%20Guitar%20G.wav"
+  },
+  "tr": {
+    "id": "loops/percussive/Industry-01.wav",
+    "label": "Industry-01",
+    "file": "Industry-01.wav",
+    "url": "/samples/loops/percussive/Industry-01.wav"
+  },
+  "bl": {
+    "id": "river",
+    "label": "River",
+    "file": "River-rx.wav",
+    "url": "/beds/River-rx.wav"
+  },
+  "br": {
+    "id": "pads/ambient/Atmos Hi Ho.wav",
+    "label": "Atmos Hi Ho",
+    "file": "Atmos Hi Ho.wav",
+    "url": "/samples/pads/ambient/Atmos%20Hi%20Ho.wav"
+  }
+}

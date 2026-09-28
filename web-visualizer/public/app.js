@@ -19,7 +19,7 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks, aimMarkRightPx } from "./falling-blocks.js?v=295";
+import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks, aimMarkRightPx } from "./falling-blocks.js?v=296";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=17";
 import { audioEngine } from "./audio-engine.js?v=46";
 import { gamepadInput } from "./gamepad-input.js?v=16";
@@ -1261,9 +1261,12 @@ let hidePointerHint = () => {};
 /**
  * The label shares a layer with its own crosshair. The system cursor paints
  * ahead of DOM layout, which is what made the hint look like it was catching up.
+ * Position is applied every frame from the latest pointer, on window moves, so
+ * the text keeps following even when the label or another layer is the hit target.
  */
 function bindPointerHint() {
   const hint = document.querySelector("[data-pointer-hint]");
+  const copy = hint?.querySelector(".pointer-hint-copy");
   if (!(hint instanceof HTMLElement) || !(fallingCanvas instanceof HTMLCanvasElement)) return;
   document.body.appendChild(hint);
 
@@ -1277,36 +1280,45 @@ function bindPointerHint() {
   hint.hidden = true;
   let shown = false;
   let followId = 0;
+  let pointerX = 0;
+  let pointerY = 0;
 
-  function placeText() {
+  function sync() {
     const reach = aimMarkRightPx();
-    const shift = Math.max(8, reach + pad - inset);
-    hint.style.setProperty("--hint-x", `${shift}px`);
+    const shift = Math.max(8, Number.isFinite(reach) ? reach + pad - inset : 8);
+    hint.style.transform = `translate3d(${pointerX - mark / 2}px, ${pointerY - shiftY}px, 0)`;
+    if (copy instanceof HTMLElement) copy.style.transform = `translate(${shift}px, -8px)`;
   }
 
   function follow() {
-    followId = 0;
-    if (!shown) return;
-    placeText();
+    if (!shown) {
+      followId = 0;
+      return;
+    }
+    sync();
     followId = window.requestAnimationFrame(follow);
   }
 
-  function place(clientX, clientY) {
+  function showAt(clientX, clientY) {
     if (gameControllerPresent()) {
       hide();
       return;
     }
+    pointerX = clientX;
+    pointerY = clientY;
     if (!shown) {
       shown = true;
       hint.hidden = false;
       fallingCanvas.classList.add("has-pointer-hint");
     }
-    placeText();
-    hint.style.transform = `translate3d(${clientX - mark / 2}px, ${clientY - shiftY}px, 0)`;
-    if (!followId) follow();
+    sync();
+    if (!followId) followId = window.requestAnimationFrame(follow);
   }
 
   function hide() {
+    if (followId) window.cancelAnimationFrame(followId);
+    followId = 0;
+    hint.classList.remove("is-pressed");
     if (!shown) return;
     shown = false;
     hint.hidden = true;
@@ -1315,35 +1327,56 @@ function bindPointerHint() {
 
   hidePointerHint = hide;
 
-  function track(event) {
-    if (event.pointerType === "touch") return;
-    if (
+  function overPlayfield(event) {
+    const hit = document.elementFromPoint(event.clientX, event.clientY);
+    if (hit === fallingCanvas) return true;
+    return hit instanceof Node && hint.contains(hit);
+  }
+
+  function draggingView() {
+    return (
       fallingCanvas.classList.contains("is-grabbing") ||
       fallingCanvas.classList.contains("is-yawing")
-    ) {
+    );
+  }
+
+  function onPointerMove(event) {
+    if (event.pointerType === "touch") return;
+    if (!overPlayfield(event) || draggingView()) {
       hide();
       return;
     }
-    place(event.clientX, event.clientY);
     hint.classList.toggle("is-pressed", event.buttons !== 0);
+    showAt(event.clientX, event.clientY);
   }
 
-  fallingCanvas.addEventListener("pointerenter", track);
-  fallingCanvas.addEventListener("pointermove", track);
-  fallingCanvas.addEventListener("pointerdown", (event) => {
+  function onPointerDown(event) {
     if (event.pointerType === "touch") return;
+    if (event.button === 1 || event.button === 2) {
+      hide();
+      return;
+    }
+    if (!overPlayfield(event)) return;
     hint.classList.add("is-pressed");
-    if (event.button === 2) hide();
-  });
-  fallingCanvas.addEventListener("pointerup", (event) => {
+    showAt(event.clientX, event.clientY);
+  }
+
+  function onPointerUp(event) {
     if (event.pointerType === "touch") return;
     if (event.buttons !== 0) return;
     hint.classList.remove("is-pressed");
-    if (event.target !== fallingCanvas) return;
-    place(event.clientX, event.clientY);
-  });
-  fallingCanvas.addEventListener("pointerleave", hide);
-  fallingCanvas.addEventListener("pointercancel", hide);
+    if (!overPlayfield(event) || draggingView()) {
+      hide();
+      return;
+    }
+    showAt(event.clientX, event.clientY);
+  }
+
+  window.addEventListener("pointermove", onPointerMove, true);
+  window.addEventListener("pointerdown", onPointerDown, true);
+  window.addEventListener("pointerup", onPointerUp, true);
+  window.addEventListener("pointercancel", hide, true);
+  window.addEventListener("blur", hide);
 }
 
 notify();
