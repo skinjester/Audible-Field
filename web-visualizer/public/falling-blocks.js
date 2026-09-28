@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=65";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=10";
-import { fallingInput } from "./falling-input.js?v=28";
+import { fallingInput } from "./falling-input.js?v=30";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -1294,10 +1294,32 @@ function keepPinOnField() {
 
 /**
  * Move the ground with this pointer drag, in the same sample.
- * The plane follows the hand: the ground under the cursor moves with the cursor,
- * and a bit farther, so a short drag still crosses the grid.
+ * The plane follows the hand. The emitter stays on its cell and is not pulled
+ * back to the center of the screen.
  */
 const DRAG_GAIN = 2.5;
+
+function dragGround(dx, dz) {
+  if (!surface || (!dx && !dz)) return;
+  const localAim = worldToSurfaceXZ(aimWorldX, aimWorldZ);
+  surface.position.x += dx;
+  surface.position.z += dz;
+  const focus = groundFocus();
+  if (focus) {
+    const hit = worldToSurfaceXZ(focus.x, focus.z);
+    const limit = PLAYFIELD_HALF - 0.001;
+    if (Math.abs(hit.x) > limit || Math.abs(hit.z) > limit) {
+      const lx = Math.min(limit, Math.max(-limit, hit.x));
+      const lz = Math.min(limit, Math.max(-limit, hit.z));
+      const yawed = surfaceYawXZ(lx, lz);
+      surface.position.x = focus.x - yawed.x;
+      surface.position.z = focus.z - yawed.z;
+    }
+  }
+  const world = surfaceToWorldXZ(localAim.x, localAim.z);
+  aimWorldX = world.x;
+  aimWorldZ = world.z;
+}
 
 function slidePointer(dx, dy, pointer) {
   if ((!dx && !dy) || !canvas) return;
@@ -1308,8 +1330,7 @@ function slidePointer(dx, dy, pointer) {
   const from = groundAtPixels(x1 - dx, y1 - dy, rect);
   const to = groundAtPixels(x1, y1, rect);
   if (!from || !to) return;
-  // slideGround subtracts its step. Passing the reverse makes the grid follow the drag.
-  slideGround((from.x - to.x) * DRAG_GAIN, (from.z - to.z) * DRAG_GAIN);
+  dragGround((to.x - from.x) * DRAG_GAIN, (to.z - from.z) * DRAG_GAIN);
 }
 
 /** Ground point under a canvas pixel. */
@@ -1317,6 +1338,22 @@ function groundAtPixels(px, py, rect) {
   const ndcX = (px / rect.width) * 2 - 1;
   const ndcY = 1 - (py / rect.height) * 2;
   return worldOnPlane(ndcX, ndcY, 0);
+}
+
+/** Put the emitter on the ground under the pointer. The grid stays where it is. */
+function placeEmitterAtPointer(pointer) {
+  if (!canvas || !pointer || !surface) return;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return;
+  const hit = groundAtPixels(pointer.x - rect.left, pointer.y - rect.top, rect);
+  if (!hit) return;
+  const limit = PLAYFIELD_HALF - 0.001;
+  let { x: lx, z: lz } = worldToSurfaceXZ(hit.x, hit.z);
+  lx = Math.min(limit, Math.max(-limit, lx));
+  lz = Math.min(limit, Math.max(-limit, lz));
+  const world = surfaceToWorldXZ(lx, lz);
+  aimWorldX = world.x;
+  aimWorldZ = world.z;
 }
 
 /** Yaw the playfield around the emitter target, from −n to +n. */
@@ -1847,15 +1884,14 @@ function applyInput(dt) {
 
   const stickAim = !!(frame.aimStickX || frame.aimStickY);
   const dragging = !!frame.pointerDelta;
-  const aiming = dragging || stickAim;
 
-  // Mouse / pad / keys are additive — none blocks the others.
+  // A bare move places the emitter on the ground. Right-drag slides the grid.
+  if (frame.aimAt && !dragging) placeEmitterAtPointer(frame.aimAt);
   if (dragging) slidePointer(frame.pointerDelta.x, frame.pointerDelta.y, frame.pointerAt);
   if (stickAim) moveAim(frame.aimStickX, frame.aimStickY, dt);
   if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
   if (frame.zoomFactor !== 1) zoomCamera(frame.zoomFactor);
 
-  if (!aiming && !frame.orbitDelta) holdTargetAtCenter();
   setAimFromWorld();
   syncEmitter();
 
@@ -2079,8 +2115,8 @@ function ensureKind(matIndex, count, kind) {
     const geometry = kind === "rise" ? riseGeometry(nextCap, mesh) : blockGeo;
     const next = new THREE.InstancedMesh(geometry, materialMeshMat(matIndex, kind === "land", kind === "rise"), nextCap);
     next.frustumCulled = false;
-    next.castShadow = false;
-    next.receiveShadow = false;
+    next.castShadow = true;
+    next.receiveShadow = true;
     if (kind === "rise") next.renderOrder = 2;
     if (mesh) {
       const keep = mesh.count;
@@ -3080,13 +3116,30 @@ function initScene(nextCanvas) {
   });
   renderer.setClearColor(SCENE_BG, 1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   syncSceneBackground();
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.38));
   scene.add(new THREE.HemisphereLight(0xc5d0d8, 0x3a2e28, 0.42));
   const key = new THREE.DirectionalLight(0xfff4ea, 1.3);
   key.position.set(8, 14, 6);
+  key.castShadow = true;
+  // One 1024 map, fitted to the 16×16 playfield and piles up to about 12 tall.
+  // The target sits mid-height so the frustum isn't biased onto the ground.
+  const shadowReach = 14;
+  key.shadow.mapSize.set(1024, 1024);
+  key.shadow.camera.near = 0.5;
+  key.shadow.camera.far = 40;
+  key.shadow.camera.left = -shadowReach;
+  key.shadow.camera.right = shadowReach;
+  key.shadow.camera.top = shadowReach;
+  key.shadow.camera.bottom = -shadowReach;
+  key.shadow.bias = -0.0002;
+  key.shadow.normalBias = 0.02;
+  key.target.position.set(0, 4, 0);
   scene.add(key);
+  scene.add(key.target);
   const fill = new THREE.DirectionalLight(0xd6e2ea, 0.32);
   fill.position.set(-7, 6, -5);
   scene.add(fill);
@@ -3099,6 +3152,7 @@ function initScene(nextCanvas) {
   );
   groundMesh.rotation.x = -Math.PI / 2;
   groundMesh.position.y = -0.02;
+  groundMesh.receiveShadow = true;
   surface.add(groundMesh);
   addQuadrantAxes();
 

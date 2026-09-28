@@ -1190,12 +1190,51 @@ dd {
   touch-action: none;
 }
 
+[data-panel="falling-blocks"] canvas.has-pointer-hint {
+  cursor: none;
+}
+
 [data-panel="falling-blocks"] canvas.is-grabbing {
   cursor: grabbing;
 }
 
 [data-panel="falling-blocks"] canvas.is-yawing {
   cursor: url("/cursor-yaw.svg") 16 16, crosshair;
+}
+
+.pointer-hint {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 40;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  pointer-events: none;
+  transform-origin: 0 0;
+  will-change: transform;
+  user-select: none;
+}
+
+.pointer-hint-mark {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  background:
+    linear-gradient(#fff, #fff) center / 1px 15px no-repeat,
+    linear-gradient(#fff, #fff) center / 15px 1px no-repeat;
+  filter: drop-shadow(0 0 1px #000);
+}
+
+.pointer-hint-copy {
+  color: rgba(242, 242, 242, 0.92);
+  font-size: 12px;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+  transform: translate(8px, -8px);
 }
 
 .falling-pill {

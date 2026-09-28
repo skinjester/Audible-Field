@@ -19,7 +19,7 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks } from "./falling-blocks.js?v=273";
+import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks } from "./falling-blocks.js?v=277";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=17";
 import { audioEngine } from "./audio-engine.js?v=46";
 import { gamepadInput } from "./gamepad-input.js?v=14";
@@ -921,6 +921,7 @@ function setActiveTab(tabId) {
     }
   } else {
     if (prevTab === "falling-blocks") {
+      hidePointerHint();
       hideFallingBlocks();
       if (inputMode === "browser" && audioEngine.running && audioEngine.ctx?.state === "suspended") {
         void audioEngine.ensurePlaying().then(() => {
@@ -1244,9 +1245,70 @@ window.setInterval(() => {
   }
 }, 400);
 
+let hidePointerHint = () => {};
+
+/**
+ * The label shares a layer with its own crosshair. The system cursor paints
+ * ahead of DOM layout, which is what made the hint look like it was catching up.
+ */
+function bindPointerHint() {
+  const hint = document.querySelector("[data-pointer-hint]");
+  if (!(hint instanceof HTMLElement) || !(fallingCanvas instanceof HTMLCanvasElement)) return;
+  document.body.appendChild(hint);
+
+  const mark = 15;
+  hint.hidden = false;
+  const shiftY = hint.offsetHeight / 2;
+  hint.hidden = true;
+  let shown = false;
+
+  function place(clientX, clientY) {
+    if (!shown) {
+      shown = true;
+      hint.hidden = false;
+      fallingCanvas.classList.add("has-pointer-hint");
+    }
+    hint.style.transform = `translate3d(${clientX - mark / 2}px, ${clientY - shiftY}px, 0)`;
+  }
+
+  function hide() {
+    if (!shown) return;
+    shown = false;
+    hint.hidden = true;
+    fallingCanvas.classList.remove("has-pointer-hint");
+  }
+
+  hidePointerHint = hide;
+
+  function track(event) {
+    if (event.pointerType === "touch") return;
+    if (
+      fallingCanvas.classList.contains("is-grabbing") ||
+      fallingCanvas.classList.contains("is-yawing")
+    ) {
+      hide();
+      return;
+    }
+    place(event.clientX, event.clientY);
+  }
+
+  fallingCanvas.addEventListener("pointerenter", track);
+  fallingCanvas.addEventListener("pointermove", track);
+  fallingCanvas.addEventListener("pointerdown", (event) => {
+    if (event.button === 2) hide();
+  });
+  fallingCanvas.addEventListener("pointerup", (event) => {
+    if (event.button !== 2 || event.target !== fallingCanvas) return;
+    place(event.clientX, event.clientY);
+  });
+  fallingCanvas.addEventListener("pointerleave", hide);
+  fallingCanvas.addEventListener("pointercancel", hide);
+}
+
 notify();
 updateCornerLabels();
 bindFallingAudioUi();
+bindPointerHint();
 renderDiagnostics();
 window.requestAnimationFrame(tick);
 connect();

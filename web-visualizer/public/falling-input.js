@@ -12,6 +12,7 @@ import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?
  * @typedef {{
  *   pointerDelta: { x: number, y: number } | null,
  *   pointerAt: { x: number, y: number } | null,
+ *   aimAt: { x: number, y: number } | null,
  *   emit: boolean,
  *   brushMode: BrushMode,
  *   analog: number,
@@ -55,6 +56,9 @@ export class FallingInput {
     /** Last pointer, kept while it rests so a pinned cursor can keep panning. */
     /** @type {{ x: number, y: number } | null} */
     this._pointerAt = null;
+    /** Canvas pointer while it is just hovering, so the emitter can follow it. */
+    /** @type {{ x: number, y: number } | null} */
+    this._aimAt = null;
     this._moveX = 0;
     this._moveY = 0;
     /** @type {{ x: number, y: number } | null} */
@@ -68,6 +72,7 @@ export class FallingInput {
     /** Presses of Tab / Shift+Tab since the last sample. */
     this._keyCycle = 0;
     this._onPointerMove = this._onPointerMove.bind(this);
+    this._onPointerOut = this._onPointerOut.bind(this);
     this._onPointerDown = this._onPointerDown.bind(this);
     this._onPointerUp = this._onPointerUp.bind(this);
     this._onPointerCancel = this._onPointerCancel.bind(this);
@@ -88,6 +93,7 @@ export class FallingInput {
     this._canvas = canvas;
     dualsenseHid.routeTouchToMixer = false;
     canvas.addEventListener("pointermove", this._onPointerMove);
+    canvas.addEventListener("pointerout", this._onPointerOut);
     canvas.addEventListener("pointerdown", this._onPointerDown);
     canvas.addEventListener("pointerup", this._onPointerUp);
     canvas.addEventListener("pointercancel", this._onPointerCancel);
@@ -105,6 +111,7 @@ export class FallingInput {
     if (canvas) {
       canvas.classList.remove("is-grabbing", "is-yawing");
       canvas.removeEventListener("pointermove", this._onPointerMove);
+      canvas.removeEventListener("pointerout", this._onPointerOut);
       canvas.removeEventListener("pointerdown", this._onPointerDown);
       canvas.removeEventListener("pointerup", this._onPointerUp);
       canvas.removeEventListener("pointercancel", this._onPointerCancel);
@@ -134,6 +141,7 @@ export class FallingInput {
     this._pointer = null;
     this._pointerFresh = false;
     this._pointerAt = null;
+    this._aimAt = null;
     this._moveX = 0;
     this._moveY = 0;
     this._lastClient = null;
@@ -266,6 +274,7 @@ export class FallingInput {
     return {
       pointerDelta: dx || dy ? { x: dx, y: dy } : null,
       pointerAt: this._pointerAt,
+      aimAt: this._aimAt,
       emit,
       brushMode,
       analog,
@@ -318,6 +327,7 @@ export class FallingInput {
 
   _onPointerGone() {
     this._pointerAt = null;
+    this._aimAt = null;
     this._pointer = null;
     this._pointerFresh = false;
     this._moveX = 0;
@@ -327,11 +337,17 @@ export class FallingInput {
   }
 
   /**
-   * Pointer position only. The grid does not follow a bare move.
+   * A move on the view places the emitter. Right-drag slides the grid.
+   * Shift+right-drag rotates.
    */
   _onWindowPointerMove(event) {
     this._lastClient = { x: event.clientX, y: event.clientY };
     this._pointerAt = { x: event.clientX, y: event.clientY };
+  }
+
+  _onPointerOut() {
+    if (this._rightHeld) return;
+    this._aimAt = null;
   }
 
   _onPointerMove(event) {
@@ -340,15 +356,20 @@ export class FallingInput {
       this._shiftHeld = event.shiftKey;
       this._syncMouseEmit();
     }
-    if (!this._rightHeld) return;
-    const yawing = event.shiftKey;
-    this._setDragCursor(yawing ? "yaw" : "pan");
-    if (yawing) {
+    if (this._rightHeld && event.shiftKey) {
+      this._aimAt = null;
+      this._setDragCursor("yaw");
       this._orbitAccum += -event.movementX * m.orbitRadiansPerPx;
       return;
     }
-    this._moveX += event.movementX || 0;
-    this._moveY += event.movementY || 0;
+    if (this._rightHeld) {
+      this._aimAt = null;
+      this._setDragCursor("pan");
+      this._moveX += event.movementX || 0;
+      this._moveY += event.movementY || 0;
+      return;
+    }
+    this._aimAt = { x: event.clientX, y: event.clientY };
   }
 
   /**
