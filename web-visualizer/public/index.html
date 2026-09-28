@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape Web Visualizer</title>
-    <link rel="stylesheet" href="/styles.css?v=152" />
+    <link rel="stylesheet" href="/styles.css?v=154" />
     <script type="importmap">
       {
         "imports": {
@@ -351,10 +351,98 @@
       </div>
 
       <div data-panel="falling-blocks" hidden>
-        <section class="viz-stage falling-stage">
+        <section class="viz-stage">
           <div class="viz-canvas-wrap">
             <canvas data-falling-canvas aria-label="Falling Blocks playfield"></canvas>
             <p class="viz-error" data-falling-error hidden></p>
+            <button type="button" class="falling-about falling-pill" data-falling-about>About</button>
+              <dialog class="falling-about-dialog" data-falling-about-dialog aria-labelledby="falling-about-title">
+                <form method="dialog" class="falling-about-panel">
+                  <header class="falling-about-head">
+                    <h2 id="falling-about-title">Falling Blocks (Field-1)</h2>
+                    <button type="submit" class="falling-about-close" value="cancel">Close</button>
+                  </header>
+                  <section class="falling-about-how">
+                    <h3>How the field resonates</h3>
+                    <p>
+                      Each quadrant is mapped to a sound. Pour atoms into one quadrant or across several to mix them. Wider piles get louder and brighter. Taller piles increase reverb and decay.
+                    </p>
+                    <p>
+                      A light right-trigger press makes a single stream. Press harder for clumps. The left trigger works in reverse. Press hard for a single stream.
+                    </p>
+                    <p>
+                      With a mouse, LMB makes clumps. Shift-LMB makes a stream.
+                    </p>
+                  </section>
+                  <section class="falling-about-how">
+                    <h3>Materials</h3>
+                    <p>
+                      You can choose different materials for the atoms you emit. Each material interacts with the others to change the shape of piles of atoms.
+                    </p>
+                    <div class="falling-about-materials">
+                      <div class="falling-about-material" data-material="block" style="--swatch: #c4624e">
+                        <h4><span class="falling-about-swatch" aria-hidden="true"></span>Block</h4>
+                        <p>A block sinks beneath whatever is underneath it. A pile of blocks will lose height as it sinks.</p>
+                      </div>
+                      <div class="falling-about-material" data-material="sand" style="--swatch: #e0a84a">
+                        <h4><span class="falling-about-swatch" aria-hidden="true"></span>Sand</h4>
+                        <p>Piles into gaps and has a tendency to spread out.</p>
+                      </div>
+                      <div class="falling-about-material" data-material="diffuse" style="--swatch: #f4d59a">
+                        <h4><span class="falling-about-swatch" aria-hidden="true"></span>Diffuse</h4>
+                        <p>Piles up like sand but turns everything it touches into more Diffuse and floats away, causing piles of atoms to dissipate.</p>
+                      </div>
+                      <div class="falling-about-material" data-material="erode" style="--swatch: #7a9e6a">
+                        <h4><span class="falling-about-swatch" aria-hidden="true"></span>Erode</h4>
+                        <p>Clears the atoms it contacts, and what is left behind shrinks. Can be used to cut through or annihilate piles of atoms. Unlike other materials, Erode doesn't trigger audio on its own.</p>
+                      </div>
+                    </div>
+                  </section>
+                </form>
+              </dialog>
+              <div class="falling-material-bar">
+                <div class="falling-material-row">
+                  <span class="pad-glyph" data-falling-shoulder="prev" role="img" aria-label="L2">&#x011A;</span>
+                  <div class="falling-palette" data-falling-palette role="group" aria-label="Material"></div>
+                  <span class="pad-glyph" data-falling-shoulder="next" role="img" aria-label="R2">&#x011B;</span>
+                </div>
+                <span class="falling-material-label">Materials</span>
+              </div>
+              <div class="falling-hud">
+                <label class="falling-yaw">
+                  <span class="falling-yaw-name">Yaw limit</span>
+                  <input
+                    type="range"
+                    data-falling-yaw
+                    min="0"
+                    max="360"
+                    step="1"
+                    value="360"
+                    aria-valuemin="0"
+                    aria-valuemax="360"
+                    aria-label="Yaw limit n, rotation from negative n to positive n"
+                  />
+                  <span class="falling-yaw-readout" data-falling-yaw-readout>±360°</span>
+                </label>
+                <div class="falling-palette-row">
+                  <button type="button" class="falling-clear falling-face falling-pill" data-falling-clear title="Clear board">
+                    <span class="pad-glyph" aria-hidden="true">&#x0115;</span>
+                    Clear
+                  </button>
+                  <button type="button" class="falling-audio falling-face falling-pill" data-falling-audio aria-pressed="true" title="Sonify the field">
+                    <span class="pad-glyph" aria-hidden="true">&#x0116;</span>
+                    Audio
+                  </button>
+                  <span class="falling-pill" data-falling-trigger="lt" role="img" aria-label="Left trigger emits a stream">
+                    <span class="pad-glyph" aria-hidden="true">&#x0108;</span>
+                    Emit Stream
+                  </span>
+                  <span class="falling-pill" data-falling-trigger="rt" role="img" aria-label="Right trigger emits a clump">
+                    <span class="pad-glyph" aria-hidden="true">&#x0109;</span>
+                    Emit Clump
+                  </span>
+                </div>
+              </div>
             <aside class="falling-readout" data-falling-readout>
               <table class="falling-measures" aria-label="Corner measures">
                 <colgroup>
@@ -457,99 +545,9 @@
               <div><span data-falling-atoms>--</span> atoms · <span data-falling-tris>--</span> polys</div>
             </div>
           </div>
-          <div class="falling-dock">
-            <button type="button" class="falling-about falling-pill" data-falling-about>About</button>
-              <dialog class="falling-about-dialog" data-falling-about-dialog aria-labelledby="falling-about-title">
-                <form method="dialog" class="falling-about-panel">
-                  <header class="falling-about-head">
-                    <h2 id="falling-about-title">Falling Blocks (Field-1)</h2>
-                    <button type="submit" class="falling-about-close" value="cancel">Close</button>
-                  </header>
-                  <section class="falling-about-how">
-                    <h3>How the field resonates</h3>
-                    <p>
-                      Each quadrant is mapped to a sound. Pour atoms into one quadrant or across several to mix them. Wider piles get louder and brighter. Taller piles increase reverb and decay.
-                    </p>
-                    <p>
-                      A light right-trigger press makes a single stream. Press harder for clumps. The left trigger works in reverse. Press hard for a single stream.
-                    </p>
-                    <p>
-                      With a mouse, LMB makes clumps. Shift-LMB makes a stream.
-                    </p>
-                  </section>
-                  <section class="falling-about-how">
-                    <h3>Materials</h3>
-                    <p>
-                      You can choose different materials for the atoms you emit. Each material interacts with the others to change the shape of piles of atoms.
-                    </p>
-                    <div class="falling-about-materials">
-                      <div class="falling-about-material" data-material="block" style="--swatch: #c4624e">
-                        <h4><span class="falling-about-swatch" aria-hidden="true"></span>Block</h4>
-                        <p>A block sinks beneath whatever is underneath it. A pile of blocks will lose height as it sinks.</p>
-                      </div>
-                      <div class="falling-about-material" data-material="sand" style="--swatch: #e0a84a">
-                        <h4><span class="falling-about-swatch" aria-hidden="true"></span>Sand</h4>
-                        <p>Piles into gaps and has a tendency to spread out.</p>
-                      </div>
-                      <div class="falling-about-material" data-material="diffuse" style="--swatch: #f4d59a">
-                        <h4><span class="falling-about-swatch" aria-hidden="true"></span>Diffuse</h4>
-                        <p>Piles up like sand but turns everything it touches into more Diffuse and floats away, causing piles of atoms to dissipate.</p>
-                      </div>
-                      <div class="falling-about-material" data-material="erode" style="--swatch: #7a9e6a">
-                        <h4><span class="falling-about-swatch" aria-hidden="true"></span>Erode</h4>
-                        <p>Clears the atoms it contacts, and what is left behind shrinks. Can be used to cut through or annihilate piles of atoms. Unlike other materials, Erode doesn't trigger audio on its own.</p>
-                      </div>
-                    </div>
-                  </section>
-                </form>
-              </dialog>
-              <div class="falling-material-bar">
-                <div class="falling-material-row">
-                  <span class="pad-glyph" data-falling-shoulder="prev" role="img" aria-label="L2">&#x011A;</span>
-                  <div class="falling-palette" data-falling-palette role="group" aria-label="Material"></div>
-                  <span class="pad-glyph" data-falling-shoulder="next" role="img" aria-label="R2">&#x011B;</span>
-                </div>
-                <span class="falling-material-label">Materials</span>
-              </div>
-              <div class="falling-hud">
-                <label class="falling-yaw">
-                  <span class="falling-yaw-name">Yaw limit</span>
-                  <input
-                    type="range"
-                    data-falling-yaw
-                    min="0"
-                    max="360"
-                    step="1"
-                    value="360"
-                    aria-valuemin="0"
-                    aria-valuemax="360"
-                    aria-label="Yaw limit n, rotation from negative n to positive n"
-                  />
-                  <span class="falling-yaw-readout" data-falling-yaw-readout>±360°</span>
-                </label>
-                <div class="falling-palette-row">
-                  <button type="button" class="falling-clear falling-face falling-pill" data-falling-clear title="Clear board">
-                    <span class="pad-glyph" aria-hidden="true">&#x0115;</span>
-                    Clear
-                  </button>
-                  <button type="button" class="falling-audio falling-face falling-pill" data-falling-audio aria-pressed="true" title="Sonify the field">
-                    <span class="pad-glyph" aria-hidden="true">&#x0116;</span>
-                    Audio
-                  </button>
-                  <span class="falling-pill" data-falling-trigger="lt" role="img" aria-label="Left trigger emits a stream">
-                    <span class="pad-glyph" aria-hidden="true">&#x0108;</span>
-                    Emit Stream
-                  </span>
-                  <span class="falling-pill" data-falling-trigger="rt" role="img" aria-label="Right trigger emits a clump">
-                    <span class="pad-glyph" aria-hidden="true">&#x0109;</span>
-                    Emit Clump
-                  </span>
-                </div>
-              </div>
-          </div>
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=313"></script>
+    <script type="module" src="/app.js?v=314"></script>
   </body>
 </html>

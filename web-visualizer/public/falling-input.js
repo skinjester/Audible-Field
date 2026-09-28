@@ -314,6 +314,7 @@ export class FallingInput {
   }
 
   _onPointerGone() {
+    if (document.pointerLockElement === this._canvas) return;
     this._pointerAt = null;
     this._pointer = null;
     this._pointerFresh = false;
@@ -324,31 +325,24 @@ export class FallingInput {
   }
 
   /**
-   * Relative pointer motion. Only the 3D viewport pans; the control dock does not.
+   * Relative pointer motion. A drag on a form control does not pan the grid.
    */
   _onWindowPointerMove(event) {
     if (this._orbiting) {
       this._lastClient = { x: event.clientX, y: event.clientY };
       return;
     }
-    const canvas = this._canvas;
-    const overCanvas =
-      !!canvas &&
-      event.target instanceof Node &&
-      (event.target === canvas || canvas.contains(event.target));
+    const target = event.target;
+    const onControl = target instanceof Element && target.closest("input, textarea, select");
     let dx = event.movementX || 0;
     let dy = event.movementY || 0;
-    if (!dx && !dy && this._lastClient && overCanvas) {
+    if (!dx && !dy && this._lastClient && !onControl) {
       dx = event.clientX - this._lastClient.x;
       dy = event.clientY - this._lastClient.y;
     }
     this._lastClient = { x: event.clientX, y: event.clientY };
-    if (!overCanvas) {
-      this._pointerAt = null;
-      return;
-    }
     this._pointerAt = { x: event.clientX, y: event.clientY };
-    if (!this.bindings.mouse.moveAimsEmitter) return;
+    if (onControl || !this.bindings.mouse.moveAimsEmitter) return;
     this._moveX += dx;
     this._moveY += dy;
   }
@@ -365,9 +359,16 @@ export class FallingInput {
     }
   }
 
+  _engagePointerLock() {
+    const canvas = this._canvas;
+    if (!canvas || document.pointerLockElement === canvas) return;
+    canvas.requestPointerLock?.();
+  }
+
   _onPointerDown(event) {
     const m = this.bindings.mouse;
     const canvas = this._canvas;
+    this._engagePointerLock();
     if (event.button === m.orbitButton) {
       this._orbiting = true;
       event.preventDefault();
