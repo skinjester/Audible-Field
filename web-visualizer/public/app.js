@@ -19,11 +19,11 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { clearBoard, hideFallingBlocks, readGridSnapshot, showFallingBlocks, toggleBrushCurveInvert } from "./falling-blocks.js?v=214";
-import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=15";
-import { audioEngine } from "./audio-engine.js?v=43";
-import { gamepadInput } from "./gamepad-input.js?v=7";
-import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=4";
+import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks, toggleBrushCurveInvert } from "./falling-blocks.js?v=235";
+import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=17";
+import { audioEngine } from "./audio-engine.js?v=45";
+import { gamepadInput } from "./gamepad-input.js?v=9";
+import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=5";
 import { openStemDropdown } from "./sample-picker.js?v=16";
 import { openFxDropdown } from "./fx-picker.js?v=3";
 import {
@@ -373,6 +373,10 @@ function activateFaceButton(button) {
     toggleBrushCurveInvert();
     return;
   }
+  if (button === "square" && activeTab === "falling-blocks") {
+    void setFallingAudioEnabled(!fallingAudioEnabled);
+    return;
+  }
   if (button === "cross" && activeTab === "falling-blocks") {
     // Cross / X is held to emit in falling-blocks; ignore as FX select.
     return;
@@ -672,12 +676,13 @@ function updateDualsenseHidUi() {
           : "HID";
     const reports = dualsenseHid.reportCount;
     const touch = dualsenseHid.touch.active ? " · finger" : "";
+    const click = dualsenseHid.touch.pressed ? " · click" : "";
     const rid =
       dualsenseHid.lastReportId != null
         ? ` · r0x${dualsenseHid.lastReportId.toString(16)}`
         : "";
     dsStatusEl.textContent = reports
-      ? `Touchpad: ${via}${rid} · ${reports} reports${touch}`
+      ? `Touchpad: ${via}${rid} · ${reports} reports${touch}${click}`
       : `Touchpad: ${dualsenseHid.padId || "DualSense"} (${via}) — waiting for reports…`;
     // Live link — no reconnect until HID drops.
     dsConnectBtn.disabled = true;
@@ -692,13 +697,13 @@ function updateDualsenseHidUi() {
     dsConnectBtn.dataset.state = "";
   }
 
-  lastDsHidUiKey = `${inputMode}|${dualsenseHid.connected}|${dualsenseHid.connectionType}|${dualsenseHid.padId}|${DualsenseHid.isSupported()}|${embedded}|${dualsenseHid.reportCount > 0}|${dualsenseHid.touch.active}|${dualsenseHid.lastReportId}|${dsHadSession}`;
+  lastDsHidUiKey = `${inputMode}|${dualsenseHid.connected}|${dualsenseHid.connectionType}|${dualsenseHid.padId}|${DualsenseHid.isSupported()}|${embedded}|${dualsenseHid.reportCount > 0}|${dualsenseHid.touch.active}|${dualsenseHid.touch.pressed}|${dualsenseHid.lastReportId}|${dsHadSession}`;
 }
 
 let lastDsHidUiKey = "";
 
 function syncDualsenseHidUi() {
-  const key = `${inputMode}|${dualsenseHid.connected}|${dualsenseHid.connectionType}|${dualsenseHid.padId}|${DualsenseHid.isSupported()}|${isEmbeddedIdeBrowser()}|${dualsenseHid.reportCount > 0}|${dualsenseHid.touch.active}|${dualsenseHid.lastReportId}|${dsHadSession}`;
+  const key = `${inputMode}|${dualsenseHid.connected}|${dualsenseHid.connectionType}|${dualsenseHid.padId}|${DualsenseHid.isSupported()}|${isEmbeddedIdeBrowser()}|${dualsenseHid.reportCount > 0}|${dualsenseHid.touch.active}|${dualsenseHid.touch.pressed}|${dualsenseHid.lastReportId}|${dsHadSession}`;
   if (key === lastDsHidUiKey) return;
   updateDualsenseHidUi();
 }
@@ -787,7 +792,7 @@ function tick(now) {
         audioEngine.sync({ x: 0.5, y: 0.5 }, shadow.controller);
         audioEngine.setStemGains(shadow.gains, shadow.pans, shadow.cutoffs);
         audioEngine.setStemPitch(shadow.rates);
-        audioEngine.setStemReverb(shadow.reverbs);
+        audioEngine.setStemReverb(shadow.reverbs, shadow.decays, shadow.longTails);
         if (shadow.splash) audioEngine.playSplash(shadow.splash);
         audioEngine.setOutputLevel(1);
         audioEngine.setCameraPresence(snap.view?.near, snap.view?.far);
@@ -854,6 +859,10 @@ function bindFallingAudioUi() {
     void setFallingAudioEnabled(!fallingAudioEnabled);
   });
 }
+
+onFallingAudioToggle(() => {
+  void setFallingAudioEnabled(!fallingAudioEnabled);
+});
 
 function storedTab() {
   try {

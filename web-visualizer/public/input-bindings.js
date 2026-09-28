@@ -4,12 +4,22 @@
  *
  * Mouse:
  *   move            → aim emitter
- *   LMB hold        → emit at full width
- *   Shift+LMB hold  → emit a single column
+ *   LMB hold        → largest emitter (full field, full atom size)
+ *   Shift+LMB hold  → smallest emitter (one half-size column)
  *   RMB drag        → yaw the playfield (camera / grid)
  *   wheel           → zoom
  *
- * Triangle still mirrors the RT width curve. Gamepad / keys stay below.
+ * Touchpad (DualSense, after Connect touchpad):
+ *   finger          → aim the emitter on the emit-height plane
+ *   finger hold     → emit atoms (largest brush, same as Cross / LMB)
+ *   touchpad click  → emit atoms while the pad is pressed in
+ *
+ * Triangle mirrors the RT width curve (emitter profile).
+ * Square toggles field audio. Circle clears the board.
+ *
+ * D-pad up / down, and the up / down arrow keys, step the emitter height
+ * (tap = one row, hold repeats).
+ * D-pad left / right still aims across the playfield.
  */
 
 /** @typedef {"pressure" | "max" | "single"} BrushMode */
@@ -33,6 +43,8 @@ export const gamepadButtons = {
   dpadDown: 13,
   dpadLeft: 14,
   dpadRight: 15,
+  /** DualSense / DualShock touchpad click in Chrome's standard mapping. */
+  touchpad: 17,
 };
 
 /** Standard mapping axes. Y is inverted at the call site (up = positive). */
@@ -47,7 +59,7 @@ export const inputBindings = {
   mouse: {
     /** 0 = left, 1 = middle, 2 = right */
     emitButton: 0,
-    /** Held with emitButton: 1×1 column instead of the wide brush. */
+    /** Held with emitButton: smallest emitter instead of the largest. */
     emitSingleModifier: "shift",
     orbitButton: 2,
     /** Pointer move always aims the emitter (unless orbiting). */
@@ -61,6 +73,9 @@ export const inputBindings = {
     /** KeyboardEvent.code — hold to emit. Empty string disables. */
     emit: "KeyX",
     emitBrush: /** @type {BrushMode} */ ("max"),
+    /** Same height steps as D-pad up / down. */
+    heightUp: "ArrowUp",
+    heightDown: "ArrowDown",
   },
   gamepad: {
     /** Deadzone for the mixer poll in gamepad-input.js. */
@@ -73,6 +88,9 @@ export const inputBindings = {
     emitAnalogThreshold: 0.08,
     emitDigitalBrush: /** @type {BrushMode} */ ("max"),
     clear: "circle",
+    /** Toggles sonification of the field. */
+    audioToggle: "square",
+    /** Mirrors the emitter pressure curve. */
     invertCurve: "triangle",
     cyclePrev: "l1",
     cycleNext: "r1",
@@ -80,5 +98,9 @@ export const inputBindings = {
     orbitStickRate: 1.15,
     /** Right-stick Y → zoom exp rate. */
     zoomStickRate: 1.15,
+    /** D-pad up/down: seconds before a hold starts repeating height steps. */
+    heightInitialDelay: 0.22,
+    /** D-pad up/down: seconds between height steps while held. */
+    heightRepeat: 0.06,
   },
 };

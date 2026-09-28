@@ -74,6 +74,9 @@ function strikeRate(hit) {
   return Math.min(4, Math.max(0.25, rate));
 }
 
+/** Concurrent landing repeats per quadrant. Each one lasts the ground-ring lifetime. */
+const STRIKE_VOICES = 24;
+
 /** Up to `max` strikes spread from shortest life to longest. */
 function sampleLifetimes(lives, max) {
   const sorted = lives.filter((hit) => strikeLife(hit) > 0).sort((a, b) => strikeLife(a) - strikeLife(b));
@@ -1462,21 +1465,26 @@ export class EchoScapeAudioEngine {
    * Match the diagnostics Square Grey Hole. Stick scales 2.6 and 3.8 pin
    * center-stick to the top of size, delayTime, feedback, and diffusion.
    * Height 1 is that setting. Shorter stacks move toward it.
+   * A rising tail sits on the longest delay and size, with feedback just under runaway
+   * so the bloom decays over a few minutes instead of holding forever.
    * @param {{ setParamValue?: Function }} node
    * @param {number} height01
+   * @param {boolean} [longTail]
    */
-  _applyGreyholeHeight(node, height01) {
+  _applyGreyholeHeight(node, height01, longTail = false) {
     if (!node?.setParamValue) return;
     const h = Math.min(1, Math.max(0, Number(height01) || 0));
+    const shaped = longTail ? Math.min(1, 0.82 + 0.18 * h) : h;
+    const feedback = longTail ? Math.min(0.98, shaped) : h;
     const pairs = [
       ["/greyhole/bypass", 0],
       ["/greyhole/damping", 0],
       ["/greyhole/modDepth", 0.1],
       ["/greyhole/modFreq", 2],
-      ["/greyhole/size", 0.5 + (3 - 0.5) * h],
-      ["/greyhole/delayTime", 0.001 + (1.45 - 0.001) * h],
-      ["/greyhole/feedback", h],
-      ["/greyhole/diffusion", 0.99 * h],
+      ["/greyhole/size", 0.5 + (3 - 0.5) * shaped],
+      ["/greyhole/delayTime", 0.001 + (1.45 - 0.001) * shaped],
+      ["/greyhole/feedback", feedback],
+      ["/greyhole/diffusion", 0.99 * shaped],
     ];
     for (const [name, value] of pairs) {
       try {
@@ -1489,18 +1497,24 @@ export class EchoScapeAudioEngine {
 
   /**
    * Per-stem Greyhole send. 0 is dry. 1 is the diagnostics Grey Hole at full throw.
+   * `decays` drives the tail length. `longTails` holds the very long rising decay.
    * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} levels
+   * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} [decays]
+   * @param {{ tl?: boolean, tr?: boolean, bl?: boolean, br?: boolean } | null} [longTails]
    */
-  setStemReverb(levels) {
+  setStemReverb(levels, decays, longTails) {
     if (!this._stemReverbs) return;
     for (const corner of CORNERS) {
       const rec = this._stemReverbs[corner];
       if (!rec?.send) continue;
       const level = Math.min(1, Math.max(0, Number(levels?.[corner]) || 0));
+      const decay = Math.min(1, Math.max(0, Number(decays?.[corner] ?? level) || 0));
+      const longTail = Boolean(longTails?.[corner]);
       rec.send.gain.value = level;
-      if (Math.abs(level - rec.applied) < 0.01) continue;
-      rec.applied = level;
-      this._applyGreyholeHeight(rec.node, level);
+      if (Math.abs(decay - rec.applied) < 0.01 && rec.longTail === longTail) continue;
+      rec.applied = decay;
+      rec.longTail = longTail;
+      this._applyGreyholeHeight(rec.node, decay, longTail);
     }
   }
 
@@ -1574,8 +1588,7 @@ export class EchoScapeAudioEngine {
 
   /**
    * Repeat each landed quadrant's own sample. The repeat's low-pass sweeps
-   * shut across that atom's lifetime: a short life closes fast, a long one lingers.
-   * Each repeat plays at the pitch of the cell that landed.
+   * shut across the ground-ring lifetime, at the pitch of the cell that landed.
    * @param {Record<string, ({ life: number, rate?: number } | number)[]> | null} hits
    */
   playSplash(hits) {
@@ -1593,13 +1606,13 @@ export class EchoScapeAudioEngine {
     const t = ctx.currentTime;
     const panValue = stem.pan ? stem.pan.pan.value : 0;
     const active = stem.sweepCount || 0;
-    const room = 4 - active;
+    const room = STRIKE_VOICES - active;
     if (room <= 0) return;
     const chosen = sampleLifetimes(lives, room);
     stem.sweepCount = active + chosen.length;
     const buffer = this._strikeBuffers?.[corner] || null;
     for (let i = 0; i < chosen.length; i += 1) {
-      const dur = Math.min(3.5, Math.max(0.1, strikeLife(chosen[i]) || 0.1));
+      const dur = Math.min(5, Math.max(0.1, strikeLife(chosen[i]) || 0.1));
       const rate = strikeRate(chosen[i]);
       const gain = ctx.createGain();
       const delay = ctx.createDelay(0.2);

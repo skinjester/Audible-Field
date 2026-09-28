@@ -2,10 +2,13 @@
  * DualSense touchpad via WebHID (Chrome / Edge / Opera).
  * Sticks / face / D-pad stay on the Gamepad API (gamepad-input.js).
  *
- * Layouts follow nondebug/dualsense + dualsense-ts:
- *   USB  report 0x01 → touch at DataView offset 32
- *   BT   report 0x31 → touch at DataView offset 33
+ * Layouts follow nondebug/dualsense + the Linux dualsense_input_report:
+ *   USB  report 0x01 → common payload at DataView 0 (touch at 32, click at byte 9 bit 1)
+ *   BT   report 0x31 → common payload at DataView 1 (touch at 33, click at byte 10 bit 1)
  * Reading feature report 0x05 switches BT from short 0x01 → full 0x31.
+ *
+ * Falling Blocks reads `touch` directly and sets `routeTouchToMixer` false
+ * so a finger aims the emitter instead of the mix pad.
  */
 
 import { setTarget } from "./mixer-core.js?v=65";
@@ -100,6 +103,20 @@ function extractTouch(reportId, report) {
   return null;
 }
 
+/**
+ * Mechanical touchpad click from a full input report.
+ * @returns {boolean | null} null when this report has no button bytes
+ */
+function extractTouchpadPressed(reportId, report) {
+  const len = report.byteLength;
+  // buttons[2] bit 1. Short BT 0x01 is too small and is left unchanged.
+  let offset = -1;
+  if (reportId === 0x01 && len >= 36) offset = 9;
+  else if (reportId === 0x31 && len >= 41) offset = 10;
+  if (offset < 0 || offset >= len) return null;
+  return (report.getUint8(offset) & 0x02) !== 0;
+}
+
 export class DualsenseHid {
   constructor() {
     this.enabled = false;
@@ -113,8 +130,15 @@ export class DualsenseHid {
     this.lastReportLen = 0;
     /** While true, mouse owns the mix pad (skip touchpad overwrite). */
     this.uiLockPad = false;
+    /**
+     * While false, touch updates `touch` only (Falling Blocks aims the emitter).
+     * Diagnostics / visualize still drive the mix pad.
+     */
+    this.routeTouchToMixer = true;
     this.touch = {
       active: false,
+      /** Mechanical click (pad pushed in), separate from a light finger contact. */
+      pressed: false,
       x: 0.5,
       y: 0.5,
     };
@@ -238,9 +262,13 @@ export class DualsenseHid {
    */
   poll() {
     if (!this.enabled || !this.connected || !this.touch.active) return false;
-    if (this.uiLockPad) return false;
+    if (!this._shouldDriveMixer()) return false;
     setTarget(this.touch.x, this.touch.y, "touchpad", true);
     return true;
+  }
+
+  _shouldDriveMixer() {
+    return this.routeTouchToMixer && !this.uiLockPad;
   }
 
   async _openDevice(device) {
@@ -258,6 +286,7 @@ export class DualsenseHid {
     this.lastReportId = null;
     this.lastReportLen = 0;
     this.touch.active = false;
+    this.touch.pressed = false;
 
     // Prefer the standard event; oninputreport is a fallback property some demos use.
     device.addEventListener("inputreport", this._onInputReport);
@@ -285,6 +314,7 @@ export class DualsenseHid {
     this.connected = false;
     this.padId = "";
     this.touch.active = false;
+    this.touch.pressed = false;
     this.reportCount = 0;
     this.lastReportId = null;
     this.lastReportLen = 0;
@@ -298,6 +328,9 @@ export class DualsenseHid {
     this.reportCount += 1;
     this.lastReportId = reportId;
     this.lastReportLen = report.byteLength;
+
+    const pressed = extractTouchpadPressed(reportId, report);
+    if (pressed !== null) this.touch.pressed = pressed;
 
     const contact = extractTouch(reportId, report);
     if (!contact) {
@@ -315,7 +348,7 @@ export class DualsenseHid {
     this.touch.y = n.y;
 
     // Drive mixer immediately (don't wait for rAF poll).
-    if (!this.uiLockPad) {
+    if (this._shouldDriveMixer()) {
       setTarget(n.x, n.y, "touchpad", true);
     }
   }

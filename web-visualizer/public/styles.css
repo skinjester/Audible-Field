@@ -1,3 +1,10 @@
+/* Controller glyphs: https://github.com/SamarthMP/controller-icons-font */
+@font-face {
+  font-family: "Config Glyphs";
+  src: url("/fonts/Config-Glyphs.otf") format("opentype");
+  font-display: swap;
+}
+
 :root {
   --bg: #080808;
   --panel: #121212;
@@ -1182,6 +1189,135 @@ dd {
   touch-action: none;
 }
 
+.falling-about {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 3;
+  pointer-events: auto;
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.falling-about:hover {
+  color: var(--live);
+  border-color: rgba(110, 231, 183, 0.35);
+}
+
+.falling-about-dialog {
+  width: min(560px, calc(100vw - 48px));
+  height: fit-content;
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  overflow: visible;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+
+.falling-about-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.falling-about-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  margin: 0;
+  padding: 36px 40px 40px;
+  overflow: visible;
+}
+
+.falling-about-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.falling-about-head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.falling-about-close {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.falling-about-close:hover {
+  color: var(--live);
+  border-color: rgba(110, 231, 183, 0.35);
+}
+
+.falling-about-how h3 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.falling-about-how {
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.falling-about-how p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.falling-material-bar {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  max-width: calc(100% - 24px);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.pad-glyph {
+  flex: 0 0 auto;
+  font-family: "Config Glyphs", sans-serif;
+  font-size: 28px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.32);
+  text-shadow: none;
+  user-select: none;
+}
+
+.pad-glyph.is-lit {
+  color: var(--live);
+  text-shadow: 0 0 10px color-mix(in srgb, var(--live) 75%, transparent);
+}
+
 .falling-hud {
   position: absolute;
   left: 12px;
@@ -1374,6 +1510,18 @@ dd {
   pointer-events: auto;
 }
 
+.falling-face {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.falling-face .pad-glyph {
+  font-size: 15px;
+  color: inherit;
+  text-shadow: none;
+}
+
 .falling-clear {
   pointer-events: auto;
   appearance: none;
@@ -1413,6 +1561,53 @@ dd {
 .falling-audio:hover {
   color: var(--live);
   border-color: rgba(110, 231, 183, 0.35);
+}
+
+.falling-profile {
+  pointer-events: auto;
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.falling-profile[aria-pressed="true"] {
+  color: var(--live);
+  border-color: rgba(110, 231, 183, 0.45);
+}
+
+.falling-profile:hover {
+  color: var(--live);
+  border-color: rgba(110, 231, 183, 0.35);
+}
+
+.falling-height-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.falling-height-hint .pad-glyph {
+  font-size: 15px;
+  color: inherit;
+}
+
+.falling-height-keys {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  line-height: 1;
 }
 
 .falling-palette button {

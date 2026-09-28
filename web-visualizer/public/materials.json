@@ -22,7 +22,7 @@
         },
         {
           "name": "crush-support",
-          "when": { "resting": true, "onFloor": true, "sameAbove": true },
+          "when": { "sameAbove": true, "sameBelow": false },
           "do": { "age": 3.5, "then": "clear" }
         }
       ]
@@ -79,13 +79,8 @@
           "do": { "age": 4.5, "hold": 2, "lifeScale": 0.5, "visual": "rise", "then": "clear" }
         },
         {
-          "name": "crush-block",
-          "when": { "resting": true, "onFloor": true, "blockAbove": true },
-          "do": { "age": 3.5, "then": "clear" }
-        },
-        {
           "name": "spread",
-          "do": { "convert": { "any": true } }
+          "do": { "convert": { "any": true, "limit": "collection" } }
         }
       ]
     },
@@ -112,6 +107,13 @@
           ]
         },
         {
+          "name": "creep",
+          "maybe": 0.25,
+          "any": "xz.rotations",
+          "supportUnderDest": true,
+          "diagram": ["@_ => _@"]
+        },
+        {
           "name": "lone-dissolve",
           "when": { "resting": true, "onFloor": true, "sameAbove": false, "blockAbove": false },
           "do": { "age": 6, "visual": "shrink", "then": "clear" }
@@ -122,13 +124,8 @@
           "do": { "age": 6, "then": "clear" }
         },
         {
-          "name": "crush-block",
-          "when": { "resting": true, "onFloor": true, "blockAbove": true },
-          "do": { "age": 6, "then": "clear" }
-        },
-        {
           "name": "vacuum",
-          "do": { "vacuum": { "skipSurface": "liquid" } }
+          "do": { "vacuum": { "skipSurface": "liquid" }, "then": "clear" }
         }
       ]
     }

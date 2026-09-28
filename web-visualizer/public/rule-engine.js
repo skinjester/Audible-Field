@@ -15,8 +15,10 @@
  * Legacy match/result string arrays still compile.
  *
  * Surfaces (material.surface):
- *   solid   — no splash when something rests on it
- *   liquid  — splash when a grain lands or shifts onto it
+ *   A sonifying grain splashes on the step that first reaches the ground
+ *   plane. Later slides along the floor stay quiet. The ring is drawn on
+ *   the ground plane, and the audio cue is that ring. Liquid movers make
+ *   no landing sound.
  * World floor uses catalog.floor ("liquid" | "solid").
  * sonify: false — the grain is not footprint or height, and landing is silent.
  *
@@ -46,22 +48,33 @@
  * slide "closestOpen": a resting floor block with any atom above steps one cell
  * outward. The column above drops straight down into the cell it left.
  *   { infect: { seconds, skipSurface?: "liquid" } }
- *   { convert: { id } } or { convert: { any: true } }
+ *   { convert: { id } } or { convert: { any: true, limit?: "collection" } }
  *   Face neighbors become this material. `id` limits that to one material.
  *   `any` converts every other material. Empty cells stay empty.
- *   { vacuum: { skipSurface?: "liquid" } }
+ *   `limit: "collection"` : a face-connected group spends one conversion per
+ *   poured grain (stored on the cell budget). A stack of 5 can turn 5 other
+ *   atoms. Converted grains start with budget 0, so they do not add more.
+ *   A grain that fell or slid this tick keeps its conversion until it is
+ *   sitting still, so the spend lands on the pile it settles in.
+ *   { vacuum: { skipSurface?: "liquid" }, then?: "clear" }
  *   vacuum clears each solid face neighbor. Every remaining face neighbor of
  *   that cell snaps to half size and stays there. Nothing is pulled toward
- *   the emptied cell. Liquids are not cleared.
+ *   the emptied cell. Liquids are not cleared. `then: "clear"` also despawns
+ *   this grain when it clears at least one neighbor.
  *   { absorbSparse: { seconds, minNeighbors } }
  *   { dryUnbounded: { seconds, resetOn?: "gainedTouch" } }
  *   { cullShuffle: { hops, span } }
- * Predicates: resting, onFloor, sameAbove, above, blockAbove, flow, boundedCatchment,
- * infection, belowMinNeighbors. Host column queries supply resting / onFloor /
- * sameAbove / above / blockAbove.
+ * Predicates: resting, onFloor, sameAbove, sameBelow, above, blockAbove, flow,
+ * boundedCatchment, infection, belowMinNeighbors. Host column queries supply
+ * resting / onFloor / sameAbove / above / blockAbove.
  * `above` is any atom higher in the same column, any material.
- * `blockAbove` is a block higher in that column. A block sitting on any atom
- * crushes that support the same way a block crushes another block.
+ * `sameBelow` is the same material in the cell directly below.
+ * `blockAbove` is a block higher in that column.
+ * A block sinks every atom underneath it in that column, whatever the
+ * material is. The clock is the block crush time, and it does not wait for
+ * the world floor. A column of blocks keeps losing its bottom block while
+ * another block is above it, including when that bottom block sits on
+ * another material, so nothing under the column holds its height.
  * All matching effects run. Each age / absorb / dry rule has its own clock.
  * One infection channel caps a matching age, or shrinks a cell that has none.
  */
@@ -121,7 +134,7 @@ const ROTATIONS_XZ = [
  *   cellCenter?: (x: number, y: number, z: number) => { x: number, y: number, z: number },
  *   getWorld?: (x: number, y: number, z: number) => { x: number, y: number, z: number },
  * }} GridApi
- * @typedef {{ defaultId: string, floor: "solid" | "liquid", clockCount: number, list: MaterialDef[], byId: Map<string, MaterialDef>, indexById: Map<string, number>, idByIndex: string[] }} MaterialCatalog
+ * @typedef {{ defaultId: string, floor: "solid" | "liquid", clockCount: number, sinkClockId: number, list: MaterialDef[], byId: Map<string, MaterialDef>, indexById: Map<string, number>, idByIndex: string[] }} MaterialCatalog
  * @typedef {{ x: number, y: number, z: number }} CellPos
  */
 
@@ -209,15 +222,17 @@ export function compileMaterials(raw) {
       : materials[0]?.id || "";
 
   const floor = payload.floor === "solid" ? "solid" : "liquid";
+  const sinkClockId = clockCount;
+  clockCount += 1;
 
-  return { defaultId, floor, clockCount, list: materials, byId, indexById, idByIndex };
+  return { defaultId, floor, clockCount, sinkClockId, list: materials, byId, indexById, idByIndex };
 }
 
 function normalizeWhen(when) {
   if (!when || typeof when !== "object" || Array.isArray(when)) return {};
   /** @type {Record<string, boolean | number>} */
   const out = {};
-  for (const key of ["resting", "onFloor", "sameAbove", "above", "blockAbove", "boundedCatchment", "infection", "flow"]) {
+  for (const key of ["resting", "onFloor", "sameAbove", "sameBelow", "above", "blockAbove", "boundedCatchment", "infection", "flow"]) {
     if (when[key] === true || when[key] === false) out[key] = when[key];
   }
   const below = Number(when.belowMinNeighbors);
@@ -266,6 +281,7 @@ function normalizeEffect(rule) {
       ...base,
       kind: "vacuum",
       skipSurface: verb.vacuum.skipSurface === "liquid" ? "liquid" : null,
+      thenClear: verb.then === "clear",
     };
   }
   if (verb.infect && typeof verb.infect === "object") {
@@ -282,7 +298,8 @@ function normalizeEffect(rule) {
     const any = verb.convert.any === true;
     const targetId = String(verb.convert.id || "").trim();
     if (!any && !targetId) return null;
-    return { ...base, kind: "convert", any, targetId };
+    const limit = verb.convert.limit === "collection" ? "collection" : null;
+    return { ...base, kind: "convert", any, targetId, limit };
   }
   if (verb.absorbSparse && typeof verb.absorbSparse === "object") {
     const seconds = positiveSeconds(verb.absorbSparse.seconds);
@@ -515,8 +532,10 @@ export function isLiquidSupport(grid, x, y, z, catalog) {
 }
 
 /**
- * Splash when a grain moves onto / into liquid, or settles on a liquid support.
- * Not when resting on solid (block, sand, …).
+ * One splash when a sonifying grain first touches the ground plane.
+ * The destination is on the floor and the grain came from above it.
+ * A later slide that stays on the floor does not splash again.
+ * Removal grains and liquids make no landing sound.
  * @param {GridApi} grid
  * @param {CellPos} from
  * @param {CellPos} to
@@ -524,28 +543,11 @@ export function isLiquidSupport(grid, x, y, z, catalog) {
  * @param {MaterialCatalog} catalog
  */
 export function shouldSplashMove(grid, from, to, matIndex, catalog) {
-  if (!catalog || !to) return false;
+  if (!catalog || !from || !to) return false;
   const moverId = catalog.idByIndex[matIndex];
   const mover = moverId ? catalog.byId.get(moverId) : null;
-  // Removal grains and liquids make no landing sound.
   if (mover?.sonify === false || mover?.surface === "liquid") return false;
-
-  const destMat = grid.get(to.x, to.y, to.z);
-  // Moved into a liquid cell (displaced / mixed occupancy edge case).
-  if (destMat === matIndex) {
-    // Check what we replaced isn't knowable after the fact; use support + neighbor liquids.
-    if (isLiquidSupport(grid, to.x, to.y, to.z, catalog)) return true;
-  }
-
-  // Landed or shifted to rest on liquid (including world floor).
-  if (isLiquidSupport(grid, to.x, to.y, to.z, catalog)) {
-    // Only splash when this move actually arrived / resettled, not mid-air.
-    const stillFalling = to.y > 0 && grid.inBounds(to.x, to.y - 1, to.z) && grid.get(to.x, to.y - 1, to.z) === 0;
-    if (stillFalling) return false;
-    return true;
-  }
-
-  return false;
+  return to.y <= 0 && from.y > 0;
 }
 
 /**
@@ -1078,7 +1080,8 @@ export function stepWorld(grid, cells, catalog) {
     if (!result.moved || !result.to) {
       const slid = trySlideClosestOpen(grid, cell.x, cell.y, cell.z, mat, material, catalog);
       if (!slid) continue;
-      result = { moved: true, from: { x: cell.x, y: cell.y, z: cell.z }, to: slid, splash: false };
+      const from = { x: cell.x, y: cell.y, z: cell.z };
+      result = { moved: true, from, to: slid, splash: shouldSplashMove(grid, from, slid, mat, catalog) };
     }
     moved += 1;
     seen.add(key);
@@ -1561,6 +1564,7 @@ function whenMatches(when, ctx) {
   if (when.resting != null && ctx.resting !== when.resting) return false;
   if (when.onFloor != null && ctx.onFloor !== when.onFloor) return false;
   if (when.sameAbove != null && ctx.sameAbove !== when.sameAbove) return false;
+  if (when.sameBelow != null && ctx.sameBelow !== when.sameBelow) return false;
   if (when.above != null && ctx.above !== when.above) return false;
   if (when.blockAbove != null && ctx.blockAbove !== when.blockAbove) return false;
   if (when.flow != null && ctx.flow !== when.flow) return false;
@@ -1570,12 +1574,63 @@ function whenMatches(when, ctx) {
   return true;
 }
 
+function sameMaterialBelow(grid, cell) {
+  const y = cell.y - 1;
+  if (y < 0 || !grid.inBounds(cell.x, y, cell.z)) return false;
+  return grid.get(cell.x, y, cell.z) === cell.mat;
+}
+
+/** Non-block atom with a block higher in the same contiguous column. */
+function blockPressesCell(grid, cell, catalog) {
+  const block = catalog?.indexById.get("block") || 0;
+  if (block <= 0 || cell.mat === block) return false;
+  let y = cell.y + 1;
+  while (grid.inBounds(cell.x, y, cell.z)) {
+    const mat = grid.get(cell.x, y, cell.z);
+    if (mat <= 0) break;
+    if (mat === block) return true;
+    y += 1;
+  }
+  return false;
+}
+
+/** Crush time of a stacked block. Supports under a block use the same clock. */
+function blockCrushSeconds(catalog) {
+  const stacked = (catalog?.byId.get("block")?.effects || []).find(
+    (effect) => effect.kind === "age" && effect.thenClear && effect.when?.sameAbove === true,
+  );
+  return stacked?.seconds > 0 ? stacked.seconds : 3.5;
+}
+
+/**
+ * Age every atom under a block. Poured lifetime does not stretch this clock,
+ * and the atom does not have to be resting or on the world floor.
+ * @returns {{ clear: boolean, dirty: boolean }}
+ */
+function tickSinkUnderBlock(grid, cell, catalog, dt) {
+  const channel = catalog?.sinkClockId;
+  if (!Number.isInteger(channel)) return { clear: false, dirty: false };
+  const clockNow = getClock(grid, cell.x, cell.y, cell.z, channel);
+  if (!blockPressesCell(grid, cell, catalog)) {
+    if (clockNow > 0) {
+      setClock(grid, cell.x, cell.y, cell.z, channel, 0);
+      return { clear: false, dirty: true };
+    }
+    return { clear: false, dirty: false };
+  }
+  const clock = clockNow + dt;
+  if (clock >= blockCrushSeconds(catalog)) return { clear: true, dirty: true };
+  setClock(grid, cell.x, cell.y, cell.z, channel, clock);
+  return { clear: false, dirty: true };
+}
+
 function effectContext(grid, cell, catalog, queries) {
   const index = cell.i;
   return {
     resting: queries?.resting?.(index) === true,
     onFloor: queries?.onFloor?.(index) === true,
     sameAbove: queries?.sameAbove?.(index) === true,
+    sameBelow: sameMaterialBelow(grid, cell),
     above: queries?.above?.(index) === true,
     blockAbove: queries?.blockAbove?.(index) === true,
     flow: (grid.getFlowDx?.(cell.x, cell.y, cell.z) ?? 0) !== 0 || (grid.getFlowDz?.(cell.x, cell.y, cell.z) ?? 0) !== 0,
@@ -1658,7 +1713,8 @@ export function moveGrain(grid, x, y, z, toX, toY, toZ, catalog) {
 
 /**
  * Clear solid face neighbors, then shrink every remaining face neighbor of each
- * cleared cell. Those neighbors stay put.
+ * cleared cell. Those neighbors stay put. `then: "clear"` also despawns this
+ * grain when it cleared at least one neighbor.
  * @param {GridApi} grid
  * @param {{ x: number, y: number, z: number, mat: number }[]} cells
  * @param {MaterialCatalog} catalog
@@ -1688,6 +1744,11 @@ export function applyVacuum(grid, cells, catalog) {
         holes.push({ x: nx, y: ny, z: nz });
         dirty = true;
       }
+      if (holes.length && effect.thenClear) {
+        grid.set(cell.x, cell.y, cell.z, 0);
+        clearCellMeta(grid, cell.x, cell.y, cell.z, catalog);
+        dirty = true;
+      }
       for (const hole of holes) {
         for (const [dx, dy, dz] of EFFECT_DIRS) {
           const nx = hole.x + dx;
@@ -1708,20 +1769,30 @@ export function applyVacuum(grid, cells, catalog) {
  * Turn face-touching grains into this material.
  * `id` converts one material. `any` converts every other material.
  * The grain stays in its cell. Empty cells stay empty.
+ * `limit: "collection"` spends the group's poured-grain budget. Each conversion
+ * takes one, and the new grain is stored with budget 0. Grains that moved
+ * this tick do not spend; their budget stays for the pile they settle in.
  * @param {GridApi} grid
  * @param {{ x: number, y: number, z: number, mat: number }[]} cells
  * @param {MaterialCatalog} catalog
+ * @param {{ to?: { x: number, y: number, z: number } }[] | null} [moves]
  * @returns {boolean}
  */
-export function applyConvert(grid, cells, catalog) {
+export function applyConvert(grid, cells, catalog, moves = null) {
   if (!catalog || !cells?.length) return false;
   let dirty = false;
+  /** @type {Map<number, object>} */
+  const limited = new Map();
   for (const cell of cells) {
     if (grid.get(cell.x, cell.y, cell.z) !== cell.mat) continue;
     const material = materialByIndex(catalog, cell.mat);
     if (!material?.effects?.length) continue;
     for (const effect of material.effects) {
       if (effect.kind !== "convert") continue;
+      if (effect.limit === "collection") {
+        if (!limited.has(cell.mat)) limited.set(cell.mat, effect);
+        continue;
+      }
       if (!whenMatches(effect.when, effectContext(grid, cell, catalog, null))) continue;
       const target = effect.any ? 0 : catalog.indexById.get(effect.targetId) || 0;
       if (!effect.any && (target <= 0 || target === cell.mat)) continue;
@@ -1736,6 +1807,115 @@ export function applyConvert(grid, cells, catalog) {
         grid.set(nx, ny, nz, cell.mat);
         dirty = true;
       }
+    }
+  }
+  const moving = movingKeys(moves);
+  for (const [mat, effect] of limited) {
+    if (applyCollectionConvert(grid, cells, catalog, mat, effect, moving)) dirty = true;
+  }
+  return dirty;
+}
+
+/** Cells a grain just fell or slid into. */
+function movingKeys(moves) {
+  const keys = new Set();
+  if (!moves?.length) return keys;
+  for (const move of moves) {
+    const to = move?.to;
+    if (!to) continue;
+    keys.add(`${to.x},${to.y},${to.z}`);
+  }
+  return keys;
+}
+
+/**
+ * A face-connected group converts at most as many other atoms as it has
+ * budget. Budget is one per poured grain. Converted grains are written with 0.
+ * Grains in `moving` keep their budget until a later tick.
+ * @param {GridApi} grid
+ * @param {{ x: number, y: number, z: number, mat: number }[]} cells
+ * @param {MaterialCatalog} catalog
+ * @param {number} mat
+ * @param {object} effect
+ * @param {Set<string>} moving
+ * @returns {boolean}
+ */
+function applyCollectionConvert(grid, cells, catalog, mat, effect, moving) {
+  const target = effect.any ? 0 : catalog.indexById.get(effect.targetId) || 0;
+  if (!effect.any && (target <= 0 || target === mat)) return false;
+  const seen = new Set();
+  let dirty = false;
+  for (const seed of cells) {
+    if (grid.get(seed.x, seed.y, seed.z) !== mat) continue;
+    const seedKey = `${seed.x},${seed.y},${seed.z}`;
+    if (seen.has(seedKey)) continue;
+    if (!whenMatches(effect.when, effectContext(grid, seed, catalog, null))) continue;
+    /** @type {{ x: number, y: number, z: number, mat: number }[]} */
+    const members = [];
+    /** @type {{ x: number, y: number, z: number, mat: number }[]} */
+    const stack = [seed];
+    seen.add(seedKey);
+    while (stack.length) {
+      const cur = stack.pop();
+      members.push(cur);
+      for (const [dx, dy, dz] of EFFECT_DIRS) {
+        const nx = cur.x + dx;
+        const ny = cur.y + dy;
+        const nz = cur.z + dz;
+        const key = `${nx},${ny},${nz}`;
+        if (seen.has(key) || !grid.inBounds(nx, ny, nz) || grid.get(nx, ny, nz) !== mat) continue;
+        const next = { x: nx, y: ny, z: nz, mat };
+        if (!whenMatches(effect.when, effectContext(grid, next, catalog, null))) continue;
+        seen.add(key);
+        stack.push(next);
+      }
+    }
+    const still = [];
+    for (const member of members) {
+      if (moving.has(`${member.x},${member.y},${member.z}`)) continue;
+      still.push(member);
+    }
+    let charge = 0;
+    for (const member of still) charge += grid.getBudget?.(member.x, member.y, member.z) ?? 0;
+    if (charge <= 0) continue;
+    /** @type {{ x: number, y: number, z: number }[]} */
+    const victims = [];
+    const victimSeen = new Set();
+    for (const member of still) {
+      for (const [dx, dy, dz] of EFFECT_DIRS) {
+        const nx = member.x + dx;
+        const ny = member.y + dy;
+        const nz = member.z + dz;
+        const key = `${nx},${ny},${nz}`;
+        if (victimSeen.has(key) || !grid.inBounds(nx, ny, nz)) continue;
+        const nmat = grid.get(nx, ny, nz);
+        if (nmat <= 0 || nmat === mat) continue;
+        if (!effect.any && nmat !== target) continue;
+        victimSeen.add(key);
+        victims.push({ x: nx, y: ny, z: nz });
+      }
+    }
+    if (!victims.length) continue;
+    victims.sort((a, b) => a.y - b.y || a.x - b.x || a.z - b.z);
+    const take = Math.min(charge, victims.length);
+    let spent = 0;
+    for (let i = 0; i < take; i += 1) {
+      const victim = victims[i];
+      const nmat = grid.get(victim.x, victim.y, victim.z);
+      if (nmat <= 0 || nmat === mat) continue;
+      if (!effect.any && nmat !== target) continue;
+      grid.set(victim.x, victim.y, victim.z, mat);
+      grid.setBudget?.(victim.x, victim.y, victim.z, 0);
+      spent += 1;
+      dirty = true;
+    }
+    for (const member of still) {
+      if (spent <= 0) break;
+      const have = grid.getBudget?.(member.x, member.y, member.z) ?? 0;
+      if (have <= 0) continue;
+      const used = Math.min(have, spent);
+      grid.setBudget?.(member.x, member.y, member.z, have - used);
+      spent -= used;
     }
   }
   return dirty;
@@ -1862,6 +2042,9 @@ export function tickEffects(grid, cells, catalog, queries, dt) {
     if (grid.get(cell.x, cell.y, cell.z) !== cell.mat) continue;
     const material = materialByIndex(catalog, cell.mat);
     const ctx = effectContext(grid, cell, catalog, queries);
+    const sink = tickSinkUnderBlock(grid, cell, catalog, dt);
+    if (sink.dirty) dirty = true;
+    if (sink.clear) doomed.push(cell);
     let matchedAge = false;
     let shrink = false;
     let shrinkT = 0;

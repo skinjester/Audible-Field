@@ -16,7 +16,7 @@ import {
   setTrigger,
   setFxStick,
 } from "./mixer-core.js?v=65";
-import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=1";
+import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=5";
 
 function lerp(inMin, inMax, outMin, outMax, value) {
   if (inMax === inMin) return outMin;
@@ -119,7 +119,14 @@ export class GamepadInput {
       square: pressed(gamepadButtons.square),
       triangle: pressed(gamepadButtons.triangle),
     };
+    const playfield = document.querySelector("[data-panel='falling-blocks']");
+    const onPlayfield = !!playfield && !playfield.hidden;
     for (const [btn, on] of Object.entries(face)) {
+      // Square toggles field audio on the playfield; it does not select FX.
+      if (onPlayfield && btn === inputBindings.gamepad.audioToggle) {
+        this._prev[btn] = on;
+        continue;
+      }
       if (on && !this._prev[btn]) setActiveFx(btn);
       this._prev[btn] = on;
     }

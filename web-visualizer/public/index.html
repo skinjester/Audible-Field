@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape Web Visualizer</title>
-    <link rel="stylesheet" href="/styles.css?v=132" />
+    <link rel="stylesheet" href="/styles.css?v=140" />
     <script type="importmap">
       {
         "imports": {
@@ -355,6 +355,34 @@
           <div class="viz-canvas-wrap">
             <canvas data-falling-canvas aria-label="Falling Blocks playfield"></canvas>
             <p class="viz-error" data-falling-error hidden></p>
+            <button type="button" class="falling-about" data-falling-about>About</button>
+            <dialog class="falling-about-dialog" data-falling-about-dialog aria-labelledby="falling-about-title">
+              <form method="dialog" class="falling-about-panel">
+                <header class="falling-about-head">
+                  <h2 id="falling-about-title">Falling Blocks (Field-1)</h2>
+                  <button type="submit" class="falling-about-close" value="cancel">Close</button>
+                </header>
+                <section class="falling-about-how">
+                  <h3>How the field makes sound</h3>
+                  <p>
+                    The sound comes from how different materials react when they touch.
+                    Diffuse turns the pieces next to it into more Diffuse, and those pieces lift away.
+                    Erode clears the solid pieces beside it, and what is left shrinks.
+                    Block presses down on whatever is underneath. Sand slides into the gaps.
+                    The board has four corners, and each corner has its own sound, so those changes are what you hear.
+                    A wider pile is louder and brighter. A taller pile has more echo, and pieces that float up make the echo last a long time.
+                    Near the middle of a corner the note is higher. Toward the edges it drops back to the original sound.
+                    When a piece lands, you hear that corner’s sound again.
+                    Turn the board and the piles slide between your left and right speakers.
+                  </p>
+                </section>
+              </form>
+            </dialog>
+            <div class="falling-material-bar">
+              <span class="pad-glyph" data-falling-shoulder="prev" role="img" aria-label="L2">&#x011A;</span>
+              <div class="falling-palette" data-falling-palette role="group" aria-label="Material"></div>
+              <span class="pad-glyph" data-falling-shoulder="next" role="img" aria-label="R2">&#x011B;</span>
+            </div>
             <div class="falling-hud">
               <label class="falling-atom-size">
                 Emit height
@@ -366,17 +394,29 @@
                   value="5.5"
                   step="0.25"
                   aria-valuetext="Emit height above ground"
+                  title="D-pad or arrow keys up / down"
                 />
                 <span data-falling-emit-height-val>5.5u</span>
               </label>
               <div class="falling-palette-row">
-                <div class="falling-palette" data-falling-palette role="group" aria-label="Material"></div>
-                <button type="button" class="falling-clear" data-falling-clear title="Clear board (Circle)">
+                <button type="button" class="falling-clear falling-face" data-falling-clear title="Clear board">
+                  <span class="pad-glyph" aria-hidden="true">&#x0115;</span>
                   Clear
                 </button>
-                <button type="button" class="falling-audio" data-falling-audio aria-pressed="true" title="Sonify the field">
+                <button type="button" class="falling-audio falling-face" data-falling-audio aria-pressed="true" title="Sonify the field">
+                  <span class="pad-glyph" aria-hidden="true">&#x0116;</span>
                   Audio
                 </button>
+                <button type="button" class="falling-profile falling-face" data-falling-profile aria-pressed="false" title="Emitter profile">
+                  <span class="pad-glyph" aria-hidden="true">&#x0117;</span>
+                  <span data-falling-profile-name>Pressure</span>
+                </button>
+                <span class="falling-height-hint" role="img" aria-label="D-pad or arrow keys set emitter height">
+                  <span class="pad-glyph" aria-hidden="true">&#x0110;</span>
+                  <span class="pad-glyph" aria-hidden="true">&#x0111;</span>
+                  <span class="falling-height-keys" aria-hidden="true">↑↓</span>
+                  Emit height
+                </span>
               </div>
             </div>
             <aside class="falling-readout" data-falling-readout>
@@ -463,9 +503,9 @@
                   </tr>
                 </tbody>
               </table>
-              <div class="falling-life-wave" aria-label="Master lifetime oscillator, 0.1 to 3.5 seconds">
+              <div class="falling-life-wave" aria-label="Master lifetime oscillator, 0.1 to 5 seconds">
                 <svg viewBox="0 0 220 48" role="img">
-                  <text data-life-max x="0" y="12">3.5</text>
+                  <text data-life-max x="0" y="12">5.0</text>
                   <text data-life-min x="0" y="46">0.1</text>
                   <polyline data-life-wave />
                   <circle data-life-wave-dot r="2.6" cx="34" cy="42" />
@@ -484,6 +524,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=265"></script>
+    <script type="module" src="/app.js?v=283"></script>
   </body>
 </html>

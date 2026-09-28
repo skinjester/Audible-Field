@@ -1,8 +1,8 @@
 import * as THREE from "three";
-import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=66";
-import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=70";
-import { inputBindings } from "./input-bindings.js?v=1";
-import { fallingInput } from "./falling-input.js?v=8";
+import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=65";
+import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
+import { inputBindings } from "./input-bindings.js?v=5";
+import { fallingInput } from "./falling-input.js?v=15";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -56,6 +56,11 @@ const BRUSH_MAX = 11;
  * only deep pressure opens the wide field.
  */
 const BRUSH_RT_GAMMA = 2.6;
+/**
+ * Lightest RT pull emits atoms at this fraction of the grid pitch.
+ * Full pull reaches full size. The same curve widens the brush.
+ */
+const ATOM_SCALE_MIN = 0.5;
 const EMIT_INTERVAL = 1 / 40;
 const EMIT_CHANCE = 0.4;
 /** Lowest spawn height the slider can pick (world units). */
@@ -103,8 +108,12 @@ let sizeTries = 0;
 let lastNow = 0;
 let ruleAcc = 0;
 let cameraDist = CAMERA_DIST_DEFAULT;
-/** Look-at point. Zoom shifts this so the emitter stays on the same screen pixel. */
+/**
+ * Look-at point. Starts at the playfield center.
+ * Once zoom hides part of the surface, it locks onto the emitter.
+ */
 const cameraFocus = new THREE.Vector3(0, 0.35, 0);
+const CAMERA_FOCUS_HOME_Y = 0.35;
 /** Frame counters for the audio snapshot. Reset after each capture. */
 let audioPour = 0;
 let audioFall = 0;
@@ -172,12 +181,12 @@ let posZ = null;
 let emitSizes = null;
 /**
  * Per-atom dissolve time, assigned at emit by sampling a continuous oscillator
- * between 0.1s and 3.5s. The wave keeps moving whether or not atoms are poured.
+ * between 0.1s and 5s. The wave keeps moving whether or not atoms are poured.
  */
 /** @type {Float32Array | null} */
 let lifeSpans = null;
 const EMIT_LIFE_MIN = 0.1;
-const EMIT_LIFE_MAX = 3.5;
+const EMIT_LIFE_MAX = 5;
 /** Seconds for one cycle: minimum, through the maximum, back to the minimum. */
 const EMIT_LIFE_PERIOD = 1.7;
 /** 0 at the minimum, 0.5 at the maximum, 1 back at the minimum. */
@@ -244,9 +253,14 @@ let emitAcc = 0;
 let emitting = false;
 /** Current emit / preview brush edge length (odd, 1…BRUSH_MAX). */
 let brushN = 1;
+/**
+ * Current emit scale from RT pressure (ATOM_SCALE_MIN…1).
+ * Baked into each new atom so later trigger motion does not resize the pile.
+ */
+let emitScale = 1;
 /** When true, RT pressure maps large→small (mirrored curve). */
 let brushCurveInvert = false;
-/** Spawn height above ground in world units (slider-controlled). */
+/** Spawn height above ground in world units (slider or D-pad up/down). */
 let emitHeightU = EMIT_HEIGHT_DEFAULT_U;
 /** Last cell poured while dragging — used to fill trail between pulses. */
 let lastPourIx = -1;
@@ -262,6 +276,7 @@ const gridXZ = GRID_XZ;
 
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
+const emitterNdc = new THREE.Vector3();
 /** Horizontal plane at the emitter height. Pointer aims this, not the ground target. */
 const emitterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const hitPoint = new THREE.Vector3();
@@ -345,7 +360,8 @@ function compileRiseFade(shader) {
 
 function syncLandingTarget() {
   landingTarget.center.value.set(aimWorldX, aimWorldZ);
-  landingTarget.half.value = Math.max(atomSize * 0.5, brushN * atomSize * 0.5);
+  const edge = atomSize * emitScale;
+  landingTarget.half.value = Math.max(edge * 0.5, brushN * edge * 0.5);
   landingTarget.yaw.value = surface ? surface.rotation.y : 0;
 }
 
@@ -445,6 +461,17 @@ function getCell(x, y, z) {
   return cells[idx(x, y, z)];
 }
 
+/** Poured grains of a collection-limited converter start with one conversion. */
+function freshSpreadCharge(matIndex) {
+  if (!catalog || matIndex <= 0) return 0;
+  const id = catalog.idByIndex[matIndex];
+  const material = id ? catalog.byId.get(id) : null;
+  if (!material?.effects?.some((effect) => effect.kind === "convert" && effect.limit === "collection")) {
+    return 0;
+  }
+  return 1;
+}
+
 function setCell(x, y, z, value) {
   if (!cells || !inBounds(x, y, z)) return;
   const i = idx(x, y, z);
@@ -477,6 +504,8 @@ function setCell(x, y, z, value) {
     if (posY) posY[i] = (y + 0.5) * atomSize;
     if (posX) posX[i] = worldXForCell(x, atomSize);
     if (posZ) posZ[i] = worldZForCell(z, atomSize);
+    // A poured diffuse grain can turn one other atom. Moves copy this budget afterward.
+    if (freshSpreadCharge(value) > 0) setBudget(x, y, z, 1);
   }
   if (value > 0) occupied.add(i);
   else if (prev > 0) occupied.delete(i);
@@ -1080,17 +1109,90 @@ function zoomCamera(factor) {
   if (!Number.isFinite(factor) || factor <= 0) return cameraDist;
   const next = Math.min(CAMERA_DIST_MAX, Math.max(CAMERA_DIST_MIN, cameraDist * factor));
   if (Math.abs(next - cameraDist) < 1e-6) return cameraDist;
-  // Dolly toward the emitter: scale the focus around it so that pixel stays put.
-  const k = next / cameraDist;
-  const ex = aimWorldX;
-  const ey = emitWorldY();
-  const ez = aimWorldZ;
-  cameraFocus.set(
-    ex + (cameraFocus.x - ex) * k,
-    ey + (cameraFocus.y - ey) * k,
-    ez + (cameraFocus.z - ez) * k,
-  );
   return setCameraDist(next);
+}
+
+function clampCameraFocus() {
+  const limit = PLAYFIELD_HALF;
+  cameraFocus.x = Math.min(limit, Math.max(-limit, cameraFocus.x));
+  cameraFocus.z = Math.min(limit, Math.max(-limit, cameraFocus.z));
+}
+
+/**
+ * True when a camera aimed at the playfield center still shows every corner of the surface.
+ * Checked in that centered framing, so a follow pan does not change the result.
+ */
+function surfacePlaneFitsView() {
+  if (!camera) return true;
+  const savedX = cameraFocus.x;
+  const savedY = cameraFocus.y;
+  const savedZ = cameraFocus.z;
+  cameraFocus.set(0, CAMERA_FOCUS_HOME_Y, 0);
+  syncCamera();
+  const half = PLAYFIELD_HALF;
+  const locals = [
+    [-half, -half],
+    [half, -half],
+    [half, half],
+    [-half, half],
+  ];
+  let fits = true;
+  for (let i = 0; i < locals.length; i += 1) {
+    const world = surfaceToWorldXZ(locals[i][0], locals[i][1]);
+    emitterNdc.set(world.x, 0, world.z);
+    emitterNdc.project(camera);
+    if (emitterNdc.z > 1 || Math.abs(emitterNdc.x) > 1 || Math.abs(emitterNdc.y) > 1) {
+      fits = false;
+      break;
+    }
+  }
+  cameraFocus.set(savedX, savedY, savedZ);
+  syncCamera();
+  return fits;
+}
+
+/** Ease back to the playfield center once the whole surface fits again. */
+function easeCameraHome(dt) {
+  const atHome =
+    cameraFocus.x === 0 &&
+    cameraFocus.z === 0 &&
+    Math.abs(cameraFocus.y - CAMERA_FOCUS_HOME_Y) < 1e-4;
+  if (atHome) return;
+  const k = dt > 0 ? 1 - Math.exp(-7 * dt) : 1;
+  cameraFocus.x += -cameraFocus.x * k;
+  cameraFocus.y += (CAMERA_FOCUS_HOME_Y - cameraFocus.y) * k;
+  cameraFocus.z += -cameraFocus.z * k;
+  if (
+    Math.hypot(cameraFocus.x, cameraFocus.z) < 0.02 &&
+    Math.abs(cameraFocus.y - CAMERA_FOCUS_HOME_Y) < 0.02
+  ) {
+    cameraFocus.set(0, CAMERA_FOCUS_HOME_Y, 0);
+  }
+  syncCamera();
+}
+
+/**
+ * While the surface no longer fits, look directly at the emitter so it stays
+ * at the center of the screen. The playfield slides underneath.
+ */
+function keepEmitterInView(dt) {
+  if (!camera) return;
+  if (surfacePlaneFitsView()) {
+    easeCameraHome(dt);
+    return;
+  }
+
+  const y = emitWorldY();
+  if (
+    Math.abs(cameraFocus.x - aimWorldX) < 1e-4 &&
+    Math.abs(cameraFocus.y - y) < 1e-4 &&
+    Math.abs(cameraFocus.z - aimWorldZ) < 1e-4
+  ) {
+    return;
+  }
+  cameraFocus.set(aimWorldX, y, aimWorldZ);
+  clampCameraFocus();
+  syncCamera();
 }
 
 /** Yaw the playfield / grid; emitter stays fixed in world space. */
@@ -1180,7 +1282,7 @@ function setAimFromWorld() {
 
 /**
  * Move the emitter in screen-relative world XZ (not glued to the grid).
- * Stick/D-pad: +lx = right on screen, +ly = up on screen.
+ * Stick / D-pad left-right: +lx = right on screen, +ly = up on screen.
  */
 function moveAim(lx, ly, dt) {
   if (dt <= 0 || (!lx && !ly)) return;
@@ -1238,17 +1340,34 @@ function clamp01(n) {
 }
 
 /**
- * Map analog 0…1 → odd brush edge 1…BRUSH_MAX (pressure curve).
+ * Eased RT amount 0…1. Zero is a light squeeze; one is a full pull.
+ * Invert mirrors the curve (full pull becomes the light end).
  */
-function brushSizeFromTrigger(rt) {
+function triggerAmount(rt) {
   const threshold = inputBindings.gamepad.emitAnalogThreshold ?? 0.08;
   const span = 1 - threshold;
   const linear = span > 0 ? clamp01((clamp01(rt) - threshold) / span) : 1;
   const t = Math.pow(linear, BRUSH_RT_GAMMA);
+  return brushCurveInvert ? 1 - t : t;
+}
+
+/**
+ * Map analog 0…1 → odd brush edge 1…BRUSH_MAX (pressure curve).
+ */
+function brushSizeFromTrigger(rt) {
+  const t = triggerAmount(rt);
   const steps = ((BRUSH_MAX - 1) >> 1) + 1;
-  let i = Math.min(steps - 1, Math.floor(t * steps));
-  if (brushCurveInvert) i = steps - 1 - i;
+  const i = Math.min(steps - 1, Math.floor(t * steps));
   return 1 + i * 2;
+}
+
+/**
+ * Map the same pressure curve onto atom scale. Light pull is ATOM_SCALE_MIN;
+ * a full pull is full size. Never goes below the minimum.
+ */
+function emitScaleFromTrigger(rt) {
+  const t = triggerAmount(rt);
+  return ATOM_SCALE_MIN + t * (1 - ATOM_SCALE_MIN);
 }
 
 function brushSizeFromMode(mode, analog) {
@@ -1257,8 +1376,15 @@ function brushSizeFromMode(mode, analog) {
   return brushSizeFromTrigger(analog);
 }
 
+function emitScaleFromMode(mode, analog) {
+  if (mode === "max") return 1;
+  if (mode === "single") return ATOM_SCALE_MIN;
+  return emitScaleFromTrigger(analog);
+}
+
 export function toggleBrushCurveInvert() {
   brushCurveInvert = !brushCurveInvert;
+  syncProfileUi();
   return brushCurveInvert;
 }
 
@@ -1274,12 +1400,20 @@ function setBrushN(n) {
   rebuildEmitterGeometry();
 }
 
+function setEmitScale(scale) {
+  const next = Math.min(1, Math.max(ATOM_SCALE_MIN, scale));
+  if (Math.abs(next - emitScale) < 1e-4) return;
+  emitScale = next;
+  rebuildEmitterGeometry();
+}
+
 function emitterBoxSize() {
-  // Flat brush footprint (Sand1-style array), thin so it reads as a field.
+  // Footprint matches the packed stream: N atoms of the current emit size, no gaps.
+  const edge = atomSize * emitScale;
   return {
-    x: brushN * atomSize,
-    y: atomSize * 0.35,
-    z: brushN * atomSize,
+    x: brushN * edge,
+    y: edge * 0.35,
+    z: brushN * edge,
   };
 }
 
@@ -1368,6 +1502,13 @@ function syncPaletteUi() {
   }
 }
 
+function syncShoulderGlyphs(prevHeld, nextHeld) {
+  const prev = document.querySelector("[data-falling-shoulder='prev']");
+  const next = document.querySelector("[data-falling-shoulder='next']");
+  prev?.classList.toggle("is-lit", !!prevHeld);
+  next?.classList.toggle("is-lit", !!nextHeld);
+}
+
 function buildPalette() {
   paletteEl = document.querySelector("[data-falling-palette]");
   if (!paletteEl || !catalog) return;
@@ -1447,12 +1588,29 @@ export function clearBoard() {
 
   aimWorldX = 0;
   aimWorldZ = 0;
+  cameraFocus.set(0, 0.35, 0);
+  syncCamera();
   emitting = false;
   emitAcc = 0;
   setAimFromWorld();
   syncEmitter();
   syncSceneBackground();
   reconcileMeshes();
+}
+
+function bindAboutUi() {
+  const btn = document.querySelector("[data-falling-about]");
+  const dialog = document.querySelector("[data-falling-about-dialog]");
+  if (!(btn instanceof HTMLButtonElement) || !(dialog instanceof HTMLDialogElement)) return;
+  if (btn.dataset.bound === "1") return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (!dialog.open) dialog.showModal();
+  });
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  });
 }
 
 function bindClearUi() {
@@ -1463,6 +1621,34 @@ function bindClearUi() {
     event.stopPropagation();
     clearBoard();
   });
+}
+
+function syncProfileUi() {
+  const btn = document.querySelector("[data-falling-profile]");
+  const name = document.querySelector("[data-falling-profile-name]");
+  if (name) name.textContent = brushCurveInvert ? "Inverted" : "Pressure";
+  if (btn instanceof HTMLButtonElement) {
+    btn.setAttribute("aria-pressed", brushCurveInvert ? "true" : "false");
+  }
+}
+
+function bindProfileUi() {
+  const btn = document.querySelector("[data-falling-profile]");
+  syncProfileUi();
+  if (!(btn instanceof HTMLButtonElement) || btn.dataset.bound === "1") return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleBrushCurveInvert();
+  });
+}
+
+/** @type {(() => void) | null} */
+let audioToggleHandler = null;
+
+/** Square toggles field audio. The handler lives with the audio engine. */
+export function onFallingAudioToggle(fn) {
+  audioToggleHandler = fn;
 }
 
 function clampEmitHeightU(value) {
@@ -1526,12 +1712,21 @@ function applyInput(dt) {
   }
   if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
   if (frame.zoomFactor !== 1) zoomCamera(frame.zoomFactor);
+  // Touch aim is an absolute point on the current view. Chasing it with a
+  // pan would move the plane under the finger every frame.
+  if (!frame.touchAim) keepEmitterInView(dt);
 
   setBrushN(brushSizeFromMode(frame.brushMode, frame.analog));
+  const threshold = inputBindings.gamepad.emitAnalogThreshold ?? 0.08;
+  const pressing = frame.emit || frame.analog >= threshold;
+  setEmitScale(pressing ? emitScaleFromMode(frame.brushMode, frame.analog) : 1);
   updateEmitStream(dt, frame.emit);
 
+  syncShoulderGlyphs(frame.cyclePrevHeld, frame.cycleNextHeld);
   if (frame.cycleDelta) cycleMaterial(frame.cycleDelta);
+  if (frame.heightDelta) setEmitHeight(emitHeightU + frame.heightDelta * atomSize);
   if (frame.clearEdge) clearBoard();
+  if (frame.audioEdge) audioToggleHandler?.();
   if (frame.invertEdge) toggleBrushCurveInvert();
 }
 
@@ -1570,8 +1765,10 @@ function updateEmitStream(dt, active) {
 /**
  * Sand1-style brush: scatter atoms across a flat N×N field centered on aim.
  * Each cell rolls EMIT_CHANCE so the column cascades instead of falling as one slab.
- * Brush edge comes from RT pressure. Left click pins that curve to full
- * width. Shift+left click emits a single column. Right-drag yaws the view.
+ * Brush edge and atom size both come from RT pressure. Light pressure emits
+ * half-size atoms; a full pull emits full-size atoms. Left click always
+ * uses the largest emitter. Shift+left click always uses the smallest.
+ * Right-drag yaws the view.
  */
 function pourBrush(ix, iz) {
   if (!cells || !catalog) return;
@@ -1592,6 +1789,7 @@ function pourBrush(ix, iz) {
       if (!inEmitXZ(x, z) || !inBounds(x, y, z)) continue;
       if (getCell(x, y, z) !== 0) continue;
       setCell(x, y, z, matIndex);
+      if (emitScale < 1 - 1e-4) setCellEmitSize(x, y, z, atomSize * emitScale);
       if (materialSonifies(matIndex)) {
         const life = sampleEmitLife();
         setLife(x, y, z, life);
@@ -1609,6 +1807,9 @@ function pourBrush(ix, iz) {
   }
 }
 
+/** Ground-plane ripple. Sits just above the floor mesh for every settled arrival. */
+const SPLASH_PLANE_Y = 0.02;
+
 function spawnSplash(x, y, z) {
   if (!surface || !splashGeo) return;
   const material = new THREE.MeshBasicMaterial({
@@ -1621,8 +1822,8 @@ function spawnSplash(x, y, z) {
   const mesh = new THREE.Mesh(splashGeo, material);
   mesh.rotation.x = -Math.PI / 2;
   cellWorld(x, y, z, mesh.position);
+  mesh.position.y = SPLASH_PLANE_Y;
   const sz = cellAtomSize(idx(x, y, z));
-  mesh.position.y = (posY ? posY[idx(x, y, z)] : (y + 0.5) * sz) - sz * 0.42;
   mesh.scale.setScalar(atomSize > 1e-6 ? sz / atomSize : 1);
   surface.add(mesh);
   splashes.push({ mesh, age: 0 });
@@ -2111,8 +2312,20 @@ function isShrinking(cellIndex) {
 }
 
 /**
- * Keep non-shrinking atoms easing toward their grid cell centers in XZ
+ * True when this atom should leave the grid pitch and sit flush against
+ * neighbors: a shrink effect, or an emit size below the grid pitch.
+ * Slide-open shrink stays on the grid unless the baked emit size is already small.
+ */
+function packsFlush(cellIndex, mat) {
+  if (mat <= 0) return false;
+  if (cellAtomSize(cellIndex) < ATOM_SIZE - 1e-4) return true;
+  return isShrinking(cellIndex) && !materialSlidesOpen(mat);
+}
+
+/**
+ * Keep full-size atoms easing toward their grid cell centers in XZ
  * (smooths slide/flow hops instead of teleporting each rule tick).
+ * Undersized atoms are packed flush instead, so this does not pull them apart.
  * @returns {boolean}
  */
 function settleLateral(dt) {
@@ -2121,13 +2334,12 @@ function settleLateral(dt) {
   let moved = false;
   for (const i of occupied) {
     const mat = cells[i];
-    if (mat <= 0 || (isShrinking(i, mat) && !materialSlidesOpen(mat))) continue;
+    if (mat <= 0 || packsFlush(i, mat)) continue;
     const x = i % GRID_MAX;
     const rest = (i / GRID_MAX) | 0;
     const z = rest % GRID_MAX;
-    const pitch = cellAtomSize(i);
-    const tx = worldXForCell(x, pitch);
-    const tz = worldZForCell(z, pitch);
+    const tx = worldXForCell(x, ATOM_SIZE);
+    const tz = worldZForCell(z, ATOM_SIZE);
     let px = posX[i];
     let pz = posZ[i];
     const dx = tx - px;
@@ -2143,7 +2355,7 @@ function settleLateral(dt) {
       continue;
     }
     // Ease toward the cell; slightly under one-cell/tick so hops don't look frantic.
-    const maxStep = pitch * RULE_HZ * 0.85 * dt;
+    const maxStep = ATOM_SIZE * RULE_HZ * 0.85 * dt;
     if (dist <= maxStep) {
       posX[i] = tx;
       posZ[i] = tz;
@@ -2159,8 +2371,10 @@ function settleLateral(dt) {
 }
 
 /**
- * Keep connected shrinking atoms flush: contract each shrinking cluster in XZ
- * so neighbors stay in contact. Full-size atoms ease onto the grid via settleLateral.
+ * Keep connected undersized atoms flush: contract each cluster in XZ so
+ * neighbors stay in contact. Full-size atoms ease onto the grid via settleLateral.
+ * Lattice is the fixed grid pitch; scale is each atom's drawn size over that pitch,
+ * so a half-size brush closes up instead of sitting on full-pitch centers.
  * @returns {boolean}
  */
 function packStickTogether() {
@@ -2179,12 +2393,7 @@ function packStickTogether() {
 
   for (const start of occupied) {
     const startMat = cells[start];
-    if (
-      startMat <= 0 ||
-      visited.has(start) ||
-      !isShrinking(start, startMat) ||
-      materialSlidesOpen(startMat)
-    ) {
+    if (startMat <= 0 || visited.has(start) || !packsFlush(start, startMat)) {
       continue;
     }
 
@@ -2206,7 +2415,7 @@ function packStickTogether() {
         if (!inBounds(nx, ny, nz)) continue;
         const ni = idx(nx, ny, nz);
         if (visited.has(ni) || cells[ni] <= 0) continue;
-        if (!isShrinking(ni, cells[ni]) || materialSlidesOpen(cells[ni])) continue;
+        if (!packsFlush(ni, cells[ni])) continue;
         visited.add(ni);
         queue.push(ni);
       }
@@ -2223,14 +2432,14 @@ function packStickTogether() {
       const z = rest % GRID_MAX;
       const y = (rest / GRID_MAX) | 0;
       const mat = cells[i];
-      const s = cellScale(x, y, z, mat);
-      const pitch = cellAtomSize(i);
-      const wx = worldXForCell(x, pitch);
-      const wz = worldZForCell(z, pitch);
+      const ext = atomExtent(x, y, z, mat);
+      const s = ATOM_SIZE > 1e-6 ? ext / ATOM_SIZE : 1;
+      const wx = worldXForCell(x, ATOM_SIZE);
+      const wz = worldZForCell(z, ATOM_SIZE);
       sumS += s;
       cX += wx;
       cZ += wz;
-      members.push({ i, x, y, z, ext: pitch * s, wx, wz });
+      members.push({ i, x, y, z, ext, wx, wz });
     }
 
     const n = members.length;
@@ -2304,23 +2513,25 @@ function runRules() {
   }
   const culledShuffle = applyPostMoves(gridApi, moves, catalog);
   const vacuumed = applyVacuum(gridApi, collectOccupied(), catalog);
-  const converted = applyConvert(gridApi, collectOccupied(), catalog);
+  const converted = applyConvert(gridApi, collectOccupied(), catalog, moves);
 
   consumeOutOfBounds();
   reconcileMeshes();
   for (const cell of splashCells) {
-    audioSplash += 1;
     const cellPitch = cellAtomSize(idx(cell.x, cell.y, cell.z));
     const wx = worldXForCell(cell.x, cellPitch);
-    const wy = (cell.y + 0.5) * cellPitch;
     const wz = worldZForCell(cell.z, cellPitch);
+    // Cull with the cell center. The ring itself sits on the floor, and that
+    // height minus the atom half-size falls outside the playfield.
+    const wy = (cell.y + 0.5) * cellPitch;
+    if (!isDrawnInSim(wx, wy, wz, cellPitch * 0.5)) continue;
+    audioSplash += 1;
     audioSplashAt.push({
       x: cell.x,
       z: cell.z,
-      life: getLife(cell.x, cell.y, cell.z),
+      life: SPLASH_LIFE,
       rate: pitchForWorld(wx, wz),
     });
-    if (!isDrawnInSim(wx, wy, wz, cellPitch * 0.5)) continue;
     spawnSplash(cell.x, cell.y, cell.z);
   }
   return culledShuffle || vacuumed || converted;
@@ -2456,7 +2667,7 @@ function startRenderLoop() {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=83`);
+  const res = await fetch(`/materials.json?v=87`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(parseMaterialsJson(await res.text()));
@@ -2971,13 +3182,16 @@ function clockProgress(i) {
   return Math.min(1, clock / limit);
 }
 
-/** Edge of the plane stays at the sample's pitch. The center is an octave up. */
+/** Corner of a quadrant stays at the sample's pitch. Its center is an octave up. */
 const CENTER_PITCH = 2;
 
-/** Playback rate from distance to the playfield center. */
+/** Playback rate from distance to the center of the point's quadrant. */
 function pitchForWorld(wx, wz) {
-  const dist = Math.hypot(wx, wz);
-  const maxDist = PLAYFIELD_HALF * Math.SQRT2;
+  const half = PLAYFIELD_HALF * 0.5;
+  const qx = wx < 0 ? -half : half;
+  const qz = wz < 0 ? -half : half;
+  const dist = Math.hypot(wx - qx, wz - qz);
+  const maxDist = half * Math.SQRT2;
   const closeness = maxDist > 0 ? 1 - Math.min(1, dist / maxDist) : 0;
   return CENTER_PITCH ** closeness;
 }
@@ -3001,6 +3215,23 @@ function screenPan(lx, lz, yaw) {
   return Math.min(1, Math.max(-1, screenX / mag));
 }
 
+/**
+ * One quadrant's audio measures.
+ * `rise` is the drawn altitude of grains that are climbing (diffuse blow), in world units.
+ * That climb is included in `peak` and `height`, so the height parameter goes up as they lift.
+ */
+function quadAudio(cells, peak, rise, pitchSum, quadCells) {
+  const top = Math.max(peak, rise);
+  return {
+    coverage: cells / quadCells,
+    height: Math.min(1, Math.max(0, top / EMIT_HEIGHT_MAX_U)),
+    cells,
+    peak: top,
+    rise,
+    rate: cells > 0 ? pitchSum / cells : 1,
+  };
+}
+
 /** Describe the grid for sonification. Does not change the simulation. */
 function captureAudioSnapshot(dt) {
   const pour = audioPour;
@@ -3020,7 +3251,7 @@ function captureAudioSnapshot(dt) {
     const hit = splashHits[i];
     const id = hit.x < splashMid ? (hit.z < splashMid ? "tl" : "bl") : hit.z < splashMid ? "tr" : "br";
     splash[id].push({
-      life: hit.life > 0 ? hit.life : 3.5,
+      life: hit.life > 0 ? hit.life : 5,
       rate: hit.rate > 0 ? hit.rate : 1,
     });
   }
@@ -3045,6 +3276,8 @@ function captureAudioSnapshot(dt) {
   const quadCells = mid * mid;
   const fp = { tl: 0, tr: 0, bl: 0, br: 0 };
   const peak = { tl: 0, tr: 0, bl: 0, br: 0 };
+  /** Highest drawn altitude of grains that are currently rising, world units. */
+  const risePeak = { tl: 0, tr: 0, bl: 0, br: 0 };
   const panSum = { tl: 0, tr: 0, bl: 0, br: 0 };
   const pitchSum = { tl: 0, tr: 0, bl: 0, br: 0 };
   const activity = emptyActivity();
@@ -3052,6 +3285,10 @@ function captureAudioSnapshot(dt) {
   if (cells && occupied.size > 0 && posX && posZ && posY) {
     for (let c = 0; c < columnKeys.length; c += 1) {
       const list = columns.get(columnKeys[c]);
+      const key = columnKeys[c];
+      const colX = key % GRID_MAX;
+      const colZ = (key / GRID_MAX) | 0;
+      const id = colX < mid ? (colZ < mid ? "tl" : "bl") : (colZ < mid ? "tr" : "br");
       let n = 0;
       let top = 0;
       for (let k = 0; k < list.length; k += 1) {
@@ -3061,16 +3298,15 @@ function captureAudioSnapshot(dt) {
         const decoded = decodeCell(i);
         const half = atomExtent(decoded.x, decoded.y, decoded.z, cells[i]) * 0.5;
         const yCenter = posY[i] > 0 ? posY[i] : half;
-        const tip = yCenter + half;
+        // Rising grains (diffuse blow) count at the height they are drawn, not the cell they left.
+        const lift = (riseT?.[i] || 0) > 0 ? riseOffset(decoded.x, decoded.y, decoded.z) : 0;
+        const tip = yCenter + half + lift;
         if (tip > top) top = tip;
+        if (lift > 0 && tip > risePeak[id]) risePeak[id] = tip;
       }
       if (top > maxTop) maxTop = top;
       if (n > 1) stackedN += n;
       if (n > 0) {
-        const key = columnKeys[c];
-        const colX = key % GRID_MAX;
-        const colZ = (key / GRID_MAX) | 0;
-        const id = colX < mid ? (colZ < mid ? "tl" : "bl") : (colZ < mid ? "tr" : "br");
         fp[id] += 1;
         if (top > peak[id]) peak[id] = top;
         const colXw = worldXForCell(colX, ATOM_SIZE);
@@ -3146,10 +3382,10 @@ function captureAudioSnapshot(dt) {
     weight: sumW,
     mass: count,
     quads: {
-      tl: { coverage: fp.tl / quadCells, height: Math.min(1, peak.tl / EMIT_HEIGHT_MAX_U), cells: fp.tl, peak: peak.tl, rate: fp.tl > 0 ? pitchSum.tl / fp.tl : 1 },
-      tr: { coverage: fp.tr / quadCells, height: Math.min(1, peak.tr / EMIT_HEIGHT_MAX_U), cells: fp.tr, peak: peak.tr, rate: fp.tr > 0 ? pitchSum.tr / fp.tr : 1 },
-      bl: { coverage: fp.bl / quadCells, height: Math.min(1, peak.bl / EMIT_HEIGHT_MAX_U), cells: fp.bl, peak: peak.bl, rate: fp.bl > 0 ? pitchSum.bl / fp.bl : 1 },
-      br: { coverage: fp.br / quadCells, height: Math.min(1, peak.br / EMIT_HEIGHT_MAX_U), cells: fp.br, peak: peak.br, rate: fp.br > 0 ? pitchSum.br / fp.br : 1 },
+      tl: quadAudio(fp.tl, peak.tl, risePeak.tl, pitchSum.tl, quadCells),
+      tr: quadAudio(fp.tr, peak.tr, risePeak.tr, pitchSum.tr, quadCells),
+      bl: quadAudio(fp.bl, peak.bl, risePeak.bl, pitchSum.bl, quadCells),
+      br: quadAudio(fp.br, peak.br, risePeak.br, pitchSum.br, quadCells),
     },
     activity,
     pans: {
@@ -3184,10 +3420,10 @@ const GRID_SNAP_IDLE = {
   weight: 0,
   mass: 0,
   quads: {
-    tl: { coverage: 0, height: 0, cells: 0, peak: 0, rate: 1 },
-    tr: { coverage: 0, height: 0, cells: 0, peak: 0, rate: 1 },
-    bl: { coverage: 0, height: 0, cells: 0, peak: 0, rate: 1 },
-    br: { coverage: 0, height: 0, cells: 0, peak: 0, rate: 1 },
+    tl: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, rate: 1 },
+    tr: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, rate: 1 },
+    bl: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, rate: 1 },
+    br: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, rate: 1 },
   },
   activity: {
     tl: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
@@ -3226,7 +3462,9 @@ export async function showFallingBlocks(nextCanvas) {
       fpsFrames = 0;
       fpsLastAt = 0;
     }
+    bindAboutUi();
     bindClearUi();
+    bindProfileUi();
     bindEmitHeightUi();
     fallingInput.attach(canvas);
     installSimHook();
