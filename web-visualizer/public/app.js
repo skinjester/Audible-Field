@@ -19,10 +19,10 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks } from "./falling-blocks.js?v=277";
+import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks, aimMarkRightPx } from "./falling-blocks.js?v=291";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=17";
 import { audioEngine } from "./audio-engine.js?v=46";
-import { gamepadInput } from "./gamepad-input.js?v=14";
+import { gamepadInput } from "./gamepad-input.js?v=15";
 import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=5";
 import { openStemDropdown } from "./sample-picker.js?v=16";
 import { openFxDropdown } from "./fx-picker.js?v=3";
@@ -1257,10 +1257,28 @@ function bindPointerHint() {
   document.body.appendChild(hint);
 
   const mark = 15;
+  const gap = 12;
+  /** Cursor to the text's left edge before the extra shift. */
+  const inset = mark + gap - mark / 2;
+  const pad = 14;
   hint.hidden = false;
   const shiftY = hint.offsetHeight / 2;
   hint.hidden = true;
   let shown = false;
+  let followId = 0;
+
+  function placeText() {
+    const reach = aimMarkRightPx();
+    const shift = Math.max(8, reach + pad - inset);
+    hint.style.setProperty("--hint-x", `${shift}px`);
+  }
+
+  function follow() {
+    followId = 0;
+    if (!shown) return;
+    placeText();
+    followId = window.requestAnimationFrame(follow);
+  }
 
   function place(clientX, clientY) {
     if (!shown) {
@@ -1268,7 +1286,9 @@ function bindPointerHint() {
       hint.hidden = false;
       fallingCanvas.classList.add("has-pointer-hint");
     }
+    placeText();
     hint.style.transform = `translate3d(${clientX - mark / 2}px, ${clientY - shiftY}px, 0)`;
+    if (!followId) follow();
   }
 
   function hide() {
@@ -1290,15 +1310,21 @@ function bindPointerHint() {
       return;
     }
     place(event.clientX, event.clientY);
+    hint.classList.toggle("is-pressed", event.buttons !== 0);
   }
 
   fallingCanvas.addEventListener("pointerenter", track);
   fallingCanvas.addEventListener("pointermove", track);
   fallingCanvas.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "touch") return;
+    hint.classList.add("is-pressed");
     if (event.button === 2) hide();
   });
   fallingCanvas.addEventListener("pointerup", (event) => {
-    if (event.button !== 2 || event.target !== fallingCanvas) return;
+    if (event.pointerType === "touch") return;
+    if (event.buttons !== 0) return;
+    hint.classList.remove("is-pressed");
+    if (event.target !== fallingCanvas) return;
     place(event.clientX, event.clientY);
   });
   fallingCanvas.addEventListener("pointerleave", hide);

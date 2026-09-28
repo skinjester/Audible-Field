@@ -4,7 +4,7 @@
  */
 
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
-import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=10";
+import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=11";
 
 /** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
 
@@ -46,6 +46,7 @@ export class FallingInput {
     this._mouseFull = false;
     this._mouseLight = false;
     this._rightHeld = false;
+    this._yawHeld = false;
     this._keyEmit = false;
     this._orbitAccum = 0;
     this._zoomAccum = 1;
@@ -78,6 +79,7 @@ export class FallingInput {
     this._onPointerCancel = this._onPointerCancel.bind(this);
     this._onWheel = this._onWheel.bind(this);
     this._onContextMenu = this._onContextMenu.bind(this);
+    this._onAuxClick = this._onAuxClick.bind(this);
     this._onKeyDown = this._onKeyDown.bind(this);
     this._onKeyUp = this._onKeyUp.bind(this);
     this._onWindowPointerMove = this._onWindowPointerMove.bind(this);
@@ -99,6 +101,7 @@ export class FallingInput {
     canvas.addEventListener("pointercancel", this._onPointerCancel);
     canvas.addEventListener("wheel", this._onWheel, { passive: false });
     canvas.addEventListener("contextmenu", this._onContextMenu);
+    canvas.addEventListener("auxclick", this._onAuxClick);
     window.addEventListener("keydown", this._onKeyDown, true);
     window.addEventListener("keyup", this._onKeyUp);
     window.addEventListener("pointermove", this._onWindowPointerMove);
@@ -117,6 +120,7 @@ export class FallingInput {
       canvas.removeEventListener("pointercancel", this._onPointerCancel);
       canvas.removeEventListener("wheel", this._onWheel);
       canvas.removeEventListener("contextmenu", this._onContextMenu);
+      canvas.removeEventListener("auxclick", this._onAuxClick);
     }
     window.removeEventListener("keydown", this._onKeyDown, true);
     window.removeEventListener("keyup", this._onKeyUp);
@@ -135,6 +139,7 @@ export class FallingInput {
     this._mouseFull = false;
     this._mouseLight = false;
     this._rightHeld = false;
+    this._yawHeld = false;
     this._keyEmit = false;
     this._orbitAccum = 0;
     this._zoomAccum = 1;
@@ -338,25 +343,35 @@ export class FallingInput {
 
   /**
    * A move on the view places the emitter. Right-drag slides the grid.
-   * Shift+right-drag rotates.
+   * Middle-drag and Shift+right-drag rotate.
    */
   _onWindowPointerMove(event) {
+    this._noteShift(event);
     this._lastClient = { x: event.clientX, y: event.clientY };
     this._pointerAt = { x: event.clientX, y: event.clientY };
   }
 
   _onPointerOut() {
-    if (this._rightHeld) return;
+    if (this._rightHeld || this._yawHeld) return;
     this._aimAt = null;
+  }
+
+  _yawing() {
+    return this._yawHeld || (this._rightHeld && this._shiftHeld);
+  }
+
+  /** Shift previews the single-stream mark even when the keydown landed before focus. */
+  _noteShift(event) {
+    if (event.pointerType === "touch") return;
+    if (event.shiftKey === this._shiftHeld) return;
+    this._shiftHeld = event.shiftKey;
+    this._syncMouseEmit();
   }
 
   _onPointerMove(event) {
     const m = this.bindings.mouse;
-    if (this._emitHeld && event.shiftKey !== this._shiftHeld) {
-      this._shiftHeld = event.shiftKey;
-      this._syncMouseEmit();
-    }
-    if (this._rightHeld && event.shiftKey) {
+    this._noteShift(event);
+    if (this._yawing()) {
       this._aimAt = null;
       this._setDragCursor("yaw");
       this._orbitAccum += -event.movementX * m.orbitRadiansPerPx;
@@ -385,10 +400,18 @@ export class FallingInput {
   _onPointerDown(event) {
     const m = this.bindings.mouse;
     const canvas = this._canvas;
+    if (event.button === m.yawButton) {
+      this._yawHeld = true;
+      this._aimAt = null;
+      this._setDragCursor("yaw");
+      event.preventDefault();
+      canvas?.setPointerCapture?.(event.pointerId);
+      return;
+    }
     if (event.button === m.orbitButton) {
       this._rightHeld = true;
       this._shiftHeld = event.shiftKey;
-      this._setDragCursor(event.shiftKey ? "yaw" : "pan");
+      this._setDragCursor(this._yawing() ? "yaw" : "pan");
       event.preventDefault();
       canvas?.setPointerCapture?.(event.pointerId);
       return;
@@ -406,9 +429,14 @@ export class FallingInput {
 
   _onPointerUp(event) {
     const m = this.bindings.mouse;
+    if (event.button === m.yawButton) {
+      this._yawHeld = false;
+      this._setDragCursor(this._yawing() ? "yaw" : this._rightHeld ? "pan" : null);
+      return;
+    }
     if (event.button === m.orbitButton) {
       this._rightHeld = false;
-      this._setDragCursor(null);
+      this._setDragCursor(this._yawHeld ? "yaw" : null);
       return;
     }
     if (event.button === m.emitButton) {
@@ -419,6 +447,7 @@ export class FallingInput {
 
   _onPointerCancel() {
     this._rightHeld = false;
+    this._yawHeld = false;
     this._setDragCursor(null);
     this._emitHeld = false;
     this._syncMouseEmit();
@@ -434,11 +463,15 @@ export class FallingInput {
     event.preventDefault();
   }
 
+  _onAuxClick(event) {
+    if (event.button === this.bindings.mouse.yawButton) event.preventDefault();
+  }
+
   _onKeyDown(event) {
     if (event.key === "Shift") {
       this._shiftHeld = true;
       this._syncMouseEmit();
-      if (this._rightHeld) this._setDragCursor("yaw");
+      if (this._rightHeld || this._yawHeld) this._setDragCursor(this._yawing() ? "yaw" : "pan");
     }
     const k = this.bindings.keyboard;
     // Tab only selects materials. It never moves focus, including in fields and dialogs.
@@ -461,7 +494,7 @@ export class FallingInput {
     if (event.key === "Shift") {
       this._shiftHeld = false;
       this._syncMouseEmit();
-      if (this._rightHeld) this._setDragCursor("pan");
+      if (this._rightHeld || this._yawHeld) this._setDragCursor(this._yawing() ? "yaw" : "pan");
     }
     const k = this.bindings.keyboard;
     if (!k.emit || event.code !== k.emit) return;

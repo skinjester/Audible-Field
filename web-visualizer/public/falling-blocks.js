@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=65";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
-import { inputBindings } from "./input-bindings.js?v=10";
-import { fallingInput } from "./falling-input.js?v=30";
+import { inputBindings } from "./input-bindings.js?v=11";
+import { fallingInput } from "./falling-input.js?v=32";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -303,18 +303,24 @@ const scratchQuat = new THREE.Quaternion();
 const scratchMat4 = new THREE.Matrix4();
 
 /**
- * Flat shadow square projected straight down (orthographic) under the emitter.
+ * Crosshair on the ground under the emitter. Hidden while atoms are pouring.
  */
 const landingTarget = {
   center: { value: new THREE.Vector2() },
   half: { value: ATOM_SIZE * 0.5 },
+  /** Half-width of each arm, in world units. */
+  stroke: { value: ATOM_SIZE * 0.06 },
   yaw: { value: 0 },
+  /** 1 while aiming, 0 while atoms are pouring. */
+  on: { value: 1 },
 };
 
 function compileLandingTarget(shader) {
   shader.uniforms.uLandCenter = landingTarget.center;
   shader.uniforms.uLandHalf = landingTarget.half;
+  shader.uniforms.uLandStroke = landingTarget.stroke;
   shader.uniforms.uLandYaw = landingTarget.yaw;
+  shader.uniforms.uLandOn = landingTarget.on;
   shader.vertexShader = shader.vertexShader
     .replace("#include <common>", "#include <common>\nvarying vec3 vLandWorld;")
     .replace(
@@ -335,7 +341,9 @@ function compileLandingTarget(shader) {
 varying vec3 vLandWorld;
 uniform vec2 uLandCenter;
 uniform float uLandHalf;
-uniform float uLandYaw;`,
+uniform float uLandStroke;
+uniform float uLandYaw;
+uniform float uLandOn;`,
     )
     .replace(
       "#include <opaque_fragment>",
@@ -345,10 +353,18 @@ uniform float uLandYaw;`,
   float s = sin(uLandYaw);
   vec2 local = vec2(c * d.x - s * d.y, s * d.x + c * d.y);
   float halfE = max(uLandHalf, 0.001);
+  float stroke = max(uLandStroke, 0.001);
+  vec2 fw = max(fwidth(local), vec2(0.0001));
+  float thickX = max(stroke, fw.x * 0.5);
+  float thickY = max(stroke, fw.y * 0.5);
   float ax = abs(local.x);
   float ay = abs(local.y);
-  if (ax < halfE && ay < halfE) {
-    outgoingLight *= 0.5;
+  float arm = max(
+    step(ax, thickX) * step(ay, halfE),
+    step(ay, thickY) * step(ax, halfE)
+  );
+  if (uLandOn > 0.5 && arm > 0.0) {
+    outgoingLight = mix(outgoingLight, vec3(1.0), 0.55);
   }
 }
 #include <opaque_fragment>`,
@@ -374,8 +390,42 @@ function compileRiseFade(shader) {
 function syncLandingTarget() {
   landingTarget.center.value.set(aimWorldX, aimWorldZ);
   const edge = atomSize * emitScale;
-  landingTarget.half.value = Math.max(edge * 0.5, brushN * edge * 0.5);
+  const footprint = Math.max(edge * 0.5, brushN * edge * 0.5);
+  landingTarget.half.value = brushN <= 1 ? footprint * 1.5 : footprint;
+  landingTarget.stroke.value = Math.min(edge * 0.12, footprint * 0.22);
   landingTarget.yaw.value = surface ? surface.rotation.y : 0;
+  landingTarget.on.value = emitting ? 0 : 1;
+}
+
+const aimMarkNdc = new THREE.Vector3();
+
+/** How far the crosshair reaches to the right of the aim point, in CSS pixels. */
+export function aimMarkRightPx() {
+  if (!camera || !renderer) return 0;
+  const half = landingTarget.half.value;
+  const yaw = landingTarget.yaw.value;
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  const view = renderer.domElement;
+  const w = view.clientWidth || 1;
+  camera.updateMatrixWorld(true);
+  aimMarkNdc.set(aimWorldX, 0, aimWorldZ);
+  aimMarkNdc.project(camera);
+  const cx = aimMarkNdc.x;
+  let right = 0;
+  const tips = [
+    [c * half, s * half],
+    [-c * half, -s * half],
+    [-s * half, c * half],
+    [s * half, -c * half],
+  ];
+  for (const [dx, dz] of tips) {
+    aimMarkNdc.set(aimWorldX + dx, 0, aimWorldZ + dz);
+    aimMarkNdc.project(camera);
+    const px = (aimMarkNdc.x - cx) * 0.5 * w;
+    if (px > right) right = px;
+  }
+  return right;
 }
 
 function showError(message) {
@@ -1203,11 +1253,6 @@ function viewIsWide() {
   return gridFitDist > 0 && cameraDist > gridFitDist;
 }
 
-/** The ground target stays on screen center at every zoom, and the plane pans under it. */
-function centerLockActive() {
-  return true;
-}
-
 /** Screen position of the ground target. That point is the zoom and pan focal. */
 function projectTarget() {
   camera.updateMatrixWorld(true);
@@ -1275,47 +1320,18 @@ function slideGround(dx, dz) {
   aimWorldZ = focus.z;
 }
 
-/** If yaw carried the playfield off the screen center, stop at the edge. */
-function keepPinOnField() {
-  if (!surface || !centerLockActive()) return;
-  const focus = groundFocus();
-  if (!focus) return;
-  const local = worldToSurfaceXZ(focus.x, focus.z);
-  const limit = PLAYFIELD_HALF - 0.001;
-  if (Math.abs(local.x) <= limit && Math.abs(local.z) <= limit) return;
-  const lx = Math.min(limit, Math.max(-limit, local.x));
-  const lz = Math.min(limit, Math.max(-limit, local.z));
-  const yawed = surfaceYawXZ(lx, lz);
-  surface.position.x = focus.x - yawed.x;
-  surface.position.z = focus.z - yawed.z;
-  aimWorldX = focus.x;
-  aimWorldZ = focus.z;
-}
-
 /**
  * Move the ground with this pointer drag, in the same sample.
- * The plane follows the hand. The emitter stays on its cell and is not pulled
- * back to the center of the screen.
+ * The plane follows the hand 1:1, so the ground under the cursor stays with it.
+ * The emitter stays on its cell and is not pulled back to the center of the screen.
  */
-const DRAG_GAIN = 2.5;
+const DRAG_GAIN = 1;
 
 function dragGround(dx, dz) {
   if (!surface || (!dx && !dz)) return;
   const localAim = worldToSurfaceXZ(aimWorldX, aimWorldZ);
   surface.position.x += dx;
   surface.position.z += dz;
-  const focus = groundFocus();
-  if (focus) {
-    const hit = worldToSurfaceXZ(focus.x, focus.z);
-    const limit = PLAYFIELD_HALF - 0.001;
-    if (Math.abs(hit.x) > limit || Math.abs(hit.z) > limit) {
-      const lx = Math.min(limit, Math.max(-limit, hit.x));
-      const lz = Math.min(limit, Math.max(-limit, hit.z));
-      const yawed = surfaceYawXZ(lx, lz);
-      surface.position.x = focus.x - yawed.x;
-      surface.position.z = focus.z - yawed.z;
-    }
-  }
   const world = surfaceToWorldXZ(localAim.x, localAim.z);
   aimWorldX = world.x;
   aimWorldZ = world.z;
@@ -1356,70 +1372,29 @@ function placeEmitterAtPointer(pointer) {
   aimWorldZ = world.z;
 }
 
-/** Yaw the playfield around the emitter target, from −n to +n. */
+/** Yaw the playfield around the emitter target. */
 function rotateSurface(deltaYaw) {
   if (!surface || !deltaYaw) return;
   setSurfaceYaw(surface.rotation.y + deltaYaw);
 }
 
-/** Half-range of yaw. The slider sets n; the playfield may turn through [−n, +n]. */
-let yawAllowance = Math.PI * 2;
-
-/** @type {HTMLInputElement | null} */
-let yawSliderEl = null;
-/** @type {HTMLElement | null} */
-let yawReadoutEl = null;
-
 function setSurfaceYaw(nextYaw) {
   if (!surface) return;
-  const next = Math.min(yawAllowance, Math.max(-yawAllowance, nextYaw));
-  const applied = next - surface.rotation.y;
+  const applied = nextYaw - surface.rotation.y;
   if (Math.abs(applied) < 1e-8) return;
-  const pivot = groundFocus();
-  if (pivot) {
-    const c = Math.cos(applied);
-    const s = Math.sin(applied);
-    const vx = pivot.x - surface.position.x;
-    const vz = pivot.z - surface.position.z;
-    const rx = c * vx + s * vz;
-    const rz = -s * vx + c * vz;
-    surface.position.x = pivot.x - rx;
-    surface.position.z = pivot.z - rz;
-  }
-  surface.rotation.y = next;
-  keepPinOnField();
+  const pivot = { x: aimWorldX, z: aimWorldZ };
+  const c = Math.cos(applied);
+  const s = Math.sin(applied);
+  const vx = pivot.x - surface.position.x;
+  const vz = pivot.z - surface.position.z;
+  const rx = c * vx + s * vz;
+  const rz = -s * vx + c * vz;
+  surface.position.x = pivot.x - rx;
+  surface.position.z = pivot.z - rz;
+  surface.rotation.y = nextYaw;
   setAimFromWorld();
   syncEmitter();
   syncSceneBackground();
-  setCameraDist(cameraDist);
-}
-
-/** Slider value is n. Yaw is allowed from −n to +n, up to ±360°. */
-function setYawAllowanceDegrees(deg) {
-  const clamped = Math.min(360, Math.max(0, Number(deg) || 0));
-  yawAllowance = (clamped * Math.PI) / 180;
-  if (surface && Math.abs(surface.rotation.y) > yawAllowance) {
-    setSurfaceYaw(Math.sign(surface.rotation.y) * yawAllowance);
-  }
-  syncYawSlider();
-}
-
-function syncYawSlider() {
-  const shown = Math.round((yawAllowance * 180) / Math.PI);
-  if (yawReadoutEl) yawReadoutEl.textContent = `±${shown}°`;
-  if (!yawSliderEl || document.activeElement === yawSliderEl) return;
-  if (yawSliderEl.value !== String(shown)) yawSliderEl.value = String(shown);
-}
-
-function bindYawSlider() {
-  const slider = document.querySelector("[data-falling-yaw]");
-  const readout = document.querySelector("[data-falling-yaw-readout]");
-  if (!(slider instanceof HTMLInputElement) || slider.dataset.bound === "1") return;
-  slider.dataset.bound = "1";
-  yawSliderEl = slider;
-  yawReadoutEl = readout instanceof HTMLElement ? readout : null;
-  slider.addEventListener("input", () => setYawAllowanceDegrees(slider.value));
-  setYawAllowanceDegrees(slider.value);
 }
 
 /**
@@ -1761,7 +1736,6 @@ function buildPalette() {
   }
   syncPaletteUi();
   bindClearUi();
-  bindYawSlider();
 }
 
 /** Wipe all atoms, splashes, and surface transform. */
@@ -1830,7 +1804,6 @@ export function clearBoard() {
   setAimFromWorld();
   syncEmitter();
   syncSceneBackground();
-  syncYawSlider();
   reconcileMeshes();
 }
 
@@ -3117,27 +3090,35 @@ function initScene(nextCanvas) {
   renderer.setClearColor(SCENE_BG, 1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.BasicShadowMap;
   syncSceneBackground();
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.38));
   scene.add(new THREE.HemisphereLight(0xc5d0d8, 0x3a2e28, 0.42));
   const key = new THREE.DirectionalLight(0xfff4ea, 1.3);
-  key.position.set(8, 14, 6);
+  // 30° above the ground so cast shadows stretch. Same compass heading as before.
+  const keyElevation = (30 * Math.PI) / 180;
+  const keyHeading = Math.atan2(6, 8);
+  const keyDistance = 20;
+  key.target.position.set(0, 4, 0);
+  key.position.set(
+    Math.cos(keyElevation) * Math.cos(keyHeading) * keyDistance,
+    key.target.position.y + Math.sin(keyElevation) * keyDistance,
+    Math.cos(keyElevation) * Math.sin(keyHeading) * keyDistance,
+  );
   key.castShadow = true;
   // One 1024 map, fitted to the 16×16 playfield and piles up to about 12 tall.
-  // The target sits mid-height so the frustum isn't biased onto the ground.
-  const shadowReach = 14;
+  // Wider than the field because the low light looks across it at an angle.
+  const shadowReach = 16;
   key.shadow.mapSize.set(1024, 1024);
   key.shadow.camera.near = 0.5;
-  key.shadow.camera.far = 40;
+  key.shadow.camera.far = 48;
   key.shadow.camera.left = -shadowReach;
   key.shadow.camera.right = shadowReach;
   key.shadow.camera.top = shadowReach;
   key.shadow.camera.bottom = -shadowReach;
   key.shadow.bias = -0.0002;
   key.shadow.normalBias = 0.02;
-  key.target.position.set(0, 4, 0);
   scene.add(key);
   scene.add(key.target);
   const fill = new THREE.DirectionalLight(0xd6e2ea, 0.32);
@@ -3749,11 +3730,12 @@ export async function showFallingBlocks(nextCanvas) {
     }
     bindAboutUi();
     bindClearUi();
-    bindYawSlider();
     fallingInput.attach(canvas);
     installSimHook();
     running = true;
     sizeTries = 0;
+    canvas.tabIndex = -1;
+    if (!document.querySelector("dialog[open]")) canvas.focus({ preventScroll: true });
     startRenderLoop();
   } catch (err) {
     console.error("EchoScape falling blocks init failed:", err);
