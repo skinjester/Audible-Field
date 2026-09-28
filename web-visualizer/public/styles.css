@@ -1403,6 +1403,41 @@ dd {
   pointer-events: none;
 }
 
+.falling-yaw {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  min-width: min(420px, calc(100vw - 48px));
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  pointer-events: auto;
+}
+
+.falling-yaw-name {
+  flex: 0 0 auto;
+}
+
+.falling-yaw input[type="range"] {
+  flex: 1 1 auto;
+  width: 180px;
+  margin: 0;
+  accent-color: var(--live);
+  cursor: pointer;
+}
+
+.falling-yaw-readout {
+  flex: 0 0 4.6em;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--ink);
+}
+
 .falling-stats {
   left: auto;
   right: 12px;

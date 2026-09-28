@@ -19,10 +19,10 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks } from "./falling-blocks.js?v=254";
+import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks } from "./falling-blocks.js?v=263";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=17";
-import { audioEngine } from "./audio-engine.js?v=45";
-import { gamepadInput } from "./gamepad-input.js?v=12";
+import { audioEngine } from "./audio-engine.js?v=46";
+import { gamepadInput } from "./gamepad-input.js?v=13";
 import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=5";
 import { openStemDropdown } from "./sample-picker.js?v=16";
 import { openFxDropdown } from "./fx-picker.js?v=3";
@@ -704,9 +704,19 @@ function syncDualsenseHidUi() {
   updateDualsenseHidUi();
 }
 
+function unlockBedsFromGesture() {
+  if (inputMode !== "browser") return;
+  if (activeTab === "falling-blocks" && !fallingAudioEnabled) return;
+  audioEngine.beginGesture();
+}
+
+document.addEventListener("pointerdown", unlockBedsFromGesture, true);
+document.addEventListener("keydown", unlockBedsFromGesture, true);
+
 async function ensureBrowserAudio() {
   if (inputMode !== "browser") return;
   if (activeTab === "falling-blocks" && !fallingAudioEnabled) return;
+  audioEngine.beginGesture();
   if (audioEngine.running) {
     await audioEngine.resume();
     await audioEngine.ensurePlaying();
@@ -832,6 +842,7 @@ async function setFallingAudioEnabled(enabled) {
   syncFallingAudioButton();
   if (activeTab !== "falling-blocks" || inputMode !== "browser") return;
   if (fallingAudioEnabled) {
+    audioEngine.beginGesture();
     resetFieldSonify();
     await ensureBrowserAudio();
     setStatus(audioEngine.running ? "audio" : "loading", browserStatusLabel());

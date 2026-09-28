@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape Web Visualizer</title>
-    <link rel="stylesheet" href="/styles.css?v=149" />
+    <link rel="stylesheet" href="/styles.css?v=151" />
     <script type="importmap">
       {
         "imports": {
@@ -409,6 +409,21 @@
               <span class="falling-material-label">Materials</span>
             </div>
             <div class="falling-hud">
+              <label class="falling-yaw">
+                <span class="falling-yaw-name">Yaw limit</span>
+                <input
+                  type="range"
+                  data-falling-yaw
+                  min="0"
+                  max="360"
+                  step="1"
+                  value="360"
+                  aria-valuemin="0"
+                  aria-valuemax="360"
+                  aria-label="Yaw limit n, rotation from negative n to positive n"
+                />
+                <span class="falling-yaw-readout" data-falling-yaw-readout>±360°</span>
+              </label>
               <div class="falling-palette-row">
                 <button type="button" class="falling-clear falling-face falling-pill" data-falling-clear title="Clear board">
                   <span class="pad-glyph" aria-hidden="true">&#x0115;</span>
@@ -533,6 +548,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=300"></script>
+    <script type="module" src="/app.js?v=312"></script>
   </body>
 </html>

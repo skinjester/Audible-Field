@@ -18,6 +18,11 @@
  * Square toggles field audio. Circle clears the board.
  *
  * D-pad left / right aims across the playfield.
+ *
+ * Keyboard:
+ *   X hold          → emit
+ *   Tab             → next material (never moves focus)
+ *   Shift+Tab       → previous material
  */
 
 /** @typedef {"pressure" | "max" | "single"} BrushMode */
@@ -71,6 +76,8 @@ export const inputBindings = {
     /** KeyboardEvent.code — hold to emit. Empty string disables. */
     emit: "KeyX",
     emitBrush: /** @type {BrushMode} */ ("max"),
+    /** KeyboardEvent.code — Tab steps forward, Shift+Tab steps back. */
+    cycleNext: "Tab",
   },
   gamepad: {
     /** Deadzone for the mixer poll in gamepad-input.js. */

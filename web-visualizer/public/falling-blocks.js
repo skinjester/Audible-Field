@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=65";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
-import { inputBindings } from "./input-bindings.js?v=8";
-import { fallingInput } from "./falling-input.js?v=21";
+import { inputBindings } from "./input-bindings.js?v=9";
+import { fallingInput } from "./falling-input.js?v=24";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -112,20 +112,19 @@ let ruleAcc = 0;
 let cameraDist = CAMERA_DIST_DEFAULT;
 /** Fixed look-at. Zoom changes distance; the ground offset does the traveling. */
 const CAMERA_LOOK = new THREE.Vector3(0, 0.35, 0);
-/** Pointer distance from the canvas edge that keeps sliding the ground. */
-const EDGE_SCROLL_PX = 28;
-/** Yaw may not shove the ground center farther than this in one step. */
-const YAW_SHIFT_CAP = 0.45;
+/** Pixels from the view edge where a pinned cursor keeps the current pan speed. */
+const EDGE_HOLD_PX = 20;
 /** Travel while closer than this fraction of the full-grid distance. */
 const TRAVEL_FIT = 0.92;
 /** Full-grid camera distance from the last zoom or resize. 0 until measured. */
 let gridFitDist = 0;
-/** Previous pointer, so the first sample is a zero step. */
-/** @type {{ x: number, y: number } | null} */
-let stepAimPointer = null;
 /** Last pointer, including while it rests on the canvas edge. */
 /** @type {{ x: number, y: number } | null} */
 let heldPointer = null;
+/** World units per second from the latest pointer swipe, continued at the screen edge. */
+let panVx = 0;
+let panVz = 0;
+let panVAt = 0;
 /** Corner NDC limit used to find a full-grid framing. */
 const GRID_NDC_LIMIT = 1;
 /**
@@ -1302,59 +1301,124 @@ function keepPinOnField() {
   aimWorldZ = focus.z;
 }
 
-/**
- * Screen-edge hold. sx/sy are -1..1, +sx right, +sy up.
- * Zero when the pointer sits in the middle of the view.
- */
-function edgeScrollAxes(pointer) {
-  if (!canvas) return { sx: 0, sy: 0 };
+/** True when the cursor is against the view edge, including just outside the canvas. */
+function pointerAtEdge(pointer) {
+  if (!canvas) return false;
   const rect = canvas.getBoundingClientRect();
-  if (rect.width < 1 || rect.height < 1) return { sx: 0, sy: 0 };
+  if (rect.width < 1 || rect.height < 1) return false;
   const x = pointer.x - rect.left;
   const y = pointer.y - rect.top;
-  const m = Math.min(EDGE_SCROLL_PX, rect.width * 0.08, rect.height * 0.08);
-  let sx = 0;
-  let sy = 0;
-  if (x < m) sx = -Math.min(1, (m - x) / m);
-  else if (x > rect.width - m) sx = Math.min(1, (x - (rect.width - m)) / m);
-  if (y < m) sy = Math.min(1, (m - y) / m);
-  else if (y > rect.height - m) sy = -Math.min(1, (y - (rect.height - m)) / m);
-  return { sx, sy };
+  return (
+    x <= EDGE_HOLD_PX ||
+    y <= EDGE_HOLD_PX ||
+    x >= rect.width - EDGE_HOLD_PX ||
+    y >= rect.height - EDGE_HOLD_PX
+  );
 }
 
-/** Keep panning while the pointer rests on the edge. A centered pointer does nothing. */
-function edgeSlide(dt) {
-  if (!heldPointer || dt <= 0 || !centerLockActive()) return false;
-  const { sx, sy } = edgeScrollAxes(heldPointer);
-  if (!sx && !sy) return false;
-  const step = AIM_SPEED * dt;
-  const camSin = Math.sin(CAMERA_YAW);
-  const camCos = Math.cos(CAMERA_YAW);
-  slideGround((camCos * sx - camSin * sy) * step, (-camSin * sx - camCos * sy) * step);
+/**
+ * Slide the ground by a pointer delta in canvas pixels.
+ * Records the speed so a cursor pinned at the screen edge can continue it.
+ */
+function slidePointer(dx, dy, dt) {
+  if ((!dx && !dy) || !canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return;
+  const ndcDx = (dx / rect.width) * 2;
+  const ndcDy = -(dy / rect.height) * 2;
+  const origin = worldOnPlane(0, 0, 0);
+  const right = worldOnPlane(ndcDx, 0, 0);
+  const up = worldOnPlane(0, ndcDy, 0);
+  if (!origin || !right || !up) return;
+  const wx = right.x - origin.x + (up.x - origin.x);
+  const wz = right.z - origin.z + (up.z - origin.z);
+  slideGround(wx, wz);
+  if (dt > 0) {
+    panVx = wx / dt;
+    panVz = wz / dt;
+    panVAt = performance.now();
+  }
+}
+
+/**
+ * While zoomed in, a cursor held at the screen edge keeps the swipe's speed.
+ * It does not start a new, slower pan.
+ */
+function edgeHold(dt) {
+  if (!heldPointer || dt <= 0) return false;
+  if (!(gridFitDist > 0 && cameraDist <= gridFitDist)) return false;
+  if (!pointerAtEdge(heldPointer)) return false;
+  if (performance.now() - panVAt > 140) return false;
+  if (Math.hypot(panVx, panVz) < 0.05) return false;
+  slideGround(panVx * dt, panVz * dt);
+  panVAt = performance.now();
   return true;
 }
 
-/** Yaw the playfield around the origin. The emitter stays in world space. */
+/** Yaw the playfield around the emitter target, from −n to +n. */
 function rotateSurface(deltaYaw) {
   if (!surface || !deltaYaw) return;
-  let applied = deltaYaw;
-  const radius = Math.hypot(surface.position.x, surface.position.z);
-  if (radius > 1e-4) {
-    const shift = radius * Math.abs(deltaYaw);
-    if (shift > YAW_SHIFT_CAP) applied = Math.sign(deltaYaw) * (YAW_SHIFT_CAP / radius);
+  setSurfaceYaw(surface.rotation.y + deltaYaw);
+}
+
+/** Half-range of yaw. The slider sets n; the playfield may turn through [−n, +n]. */
+let yawAllowance = Math.PI * 2;
+
+/** @type {HTMLInputElement | null} */
+let yawSliderEl = null;
+/** @type {HTMLElement | null} */
+let yawReadoutEl = null;
+
+function setSurfaceYaw(nextYaw) {
+  if (!surface) return;
+  const next = Math.min(yawAllowance, Math.max(-yawAllowance, nextYaw));
+  const applied = next - surface.rotation.y;
+  if (Math.abs(applied) < 1e-8) return;
+  const pivot = groundFocus();
+  if (pivot) {
+    const c = Math.cos(applied);
+    const s = Math.sin(applied);
+    const vx = pivot.x - surface.position.x;
+    const vz = pivot.z - surface.position.z;
+    const rx = c * vx + s * vz;
+    const rz = -s * vx + c * vz;
+    surface.position.x = pivot.x - rx;
+    surface.position.z = pivot.z - rz;
   }
-  const c = Math.cos(applied);
-  const s = Math.sin(applied);
-  const x = surface.position.x;
-  const z = surface.position.z;
-  surface.position.x = c * x + s * z;
-  surface.position.z = -s * x + c * z;
-  surface.rotation.y += applied;
+  surface.rotation.y = next;
   keepPinOnField();
   setAimFromWorld();
   syncEmitter();
   syncSceneBackground();
   setCameraDist(cameraDist);
+}
+
+/** Slider value is n. Yaw is allowed from −n to +n, up to ±360°. */
+function setYawAllowanceDegrees(deg) {
+  const clamped = Math.min(360, Math.max(0, Number(deg) || 0));
+  yawAllowance = (clamped * Math.PI) / 180;
+  if (surface && Math.abs(surface.rotation.y) > yawAllowance) {
+    setSurfaceYaw(Math.sign(surface.rotation.y) * yawAllowance);
+  }
+  syncYawSlider();
+}
+
+function syncYawSlider() {
+  const shown = Math.round((yawAllowance * 180) / Math.PI);
+  if (yawReadoutEl) yawReadoutEl.textContent = `±${shown}°`;
+  if (!yawSliderEl || document.activeElement === yawSliderEl) return;
+  if (yawSliderEl.value !== String(shown)) yawSliderEl.value = String(shown);
+}
+
+function bindYawSlider() {
+  const slider = document.querySelector("[data-falling-yaw]");
+  const readout = document.querySelector("[data-falling-yaw-readout]");
+  if (!(slider instanceof HTMLInputElement) || slider.dataset.bound === "1") return;
+  slider.dataset.bound = "1";
+  yawSliderEl = slider;
+  yawReadoutEl = readout instanceof HTMLElement ? readout : null;
+  slider.addEventListener("input", () => setYawAllowanceDegrees(slider.value));
+  setYawAllowanceDegrees(slider.value);
 }
 
 /**
@@ -1452,27 +1516,6 @@ function moveAim(lx, ly, dt) {
   slideGround(dx, dz);
   setAimFromWorld();
   syncEmitter();
-}
-
-/** Zoomed-in pointer aim: a screen step, with a zero step on the first sample. */
-function stepAimFromPointer(pointer) {
-  if (!stepAimPointer) {
-    stepAimPointer = { x: pointer.x, y: pointer.y };
-    return;
-  }
-  const dx = pointer.x - stepAimPointer.x;
-  const dy = pointer.y - stepAimPointer.y;
-  stepAimPointer = { x: pointer.x, y: pointer.y };
-  if (!dx && !dy || !canvas) return;
-  const rect = canvas.getBoundingClientRect();
-  if (rect.width < 1 || rect.height < 1) return;
-  const ndcDx = (dx / rect.width) * 2;
-  const ndcDy = -(dy / rect.height) * 2;
-  const origin = worldOnPlane(0, 0, 0);
-  const right = worldOnPlane(ndcDx, 0, 0);
-  const up = worldOnPlane(0, ndcDy, 0);
-  if (!origin || !right || !up) return;
-  slideGround(right.x - origin.x + (up.x - origin.x), right.z - origin.z + (up.z - origin.z));
 }
 
 function measureWrap() {
@@ -1717,6 +1760,7 @@ function buildPalette() {
   }
   syncPaletteUi();
   bindClearUi();
+  bindYawSlider();
 }
 
 /** Wipe all atoms, splashes, and surface transform. */
@@ -1778,8 +1822,10 @@ export function clearBoard() {
 
   aimWorldX = 0;
   aimWorldZ = 0;
-  stepAimPointer = null;
   heldPointer = null;
+  panVx = 0;
+  panVz = 0;
+  panVAt = 0;
   syncCamera();
   holdTargetAtCenter();
   emitting = false;
@@ -1787,6 +1833,7 @@ export function clearBoard() {
   setAimFromWorld();
   syncEmitter();
   syncSceneBackground();
+  syncYawSlider();
   reconcileMeshes();
 }
 
@@ -1839,20 +1886,17 @@ function applyInput(dt) {
   const frame = fallingInput.sample(dt, controller, connectedPad());
 
   const stickAim = !!(frame.aimStickX || frame.aimStickY);
-  const aiming = !!(frame.pointer || stickAim);
+  const aiming = !!(frame.pointerDelta || stickAim);
   if (frame.pointerAt) heldPointer = { x: frame.pointerAt.x, y: frame.pointerAt.y };
-  else {
-    heldPointer = null;
-    stepAimPointer = null;
-  }
+  else heldPointer = null;
 
   // Mouse / pad / keys are additive — none blocks the others.
-  if (frame.pointer) stepAimFromPointer(frame.pointer);
+  if (frame.pointerDelta) slidePointer(frame.pointerDelta.x, frame.pointerDelta.y, dt);
   if (stickAim) moveAim(frame.aimStickX, frame.aimStickY, dt);
   if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
   if (frame.zoomFactor !== 1) zoomCamera(frame.zoomFactor);
 
-  const edged = !frame.orbitDelta && !frame.pointer && !stickAim && edgeSlide(dt);
+  const edged = !frame.pointerDelta && !frame.orbitDelta && !stickAim && edgeHold(dt);
   if (!aiming && !edged) holdTargetAtCenter();
   setAimFromWorld();
   syncEmitter();
@@ -3415,15 +3459,16 @@ function pitchForWorld(wx, wz) {
 }
 
 /**
- * Stereo pan (−1 left … 1 right) of a surface-local point after playfield yaw.
- * Uses the azimuth around the camera, so a pile anywhere off center swings
+ * Stereo pan (−1 left … 1 right) of a point on the playfield after yaw.
+ * Azimuth around the camera, so a pile anywhere off the plane center swings
  * fully left and right as the surface turns. Screen-right matches moveAim.
+ * Where the plane sits in the viewport is added separately.
  */
 function screenPan(lx, lz, yaw) {
   const c = Math.cos(yaw);
   const s = Math.sin(yaw);
-  const wx = c * lx + s * lz + (surface ? surface.position.x : 0);
-  const wz = -s * lx + c * lz + (surface ? surface.position.z : 0);
+  const wx = c * lx + s * lz;
+  const wz = -s * lx + c * lz;
   const camC = Math.cos(CAMERA_YAW);
   const camS = Math.sin(CAMERA_YAW);
   const screenX = wx * camC - wz * camS;
@@ -3431,6 +3476,16 @@ function screenPan(lx, lz, yaw) {
   const mag = Math.hypot(screenX, screenDepth);
   if (mag < 1e-4) return 0;
   return Math.min(1, Math.max(-1, screenX / mag));
+}
+
+/** Screen X of the plane center. −1 is the left edge of the view, 1 the right. */
+function planeViewportPan() {
+  if (!camera || !surface) return 0;
+  camera.updateMatrixWorld(true);
+  emitterNdc.set(surface.position.x, 0, surface.position.z);
+  emitterNdc.project(camera);
+  if (!Number.isFinite(emitterNdc.x)) return 0;
+  return Math.min(1, Math.max(-1, emitterNdc.x));
 }
 
 /**
@@ -3463,6 +3518,7 @@ function captureAudioSnapshot(dt) {
   audioGen += 1;
 
   const yaw = surface ? surface.rotation.y : 0;
+  const viewPan = planeViewportPan();
   const splash = { tl: [], tr: [], bl: [], br: [] };
   const splashMid = GRID_MAX >> 1;
   for (let i = 0; i < splashHits.length; i += 1) {
@@ -3607,10 +3663,10 @@ function captureAudioSnapshot(dt) {
     },
     activity,
     pans: {
-      tl: fp.tl > 0 ? panSum.tl / fp.tl : 0,
-      tr: fp.tr > 0 ? panSum.tr / fp.tr : 0,
-      bl: fp.bl > 0 ? panSum.bl / fp.bl : 0,
-      br: fp.br > 0 ? panSum.br / fp.br : 0,
+      tl: fp.tl > 0 ? Math.min(1, Math.max(-1, panSum.tl / fp.tl + viewPan)) : 0,
+      tr: fp.tr > 0 ? Math.min(1, Math.max(-1, panSum.tr / fp.tr + viewPan)) : 0,
+      bl: fp.bl > 0 ? Math.min(1, Math.max(-1, panSum.bl / fp.bl + viewPan)) : 0,
+      br: fp.br > 0 ? Math.min(1, Math.max(-1, panSum.br / fp.br + viewPan)) : 0,
     },
     splash,
     view: {
@@ -3682,6 +3738,7 @@ export async function showFallingBlocks(nextCanvas) {
     }
     bindAboutUi();
     bindClearUi();
+    bindYawSlider();
     fallingInput.attach(canvas);
     installSimHook();
     running = true;

@@ -4,13 +4,13 @@
  */
 
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
-import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=8";
+import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=9";
 
 /** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
 
 /**
  * @typedef {{
- *   pointer: { x: number, y: number } | null,
+ *   pointerDelta: { x: number, y: number } | null,
  *   pointerAt: { x: number, y: number } | null,
  *   emit: boolean,
  *   brushMode: BrushMode,
@@ -52,13 +52,21 @@ export class FallingInput {
     this._pointer = null;
     /** True only for frames where the pointer actually moved (or clicked). */
     this._pointerFresh = false;
-    /** Last pointer, kept while it rests so the view edge can keep panning. */
+    /** Last pointer, kept while it rests so a pinned cursor can keep panning. */
     /** @type {{ x: number, y: number } | null} */
     this._pointerAt = null;
+    this._moveX = 0;
+    this._moveY = 0;
+    /** @type {{ x: number, y: number } | null} */
+    this._lastClient = null;
+    /** @type {{ x: number, y: number } | null} */
+    this._touchPrev = null;
     this._prevClear = false;
     this._prevAudio = false;
     this._prevCyclePrev = false;
     this._prevCycleNext = false;
+    /** Presses of Tab / Shift+Tab since the last sample. */
+    this._keyCycle = 0;
     this._onPointerMove = this._onPointerMove.bind(this);
     this._onPointerDown = this._onPointerDown.bind(this);
     this._onPointerUp = this._onPointerUp.bind(this);
@@ -84,7 +92,7 @@ export class FallingInput {
     canvas.addEventListener("pointercancel", this._onPointerCancel);
     canvas.addEventListener("wheel", this._onWheel, { passive: false });
     canvas.addEventListener("contextmenu", this._onContextMenu);
-    window.addEventListener("keydown", this._onKeyDown);
+    window.addEventListener("keydown", this._onKeyDown, true);
     window.addEventListener("keyup", this._onKeyUp);
     window.addEventListener("pointermove", this._onWindowPointerMove);
     window.addEventListener("blur", this._onPointerGone);
@@ -101,7 +109,7 @@ export class FallingInput {
       canvas.removeEventListener("wheel", this._onWheel);
       canvas.removeEventListener("contextmenu", this._onContextMenu);
     }
-    window.removeEventListener("keydown", this._onKeyDown);
+    window.removeEventListener("keydown", this._onKeyDown, true);
     window.removeEventListener("keyup", this._onKeyUp);
     window.removeEventListener("pointermove", this._onWindowPointerMove);
     window.removeEventListener("blur", this._onPointerGone);
@@ -123,10 +131,15 @@ export class FallingInput {
     this._pointer = null;
     this._pointerFresh = false;
     this._pointerAt = null;
+    this._moveX = 0;
+    this._moveY = 0;
+    this._lastClient = null;
+    this._touchPrev = null;
     this._prevClear = false;
     this._prevAudio = false;
     this._prevCyclePrev = false;
     this._prevCycleNext = false;
+    this._keyCycle = 0;
   }
 
   /**
@@ -231,7 +244,8 @@ export class FallingInput {
 
     const clearEdge = clearDown && !this._prevClear;
     const audioEdge = audioDown && !this._prevAudio;
-    let cycleDelta = 0;
+    let cycleDelta = this._keyCycle;
+    this._keyCycle = 0;
     if (cyclePrev && !this._prevCyclePrev) cycleDelta -= 1;
     if (cycleNext && !this._prevCycleNext) cycleDelta += 1;
 
@@ -240,13 +254,14 @@ export class FallingInput {
     this._prevCyclePrev = cyclePrev;
     this._prevCycleNext = cycleNext;
 
-    let pointer = this._pointerFresh ? this._pointer : null;
-    this._pointerFresh = false;
-    const touchPointer = touch.aim ? this._touchPointer() : null;
-    if (touchPointer) pointer = touchPointer;
+    const touchDelta = this._consumeTouchDelta();
+    const dx = this._moveX + touchDelta.x;
+    const dy = this._moveY + touchDelta.y;
+    this._moveX = 0;
+    this._moveY = 0;
 
     return {
-      pointer,
+      pointerDelta: dx || dy ? { x: dx, y: dy } : null,
       pointerAt: this._pointerAt,
       emit,
       brushMode,
@@ -264,23 +279,28 @@ export class FallingInput {
       ltHeld: ltActive,
       rtHeld: rtActive,
       shiftHeld: this._shiftHeld,
-      touchAim: !!touchPointer,
+      touchAim: !!touch.aim,
     };
   }
 
   /**
-   * Map the finger onto the canvas so the existing plane raycast aims the emitter.
-   * @returns {{ x: number, y: number } | null}
+   * Finger motion on the touchpad, in canvas pixels. A new contact does not jump.
+   * @returns {{ x: number, y: number }}
    */
-  _touchPointer() {
-    const canvas = this._canvas;
+  _consumeTouchDelta() {
     const touch = dualsenseHid.touch;
-    if (!canvas || !touch?.active) return null;
+    const canvas = this._canvas;
+    if (!touch?.active || !canvas) {
+      this._touchPrev = null;
+      return { x: 0, y: 0 };
+    }
     const rect = canvas.getBoundingClientRect();
-    if (rect.width < 1 || rect.height < 1) return null;
+    const prev = this._touchPrev;
+    this._touchPrev = { x: touch.x, y: touch.y };
+    if (!prev || rect.width < 1 || rect.height < 1) return { x: 0, y: 0 };
     return {
-      x: rect.left + touch.x * rect.width,
-      y: rect.top + touch.y * rect.height,
+      x: (touch.x - prev.x) * rect.width,
+      y: (touch.y - prev.y) * rect.height,
     };
   }
 
@@ -297,23 +317,33 @@ export class FallingInput {
     this._pointerAt = null;
     this._pointer = null;
     this._pointerFresh = false;
+    this._moveX = 0;
+    this._moveY = 0;
+    this._lastClient = null;
+    this._touchPrev = null;
   }
 
   /**
-   * Track the pointer past the canvas so a zoomed-in pan can continue up to
-   * the window edge, and keep the last point when the cursor stops there.
+   * Relative pointer motion. A drag on a form control does not pan the grid.
    */
   _onWindowPointerMove(event) {
-    if (this._orbiting) return;
-    const target = event.target;
-    if (target instanceof Element && target.closest("button, a, input, textarea, select, label")) {
-      this._pointerAt = null;
+    if (this._orbiting) {
+      this._lastClient = { x: event.clientX, y: event.clientY };
       return;
     }
+    const target = event.target;
+    const onControl = target instanceof Element && target.closest("input, textarea, select");
+    let dx = event.movementX || 0;
+    let dy = event.movementY || 0;
+    if (!dx && !dy && this._lastClient && !onControl) {
+      dx = event.clientX - this._lastClient.x;
+      dy = event.clientY - this._lastClient.y;
+    }
+    this._lastClient = { x: event.clientX, y: event.clientY };
     this._pointerAt = { x: event.clientX, y: event.clientY };
-    if (!this.bindings.mouse.moveAimsEmitter) return;
-    this._pointer = this._pointerAt;
-    this._pointerFresh = true;
+    if (onControl || !this.bindings.mouse.moveAimsEmitter) return;
+    this._moveX += dx;
+    this._moveY += dy;
   }
 
   _onPointerMove(event) {
@@ -325,10 +355,6 @@ export class FallingInput {
     if (this._orbiting) {
       this._orbitAccum += -event.movementX * m.orbitRadiansPerPx;
       return;
-    }
-    if (m.moveAimsEmitter) {
-      this._pointer = { x: event.clientX, y: event.clientY };
-      this._pointerFresh = true;
     }
   }
 
@@ -385,11 +411,18 @@ export class FallingInput {
       this._shiftHeld = true;
       this._syncMouseEmit();
     }
+    const k = this.bindings.keyboard;
+    // Tab only selects materials. It never moves focus, including in fields and dialogs.
+    if (k.cycleNext && event.code === k.cycleNext) {
+      if (!event.repeat) this._keyCycle += event.shiftKey ? -1 : 1;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (document.querySelector("dialog[open]")) return;
     if (event.target && /^(INPUT|TEXTAREA|SELECT)$/i.test(event.target.tagName)) {
       return;
     }
-    const k = this.bindings.keyboard;
     if (!k.emit || event.code !== k.emit || event.repeat) return;
     this._keyEmit = true;
     event.preventDefault();

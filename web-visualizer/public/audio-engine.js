@@ -183,6 +183,8 @@ export class EchoScapeAudioEngine {
     this.running = false;
     this.error = null;
     this.stems = {};
+    /** Bed elements opened before the stem graph exists, so a click can start them. */
+    this._pendingEls = {};
     this.fx = {};
     this.activeFx = "cross";
     /** True while the master trim is at its open level. Falling Blocks closes it on an empty grid. */
@@ -254,7 +256,7 @@ export class EchoScapeAudioEngine {
       throw new Error(this.error);
     }
 
-    this.ctx = new AC();
+    if (!this.ctx || this.ctx.state === "closed") this.ctx = new AC();
     // Outside a user gesture, some Chromium builds never resolve resume().
     await this._safeResume(300);
 
@@ -389,7 +391,37 @@ export class EchoScapeAudioEngine {
     await this._safeResume(1000);
   }
 
+  /**
+   * Start the looping beds during a user gesture.
+   * Chrome allows AudioBuffer splashes once the context is running, but it
+   * blocks HTML media playback unless play() is called in the gesture itself.
+   * Call this synchronously from pointerdown or keydown, before any await.
+   */
+  beginGesture() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if ((!this.ctx || this.ctx.state === "closed") && AC) this.ctx = new AC();
+    const poke = () => {
+      for (const corner of CORNERS) {
+        const wired = this.stems[corner]?.el;
+        if (wired) {
+          this._playEl(wired, true);
+          continue;
+        }
+        let pending = this._pendingEls[corner];
+        if (!pending) pending = this._openPendingBed(corner);
+        if (pending) this._playEl(pending, false);
+      }
+    };
+    poke();
+    if (this.ctx && this.ctx.state === "suspended") {
+      void this.ctx.resume().then(() => {
+        if (navigator.userActivation?.isActive) poke();
+      });
+    }
+  }
+
   async ensurePlaying() {
+    this.beginGesture();
     await this.resume();
     await this._playAll();
   }
@@ -415,6 +447,57 @@ export class EchoScapeAudioEngine {
     }
   }
 
+  _playEl(el, audible) {
+    if (!el) return;
+    el.muted = false;
+    if (audible) el.volume = 1;
+    if (!el.paused) return;
+    const pending = el.play();
+    if (pending && typeof pending.catch === "function") pending.catch(() => {});
+  }
+
+  /** A bed element the gesture can start before the stem graph exists. */
+  _openPendingBed(corner) {
+    const meta = STEM_CORNERS[corner];
+    if (!meta) return null;
+    const url = meta.url || `/beds/${encodeURIComponent(meta.file)}`;
+    const el = this._createBedElement(url);
+    this._pendingEls[corner] = el;
+    return el;
+  }
+
+  _createBedElement(url) {
+    const el = new Audio();
+    el.loop = true;
+    el.preload = "auto";
+    el.preservesPitch = false;
+    el.mozPreservesPitch = false;
+    el.webkitPreservesPitch = false;
+    el.playsInline = true;
+    el.volume = 0;
+    el.dataset.bedUrl = url;
+    el.src = url;
+    if (document.body && !el.isConnected) {
+      el.setAttribute("playsinline", "");
+      el.setAttribute("aria-hidden", "true");
+      el.style.cssText = "position:fixed;width:0;height:0;opacity:0;pointer-events:none";
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+
+  _releaseBedElement(el) {
+    if (!el) return;
+    try {
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
+    } catch {
+      /* ignore */
+    }
+    el.remove();
+  }
+
   async _playAll() {
     const plays = CORNERS.map(async (corner) => {
       const stem = this.stems[corner];
@@ -438,12 +521,15 @@ export class EchoScapeAudioEngine {
   async stop() {
     if (!this.running && !this.ctx) return;
     for (const corner of CORNERS) {
+      const pending = this._pendingEls[corner];
+      if (pending) this._releaseBedElement(pending);
       const stem = this.stems[corner];
       if (!stem) continue;
       try {
         stem.el.pause();
         stem.el.removeAttribute("src");
         stem.el.load();
+        stem.el.remove();
       } catch {
         /* ignore */
       }
@@ -465,6 +551,7 @@ export class EchoScapeAudioEngine {
     }
     this.ctx = null;
     this.stems = {};
+    this._pendingEls = {};
     this.fx = {};
     this.fxAssignment = {};
     this._fxWam = {};
@@ -1197,15 +1284,19 @@ export class EchoScapeAudioEngine {
       }
     }
 
-    const el = new Audio();
-    el.loop = true;
-    el.preload = "auto";
-    el.preservesPitch = false;
-    el.mozPreservesPitch = false;
-    el.webkitPreservesPitch = false;
-    el.src = url;
+    let el = this._pendingEls[corner];
+    const reuse = el && el.dataset.bedUrl === url && el !== prev?.el;
+    if (!reuse) {
+      if (el && el !== prev?.el) this._releaseBedElement(el);
+      el = this._createBedElement(url);
+      this._pendingEls[corner] = el;
+    }
+    // play() has to happen while the click is still active. Waiting for the
+    // file first drops the gesture, and Chrome then leaves the bed paused.
+    if (navigator.userActivation?.isActive) this._playEl(el, false);
 
     await waitForMedia(el);
+    delete this._pendingEls[corner];
 
     const source = this.ctx.createMediaElementSource(el);
     const gain = this.ctx.createGain();
@@ -1265,6 +1356,7 @@ export class EchoScapeAudioEngine {
       try {
         prev.el.removeAttribute("src");
         prev.el.load();
+        prev.el.remove();
       } catch {
         /* ignore */
       }
@@ -1273,14 +1365,14 @@ export class EchoScapeAudioEngine {
     this.stems[corner] = { el, source, gain, mono, pan, tone, meta };
     this._primeStrikeBuffer(corner, url);
 
-    if (opts.resume !== false && this.running) {
+    el.volume = 1;
+    if (opts.resume !== false && (this.running || navigator.userActivation?.isActive)) {
       try {
         el.muted = false;
-        el.volume = 1;
-        await el.play();
+        if (el.paused) await el.play();
       } catch (err) {
         console.warn("[EchoScape audio] stem play failed:", err?.message || err);
-        throw err;
+        if (this.running) throw err;
       }
     }
   }
