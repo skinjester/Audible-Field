@@ -6,7 +6,9 @@
  *   move            → aim emitter
  *   LMB hold        → largest emitter (full field, full atom size)
  *   Shift+LMB hold  → smallest emitter (one half-size column)
- *   RMB drag        → yaw the playfield (camera / grid)
+ *   RMB drag             → slide the playfield
+ *   Shift+RMB or Alt+RMB → yaw the playfield
+ *   MMB drag             → yaw the playfield
  *   wheel           → zoom
  *
  * Touchpad (DualSense, after Connect touchpad):
@@ -66,12 +68,14 @@ export const inputBindings = {
     /** Held with emitButton: smallest emitter instead of the largest. */
     emitSingleModifier: "shift",
     orbitButton: 2,
-    /** Middle button yaws. Shift+right-drag yaws as well. */
+    /** Middle button yaws. Shift+right-drag and Alt+right-drag yaw as well. */
     yawButton: 1,
+    /** Held with the right button: yaw instead of sliding the grid. */
+    yawModifiers: ["shift", "alt"],
     /** A move on the view places the emitter. Right-drag slides the grid. */
     moveAimsEmitter: true,
     wheelZooms: true,
-    /** RMB drag: radians of surface yaw per pixel (grid rotates under emitter). */
+    /** Yaw drag: radians of surface yaw per pixel (grid rotates under emitter). */
     orbitRadiansPerPx: 0.005,
     wheelZoomExp: 0.0012,
   },

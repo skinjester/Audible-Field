@@ -19,7 +19,7 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks, aimMarkRightPx } from "./falling-blocks.js?v=293";
+import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks, aimMarkRightPx } from "./falling-blocks.js?v=295";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=17";
 import { audioEngine } from "./audio-engine.js?v=46";
 import { gamepadInput } from "./gamepad-input.js?v=16";
@@ -783,6 +783,16 @@ async function setInputMode(mode) {
   renderDiagnostics();
 }
 
+function gameControllerPresent() {
+  const pads = navigator.getGamepads?.();
+  if (pads) {
+    for (let i = 0; i < pads.length; i += 1) {
+      if (pads[i]) return true;
+    }
+  }
+  return !!dualsenseHid.connected;
+}
+
 function tick(now) {
   try {
     const frameDt = lastFrame ? Math.min(0.05, (now - lastFrame) / 1000) : 0;
@@ -820,6 +830,7 @@ function tick(now) {
     }
     tickMixer(now, lastFrame);
     lastFrame = now;
+    if (gameControllerPresent()) hidePointerHint();
     if (activeTab !== "falling-blocks") renderDiagnostics();
   } catch (err) {
     console.error("EchoScape diagnostics tick failed:", err);
@@ -1281,6 +1292,10 @@ function bindPointerHint() {
   }
 
   function place(clientX, clientY) {
+    if (gameControllerPresent()) {
+      hide();
+      return;
+    }
     if (!shown) {
       shown = true;
       hint.hidden = false;

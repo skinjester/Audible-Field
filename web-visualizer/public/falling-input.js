@@ -18,6 +18,7 @@ import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?
  *   analog: number,
  *   curveInvert: boolean,
  *   orbitDelta: number,
+ *   yawing: boolean,
  *   zoomFactor: number,
  *   aimStickX: number,
  *   aimStickY: number,
@@ -43,6 +44,7 @@ export class FallingInput {
     this._canvas = null;
     this._emitHeld = false;
     this._shiftHeld = false;
+    this._altHeld = false;
     this._mouseFull = false;
     this._mouseLight = false;
     this._rightHeld = false;
@@ -136,6 +138,7 @@ export class FallingInput {
   resetTransient() {
     this._emitHeld = false;
     this._shiftHeld = false;
+    this._altHeld = false;
     this._mouseFull = false;
     this._mouseLight = false;
     this._rightHeld = false;
@@ -285,6 +288,7 @@ export class FallingInput {
       analog,
       curveInvert,
       orbitDelta,
+      yawing: this._yawing() || rx !== 0,
       zoomFactor,
       aimStickX,
       aimStickY,
@@ -343,10 +347,10 @@ export class FallingInput {
 
   /**
    * A move on the view places the emitter. Right-drag slides the grid.
-   * Middle-drag and Shift+right-drag rotate.
+   * Middle-drag, Shift+right-drag, and Alt+right-drag rotate.
    */
   _onWindowPointerMove(event) {
-    this._noteShift(event);
+    this._noteModifiers(event);
     this._lastClient = { x: event.clientX, y: event.clientY };
     this._pointerAt = { x: event.clientX, y: event.clientY };
   }
@@ -357,20 +361,35 @@ export class FallingInput {
   }
 
   _yawing() {
-    return this._yawHeld || (this._rightHeld && this._shiftHeld);
+    const mods = this.bindings.mouse.yawModifiers || [];
+    const modified = this._rightHeld && mods.some((name) => this._modifierHeld(name));
+    return this._yawHeld || modified;
+  }
+
+  /**
+   * @param {string} name
+   */
+  _modifierHeld(name) {
+    if (name === "shift") return this._shiftHeld;
+    if (name === "alt") return this._altHeld;
+    return false;
   }
 
   /** Shift previews the single-stream mark even when the keydown landed before focus. */
-  _noteShift(event) {
+  _noteModifiers(event) {
     if (event.pointerType === "touch") return;
-    if (event.shiftKey === this._shiftHeld) return;
+    const shiftChanged = event.shiftKey !== this._shiftHeld;
+    const altChanged = event.altKey !== this._altHeld;
+    if (!shiftChanged && !altChanged) return;
     this._shiftHeld = event.shiftKey;
-    this._syncMouseEmit();
+    this._altHeld = event.altKey;
+    if (shiftChanged) this._syncMouseEmit();
+    if (this._rightHeld || this._yawHeld) this._setDragCursor(this._yawing() ? "yaw" : "pan");
   }
 
   _onPointerMove(event) {
     const m = this.bindings.mouse;
-    this._noteShift(event);
+    this._noteModifiers(event);
     if (this._yawing()) {
       this._aimAt = null;
       this._setDragCursor("yaw");
@@ -411,6 +430,7 @@ export class FallingInput {
     if (event.button === m.orbitButton) {
       this._rightHeld = true;
       this._shiftHeld = event.shiftKey;
+      this._altHeld = event.altKey;
       this._setDragCursor(this._yawing() ? "yaw" : "pan");
       event.preventDefault();
       canvas?.setPointerCapture?.(event.pointerId);
@@ -419,6 +439,7 @@ export class FallingInput {
     if (event.button === m.emitButton) {
       this._emitHeld = true;
       this._shiftHeld = event.shiftKey;
+      this._altHeld = event.altKey;
       this._syncMouseEmit();
       this._pointer = { x: event.clientX, y: event.clientY };
       this._pointerFresh = true;
@@ -473,6 +494,11 @@ export class FallingInput {
       this._syncMouseEmit();
       if (this._rightHeld || this._yawHeld) this._setDragCursor(this._yawing() ? "yaw" : "pan");
     }
+    if (event.key === "Alt") {
+      this._altHeld = true;
+      if (this._rightHeld || this._yawHeld) this._setDragCursor(this._yawing() ? "yaw" : "pan");
+      if (!isEditableTarget(event.target)) event.preventDefault();
+    }
     const k = this.bindings.keyboard;
     // Tab only selects materials. It never moves focus, including in fields and dialogs.
     if (k.cycleNext && event.code === k.cycleNext) {
@@ -496,6 +522,11 @@ export class FallingInput {
       this._syncMouseEmit();
       if (this._rightHeld || this._yawHeld) this._setDragCursor(this._yawing() ? "yaw" : "pan");
     }
+    if (event.key === "Alt") {
+      this._altHeld = false;
+      if (this._rightHeld || this._yawHeld) this._setDragCursor(this._yawing() ? "yaw" : "pan");
+      if (!isEditableTarget(event.target)) event.preventDefault();
+    }
     const k = this.bindings.keyboard;
     if (!k.emit || event.code !== k.emit) return;
     this._keyEmit = false;
@@ -503,6 +534,10 @@ export class FallingInput {
 }
 
 export const fallingInput = new FallingInput();
+
+function isEditableTarget(target) {
+  return !!(target && /^(INPUT|TEXTAREA|SELECT)$/i.test(target.tagName));
+}
 
 function clamp(n, lo, hi) {
   return Math.min(hi, Math.max(lo, n));

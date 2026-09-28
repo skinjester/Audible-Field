@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=65";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=13";
-import { fallingInput } from "./falling-input.js?v=34";
+import { fallingInput } from "./falling-input.js?v=36";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -1388,6 +1388,184 @@ function placeEmitterAtPointer(pointer) {
   placeEmitterAtWorld(hit.x, hit.z);
 }
 
+/**
+ * Rotation measure, flat on the ground around the aim point.
+ * Same idea as Unreal's rotate gizmo: a translucent wedge from the angle
+ * where the turn started to the angle it has reached, with the two radii
+ * and the outer arc drawn brighter.
+ */
+const YAW_ARC_Y = 0.04;
+const YAW_ARC_RADIUS_PER_DIST = 0.1;
+const YAW_ARC_MIN_SWEEP = 0.012;
+const YAW_ARC_MAX_SEGMENTS = 96;
+
+let yawArcActive = false;
+let yawArcStart = 0;
+/** @type {null | {
+ *   fill: THREE.Mesh,
+ *   arc: THREE.Line,
+ *   spokes: THREE.LineSegments,
+ *   fillPos: Float32Array,
+ *   fillIndex: Uint16Array,
+ *   arcPos: Float32Array,
+ *   spokePos: Float32Array,
+ * }} */
+let yawArc = null;
+
+function createYawArc() {
+  const fillPos = new Float32Array((YAW_ARC_MAX_SEGMENTS + 2) * 3);
+  const fillIndex = new Uint16Array(YAW_ARC_MAX_SEGMENTS * 3);
+  const fillGeo = new THREE.BufferGeometry();
+  fillGeo.setAttribute("position", new THREE.BufferAttribute(fillPos, 3));
+  fillGeo.setIndex(new THREE.BufferAttribute(fillIndex, 1));
+  fillGeo.setDrawRange(0, 0);
+  const fill = new THREE.Mesh(
+    fillGeo,
+    new THREE.MeshBasicMaterial({
+      color: 0xf3ead7,
+      transparent: true,
+      opacity: 0.32,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    }),
+  );
+  fill.frustumCulled = false;
+  fill.renderOrder = 3;
+
+  const arcPos = new Float32Array((YAW_ARC_MAX_SEGMENTS + 1) * 3);
+  const arcGeo = new THREE.BufferGeometry();
+  arcGeo.setAttribute("position", new THREE.BufferAttribute(arcPos, 3));
+  arcGeo.setDrawRange(0, 0);
+  const arc = new THREE.Line(
+    arcGeo,
+    new THREE.LineBasicMaterial({
+      color: 0xfff6e8,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+    }),
+  );
+  arc.frustumCulled = false;
+  arc.renderOrder = 4;
+
+  const spokePos = new Float32Array(12);
+  const spokeGeo = new THREE.BufferGeometry();
+  spokeGeo.setAttribute("position", new THREE.BufferAttribute(spokePos, 3));
+  const spokes = new THREE.LineSegments(
+    spokeGeo,
+    new THREE.LineBasicMaterial({
+      color: 0xfff6e8,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+    }),
+  );
+  spokes.frustumCulled = false;
+  spokes.renderOrder = 4;
+
+  scene.add(fill);
+  scene.add(arc);
+  scene.add(spokes);
+  yawArc = { fill, arc, spokes, fillPos, fillIndex, arcPos, spokePos };
+  hideYawArc();
+}
+
+function hideYawArc() {
+  if (!yawArc) return;
+  yawArc.fill.visible = false;
+  yawArc.arc.visible = false;
+  yawArc.spokes.visible = false;
+}
+
+function endYawGesture() {
+  yawArcActive = false;
+  hideYawArc();
+}
+
+/** World XZ on the ground circle, matching surface yaw (local +X). */
+function yawArcPoint(theta, radius, target, offset) {
+  target[offset] = Math.cos(theta) * radius;
+  target[offset + 1] = 0.004;
+  target[offset + 2] = -Math.sin(theta) * radius;
+}
+
+function syncYawArc(startYaw, endYaw) {
+  if (!scene) return;
+  if (!yawArc) createYawArc();
+  const arc = yawArc;
+  const sweep = endYaw - startYaw;
+  if (Math.abs(sweep) < YAW_ARC_MIN_SWEEP) {
+    hideYawArc();
+    return;
+  }
+
+  const sign = Math.sign(sweep);
+  const capped = Math.min(Math.abs(sweep), Math.PI * 2) * sign;
+  const seg = Math.min(
+    YAW_ARC_MAX_SEGMENTS,
+    Math.max(10, Math.ceil((Math.abs(capped) / (Math.PI * 2)) * 72)),
+  );
+  const radius = Math.max(0.55, cameraDist * YAW_ARC_RADIUS_PER_DIST);
+
+  const pos = arc.fillPos;
+  pos[0] = 0;
+  pos[1] = 0;
+  pos[2] = 0;
+  const index = arc.fillIndex;
+  for (let i = 0; i <= seg; i += 1) {
+    const theta = startYaw + capped * (i / seg);
+    const o = (i + 1) * 3;
+    pos[o] = Math.cos(theta) * radius;
+    pos[o + 1] = 0;
+    pos[o + 2] = -Math.sin(theta) * radius;
+    if (i < seg) {
+      const k = i * 3;
+      index[k] = 0;
+      index[k + 1] = i + 1;
+      index[k + 2] = i + 2;
+    }
+    const a = i * 3;
+    arc.arcPos[a] = pos[o];
+    arc.arcPos[a + 1] = 0.004;
+    arc.arcPos[a + 2] = pos[o + 2];
+  }
+
+  yawArcPoint(startYaw, radius, arc.spokePos, 0);
+  arc.spokePos[3] = 0;
+  arc.spokePos[4] = 0.004;
+  arc.spokePos[5] = 0;
+  arc.spokePos[6] = 0;
+  arc.spokePos[7] = 0.004;
+  arc.spokePos[8] = 0;
+  yawArcPoint(endYaw, radius, arc.spokePos, 9);
+
+  const fillAttr = arc.fill.geometry.getAttribute("position");
+  fillAttr.needsUpdate = true;
+  arc.fill.geometry.getIndex().needsUpdate = true;
+  arc.fill.geometry.setDrawRange(0, seg * 3);
+  arc.fill.geometry.computeBoundingSphere();
+
+  const arcAttr = arc.arc.geometry.getAttribute("position");
+  arcAttr.needsUpdate = true;
+  arc.arc.geometry.setDrawRange(0, seg + 1);
+  arc.arc.geometry.computeBoundingSphere();
+
+  arc.spokes.geometry.getAttribute("position").needsUpdate = true;
+  arc.spokes.geometry.computeBoundingSphere();
+
+  const x = aimWorldX;
+  const z = aimWorldZ;
+  arc.fill.position.set(x, YAW_ARC_Y, z);
+  arc.arc.position.set(x, YAW_ARC_Y, z);
+  arc.spokes.position.set(x, YAW_ARC_Y, z);
+  arc.fill.visible = true;
+  arc.arc.visible = true;
+  arc.spokes.visible = true;
+}
+
 /** Yaw the playfield around the emitter target. */
 function rotateSurface(deltaYaw) {
   if (!surface || !deltaYaw) return;
@@ -1864,6 +2042,10 @@ export function clearBoard() {
   aimWorldX = 0;
   aimWorldZ = 0;
   stickAimPointer = null;
+  if (yawArcActive) {
+    yawArcStart = 0;
+    hideYawArc();
+  }
   syncCamera();
   holdTargetAtCenter();
   emitting = false;
@@ -1944,7 +2126,17 @@ function applyInput(dt) {
   if (aim && !dragging && !stickHoldsAim) placeEmitterAtPointer(aim);
   if (dragging) slidePointer(frame.pointerDelta.x, frame.pointerDelta.y, frame.pointerAt);
   if (stickAim) moveAim(frame.aimStickX, frame.aimStickY, dt);
-  if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
+  if (frame.yawing) {
+    if (!yawArcActive && surface) {
+      yawArcStart = surface.rotation.y;
+      yawArcActive = true;
+    }
+    if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
+    if (surface) syncYawArc(yawArcStart, surface.rotation.y);
+  } else {
+    if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
+    endYawGesture();
+  }
   if (frame.zoomFactor !== 1) zoomCamera(frame.zoomFactor);
 
   setAimFromWorld();
@@ -2013,7 +2205,7 @@ function updateEmitStream(dt, active) {
  * half-size atoms in a single stream; a full RT pull emits full-size atoms
  * across the wide field. LT is the mirror of that curve. Left click always
  * uses the largest emitter. Shift+left click always uses the smallest.
- * Right-drag yaws the view.
+ * Shift+right-drag and Alt+right-drag yaw the view.
  */
 function pourBrush(ix, iz) {
   if (!cells || !catalog) return;
@@ -3827,6 +4019,7 @@ export async function showFallingBlocks(nextCanvas) {
 
 export function hideFallingBlocks() {
   running = false;
+  endYawGesture();
   if (canvas) canvas.style.filter = "";
   fallingInput.detach();
   emitting = false;
