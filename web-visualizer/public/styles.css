@@ -273,6 +273,11 @@ h1 {
   flex: 0 0 auto;
 }
 
+.mixer-col > .ui-scroll {
+  flex: 0 0 auto;
+  max-height: 100%;
+}
+
 .diag-top .ctrl {
   grid-column: 2;
   grid-row: 1;
@@ -1194,18 +1199,9 @@ dd {
   touch-action: none;
 }
 
-[data-panel="falling-blocks"] canvas.has-pointer-hint {
-  cursor: none;
-}
-
 [data-panel="falling-blocks"] canvas.is-emitting,
 [data-panel="falling-blocks"] canvas.is-single-stream {
   cursor: none;
-}
-
-body:has([data-panel="falling-blocks"] canvas.is-emitting) .pointer-hint,
-body:has([data-panel="falling-blocks"] canvas.is-single-stream) .pointer-hint {
-  visibility: hidden;
 }
 
 [data-panel="falling-blocks"] canvas.is-grabbing {
@@ -1214,45 +1210,6 @@ body:has([data-panel="falling-blocks"] canvas.is-single-stream) .pointer-hint {
 
 [data-panel="falling-blocks"] canvas.is-yawing {
   cursor: url("/cursor-yaw.svg") 16 16, crosshair;
-}
-
-.pointer-hint {
-  position: fixed;
-  left: 0;
-  top: 0;
-  z-index: 40;
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  pointer-events: none !important;
-  transform-origin: 0 0;
-  will-change: transform;
-  user-select: none;
-}
-
-.pointer-hint * {
-  pointer-events: none !important;
-}
-
-.pointer-hint-mark {
-  width: 15px;
-  height: 15px;
-  flex: none;
-}
-
-.pointer-hint-copy {
-  color: rgba(242, 242, 242, 0.92);
-  font-size: 12px;
-  line-height: 1.35;
-  letter-spacing: 0.01em;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
-  white-space: nowrap;
-  transform: translate(8px, -8px);
-}
-
-.pointer-hint.is-pressed .pointer-hint-copy {
-  visibility: hidden;
 }
 
 .falling-pill {
@@ -1299,15 +1256,24 @@ body:has([data-panel="falling-blocks"] canvas.is-single-stream) .pointer-hint {
 .falling-about-dialog {
   width: min(560px, calc(100vw - 48px));
   height: fit-content;
-  max-height: none;
+  max-height: calc(100dvh - 48px);
   margin: auto;
   padding: 0;
-  overflow: visible;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--panel);
   color: var(--ink);
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+
+.falling-about-dialog:not([open]) {
+  display: none;
+}
+
+.falling-about-dialog[open] {
+  display: flex;
+  flex-direction: column;
 }
 
 .falling-about-dialog::backdrop {
@@ -1317,17 +1283,35 @@ body:has([data-panel="falling-blocks"] canvas.is-single-stream) .pointer-hint {
 .falling-about-panel {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 0;
   margin: 0;
-  padding: 36px 40px 40px;
-  overflow: visible;
+  padding: 0;
+  min-height: 0;
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
+  width: 100%;
 }
 
 .falling-about-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex: 0 0 auto;
+  padding: 28px 40px 0;
+}
+
+.falling-about-panel > .ui-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.falling-about-body {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  max-height: calc(100dvh - 160px);
+  padding: 18px 28px 36px 40px;
 }
 
 .falling-about-head h2 {
@@ -1338,14 +1322,23 @@ body:has([data-panel="falling-blocks"] canvas.is-single-stream) .pointer-hint {
 
 .falling-about-close {
   appearance: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  flex: 0 0 auto;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--surface);
   color: var(--muted);
-  font: inherit;
-  font-size: 12px;
-  padding: 6px 12px;
   cursor: pointer;
+}
+
+.falling-about-close svg {
+  display: block;
+  width: 18px;
+  height: 18px;
 }
 
 .falling-about-close:hover {
@@ -1376,6 +1369,50 @@ body:has([data-panel="falling-blocks"] canvas.is-single-stream) .pointer-hint {
 
 .falling-about-how > p + p {
   margin-top: 12px;
+}
+
+.falling-about-how kbd {
+  display: inline-block;
+  margin: 0 1px;
+  padding: 1px 6px 2px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  vertical-align: 1px;
+}
+
+.falling-about-mouse {
+  white-space: nowrap;
+}
+
+.falling-about-mouse svg {
+  display: inline-block;
+  width: 11px;
+  height: 15px;
+  margin-right: 4px;
+  vertical-align: -3px;
+}
+
+.falling-about-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.falling-about-nav h4 {
+  margin: 0 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.falling-about-nav p {
+  margin: 0;
 }
 
 .falling-about-materials {
@@ -2017,15 +2054,20 @@ body:has([data-panel="falling-blocks"] canvas.is-single-stream) .pointer-hint {
   color: var(--muted);
 }
 
-.sample-picker-list {
+.sample-picker-panel > .ui-scroll {
   flex: 1 1 auto;
   min-height: 180px;
   max-height: 360px;
+}
+
+.sample-picker-list {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 4px;
+  padding: 4px 14px 4px 4px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
@@ -2117,9 +2159,13 @@ body:has([data-panel="falling-blocks"] canvas.is-single-stream) .pointer-hint {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
-  flex-direction: row;
-  gap: 6px;
+  flex-direction: column;
   align-items: stretch;
+}
+
+.stem-dropdown-body > .ui-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .stem-dropdown-list {
@@ -2129,61 +2175,9 @@ body:has([data-panel="falling-blocks"] canvas.is-single-stream) .pointer-hint {
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding: 2px 4px 2px 8px;
+  padding: 2px 16px 2px 8px;
   overflow: auto;
   overscroll-behavior: contain;
-
-  /* Native scrollbar fully hidden — custom thumb only (no arrow buttons). */
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.stem-dropdown-list::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-  display: none;
-}
-
-.stem-dropdown-scroll {
-  flex: 0 0 6px;
-  position: relative;
-  align-self: stretch;
-  margin: 10px 2px 10px 0;
-  border-radius: 999px;
-  background: transparent;
-  pointer-events: none;
-}
-
-.stem-dropdown-scroll.is-needed {
-  pointer-events: auto;
-}
-
-.stem-dropdown-thumb {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 24px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--live) 40%, transparent);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease;
-}
-
-.stem-dropdown-scroll.is-needed .stem-dropdown-thumb {
-  opacity: 1;
-  pointer-events: auto;
-  cursor: grab;
-}
-
-.stem-dropdown-thumb:hover,
-.stem-dropdown-thumb.is-dragging {
-  background: color-mix(in srgb, var(--live) 65%, transparent);
-}
-
-.stem-dropdown-thumb.is-dragging {
-  cursor: grabbing;
 }
 
 .stem-dropdown-header {
@@ -2234,4 +2228,93 @@ body:has([data-panel="falling-blocks"] canvas.is-single-stream) .pointer-hint {
   padding: 12px;
   color: color-mix(in srgb, var(--live) 45%, var(--muted));
   font-size: 12px;
+}
+
+/* Overlay scrollbar. Change these rules to restyle every scrolling pane. */
+.ui-scroll {
+  --ui-scroll-size: 4px;
+  --ui-scroll-size-hot: 7px;
+  --ui-scroll-inset: 8px;
+  --ui-scroll-thumb: color-mix(in srgb, var(--muted) 72%, transparent);
+  --ui-scroll-thumb-hover: color-mix(in srgb, var(--live) 55%, transparent);
+  --ui-scroll-thumb-active: var(--live);
+  --ui-scroll-thumb-glow: color-mix(in srgb, var(--live) 45%, transparent);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ui-scroll-view {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.ui-scroll-view::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.mixer-col > .ui-scroll > .readout {
+  flex: 0 0 auto;
+  min-height: auto;
+}
+
+.ui-scroll-track {
+  position: absolute;
+  top: var(--ui-scroll-inset);
+  right: 3px;
+  bottom: var(--ui-scroll-inset);
+  width: var(--ui-scroll-size);
+  border-radius: 999px;
+  background: transparent;
+  pointer-events: none;
+  z-index: 2;
+  transition: width 140ms ease;
+}
+
+.ui-scroll.is-scrollable.is-hot .ui-scroll-track,
+.ui-scroll.is-scrollable:focus-within .ui-scroll-track,
+.ui-scroll:has(.ui-scroll-thumb.is-dragging) .ui-scroll-track {
+  width: var(--ui-scroll-size-hot);
+  pointer-events: auto;
+}
+
+.ui-scroll-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--ui-scroll-thumb);
+  opacity: 0;
+  pointer-events: none;
+  touch-action: none;
+  transition: opacity 180ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.ui-scroll.is-scrollable.is-hot .ui-scroll-thumb,
+.ui-scroll.is-scrollable:focus-within .ui-scroll-thumb {
+  opacity: 1;
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.ui-scroll-thumb:hover,
+.ui-scroll:focus-within .ui-scroll-thumb {
+  background: var(--ui-scroll-thumb-hover);
+}
+
+.ui-scroll.is-scrollable .ui-scroll-thumb.is-dragging {
+  background: var(--ui-scroll-thumb-active);
+  box-shadow: 0 0 8px var(--ui-scroll-thumb-glow);
+  cursor: grabbing;
 }

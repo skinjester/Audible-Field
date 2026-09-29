@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape Web Visualizer</title>
-    <link rel="stylesheet" href="/styles.css?v=174" />
+    <link rel="stylesheet" href="/styles.css?v=182" />
     <script type="importmap">
       {
         "imports": {
@@ -92,7 +92,7 @@
             </div>
           </div>
 
-            <aside class="readout">
+            <aside class="readout" data-ui-scroll>
               <dl>
                 <div>
                   <dt>Source</dt>
@@ -354,17 +354,18 @@
         <section class="viz-stage">
           <div class="viz-canvas-wrap">
             <canvas data-falling-canvas aria-label="Falling Blocks playfield"></canvas>
-            <div class="pointer-hint" data-pointer-hint hidden aria-hidden="true">
-              <span class="pointer-hint-mark"></span>
-              <span class="pointer-hint-copy">click to emit clumps<br>Shift+click to emit streams</span>
-            </div>
             <p class="viz-error" data-falling-error hidden></p>
               <dialog class="falling-about-dialog" data-falling-about-dialog aria-labelledby="falling-about-title">
                 <form method="dialog" class="falling-about-panel">
                   <header class="falling-about-head">
                     <h2 id="falling-about-title">Falling Blocks (Field-1)</h2>
-                    <button type="submit" class="falling-about-close" value="cancel">Close</button>
+                    <button type="submit" class="falling-about-close" value="cancel" aria-label="Close">
+                      <svg viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M3.75 3.75 L12.25 12.25 M12.25 3.75 L3.75 12.25" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+                      </svg>
+                    </button>
                   </header>
+                  <div class="falling-about-body" data-ui-scroll>
                   <section class="falling-about-how">
                     <h3>How the field resonates</h3>
                     <p>
@@ -374,8 +375,25 @@
                       A light right-trigger press makes a single stream. Press harder for clumps. The left trigger works in reverse. Press hard for a single stream.
                     </p>
                     <p>
-                      With a mouse, LMB makes clumps. Shift-LMB makes a stream.
+                      With a mouse, <span class="falling-about-mouse"><svg viewBox="0 0 14 20" aria-hidden="true"><path d="M7 1.2C3.6 1.2 1.2 3.6 1.2 7.2v6c0 3.4 2.4 5.6 5.8 5.6s5.8-2.2 5.8-5.6v-6C12.8 3.6 10.4 1.2 7 1.2z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 1.6V8.2M1.6 8.2h10.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6.4 2.5C4.3 2.8 2.7 4.4 2.6 7.3h3.8z" fill="currentColor"/></svg>LMB</span> makes clumps. <kbd>Shift</kbd> + <span class="falling-about-mouse"><svg viewBox="0 0 14 20" aria-hidden="true"><path d="M7 1.2C3.6 1.2 1.2 3.6 1.2 7.2v6c0 3.4 2.4 5.6 5.8 5.6s5.8-2.2 5.8-5.6v-6C12.8 3.6 10.4 1.2 7 1.2z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 1.6V8.2M1.6 8.2h10.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6.4 2.5C4.3 2.8 2.7 4.4 2.6 7.3h3.8z" fill="currentColor"/></svg>LMB</span> makes a stream.
                     </p>
+                  </section>
+                  <section class="falling-about-how">
+                    <h3>Navigation</h3>
+                    <div class="falling-about-nav">
+                      <div>
+                        <h4>Move</h4>
+                        <p>Drag with <span class="falling-about-mouse"><svg viewBox="0 0 14 20" aria-hidden="true"><path d="M7 1.2C3.6 1.2 1.2 3.6 1.2 7.2v6c0 3.4 2.4 5.6 5.8 5.6s5.8-2.2 5.8-5.6v-6C12.8 3.6 10.4 1.2 7 1.2z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 1.6V8.2M1.6 8.2h10.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7.6 2.5C9.7 2.8 11.3 4.4 11.4 7.3H7.6z" fill="currentColor"/></svg>RMB</span> to move about.</p>
+                      </div>
+                      <div>
+                        <h4>Zoom</h4>
+                        <p>Scroll the mouse wheel to zoom in and out.</p>
+                      </div>
+                      <div>
+                        <h4>Rotate</h4>
+                        <p>Drag with the middle mouse button to turn the view.<br>You can also use <kbd>Alt</kbd> + <span class="falling-about-mouse"><svg viewBox="0 0 14 20" aria-hidden="true"><path d="M7 1.2C3.6 1.2 1.2 3.6 1.2 7.2v6c0 3.4 2.4 5.6 5.8 5.6s5.8-2.2 5.8-5.6v-6C12.8 3.6 10.4 1.2 7 1.2z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 1.6V8.2M1.6 8.2h10.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7.6 2.5C9.7 2.8 11.3 4.4 11.4 7.3H7.6z" fill="currentColor"/></svg>RMB</span> to rotate.</p>
+                      </div>
+                    </div>
                   </section>
                   <section class="falling-about-how">
                     <h3>Materials</h3>
@@ -397,10 +415,11 @@
                       </div>
                       <div class="falling-about-material" data-material="erode" style="--swatch: #7a9e6a">
                         <h4><span class="falling-about-swatch" aria-hidden="true"></span>Erode</h4>
-                        <p>Clears the atoms it contacts, and what is left behind shrinks. Can be used to cut through or annihilate piles of atoms. Unlike other materials, Erode doesn't trigger audio on its own.</p>
+                        <p>Clears the atoms it contacts, and what is left behind shrinks. Can be used to cut through or annihilate piles of atoms.</p>
                       </div>
                     </div>
                   </section>
+                  </div>
                 </form>
               </dialog>
               <div class="falling-side">
@@ -540,6 +559,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=351"></script>
+    <script type="module" src="/app.js?v=353"></script>
   </body>
 </html>

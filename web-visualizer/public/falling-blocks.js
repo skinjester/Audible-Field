@@ -454,42 +454,6 @@ function syncLandingTarget() {
   canvas?.classList.toggle("is-single-stream", shiftStream);
 }
 
-const aimMarkNdc = new THREE.Vector3();
-
-/** How far a ground square of this half-extent reaches to the right of the aim point, in CSS pixels. */
-function aimReachPx(half, yaw) {
-  if (!camera || !renderer) return 0;
-  const c = Math.cos(yaw);
-  const s = Math.sin(yaw);
-  const view = renderer.domElement;
-  const w = view.clientWidth || 1;
-  camera.updateMatrixWorld(true);
-  aimMarkNdc.set(aimWorldX, 0, aimWorldZ);
-  aimMarkNdc.project(camera);
-  const cx = aimMarkNdc.x;
-  let right = 0;
-  const corners = [
-    [half, half],
-    [half, -half],
-    [-half, half],
-    [-half, -half],
-  ];
-  for (const [lx, lz] of corners) {
-    const dx = c * lx + s * lz;
-    const dz = -s * lx + c * lz;
-    aimMarkNdc.set(aimWorldX + dx, 0, aimWorldZ + dz);
-    aimMarkNdc.project(camera);
-    const px = (aimMarkNdc.x - cx) * 0.5 * w;
-    if (px > right) right = px;
-  }
-  return right;
-}
-
-/** How far the aim square reaches to the right of the aim point, in CSS pixels. */
-export function aimMarkRightPx() {
-  return aimReachPx(landingTarget.half.value, landingTarget.yaw.value);
-}
-
 function showError(message) {
   const el = document.querySelector("[data-falling-error]");
   if (!el) return;

@@ -9,8 +9,8 @@ await page.waitForSelector(".stem-dropdown:not([hidden])");
 await page.waitForTimeout(500);
 const info = await page.evaluate(() => {
   const list = document.querySelector(".stem-dropdown-list");
-  const scroll = document.querySelector(".stem-dropdown-scroll");
-  const thumb = document.querySelector(".stem-dropdown-thumb");
+  const scroll = document.querySelector(".stem-dropdown .ui-scroll-track");
+  const thumb = document.querySelector(".stem-dropdown .ui-scroll-thumb");
   const dd = document.querySelector(".stem-dropdown");
   const cs = list ? getComputedStyle(list) : null;
   const sr = scroll?.getBoundingClientRect();
@@ -19,7 +19,7 @@ const info = await page.evaluate(() => {
     nativeScrollbarWidth: cs?.scrollbarWidth,
     hasCustomScroll: !!scroll,
     hasThumb: !!thumb,
-    scrollNeeded: scroll?.classList.contains("is-needed"),
+    scrollNeeded: scroll?.parentElement?.classList.contains("is-scrollable"),
     thumbHeight: thumb?.getBoundingClientRect().height ?? 0,
     insetRight: sr && dr ? Math.round(dr.right - sr.right) : null,
     insetTop: sr && dr ? Math.round(sr.top - dr.top) : null,

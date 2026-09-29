@@ -19,13 +19,14 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=65";
 import { hideVisualize, showVisualize } from "./visualize.js?v=82";
-import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks, aimMarkRightPx } from "./falling-blocks.js?v=305";
+import { clearBoard, hideFallingBlocks, onFallingAudioToggle, readGridSnapshot, showFallingBlocks } from "./falling-blocks.js?v=306";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=17";
 import { audioEngine } from "./audio-engine.js?v=48";
 import { gamepadInput } from "./gamepad-input.js?v=16";
 import { dualsenseHid, DualsenseHid } from "./dualsense-hid.js?v=5";
-import { openStemDropdown } from "./sample-picker.js?v=16";
-import { openFxDropdown } from "./fx-picker.js?v=3";
+import { openStemDropdown } from "./sample-picker.js?v=17";
+import { openFxDropdown } from "./fx-picker.js?v=4";
+import { mountUiScrolls } from "./ui-scroll.js?v=1";
 import {
   DEFAULT_STICK_SCALE,
   STICK_SCALE_STEP,
@@ -783,16 +784,6 @@ async function setInputMode(mode) {
   renderDiagnostics();
 }
 
-function gameControllerPresent() {
-  const pads = navigator.getGamepads?.();
-  if (pads) {
-    for (let i = 0; i < pads.length; i += 1) {
-      if (pads[i]) return true;
-    }
-  }
-  return !!dualsenseHid.connected;
-}
-
 function tick(now) {
   try {
     const frameDt = lastFrame ? Math.min(0.05, (now - lastFrame) / 1000) : 0;
@@ -830,7 +821,6 @@ function tick(now) {
     }
     tickMixer(now, lastFrame);
     lastFrame = now;
-    if (gameControllerPresent()) hidePointerHint();
     if (activeTab !== "falling-blocks") renderDiagnostics();
   } catch (err) {
     console.error("EchoScape diagnostics tick failed:", err);
@@ -932,7 +922,6 @@ function setActiveTab(tabId) {
     }
   } else {
     if (prevTab === "falling-blocks") {
-      hidePointerHint();
       hideFallingBlocks();
       if (inputMode === "browser" && audioEngine.running && audioEngine.ctx?.state === "suspended") {
         void audioEngine.ensurePlaying().then(() => {
@@ -1256,133 +1245,10 @@ window.setInterval(() => {
   }
 }, 400);
 
-let hidePointerHint = () => {};
-
-/**
- * The label shares a layer with its own crosshair. The system cursor paints
- * ahead of DOM layout, which is what made the hint look like it was catching up.
- * Position is applied every frame from the latest pointer, on window moves, so
- * the text keeps following even when the label or another layer is the hit target.
- */
-function bindPointerHint() {
-  const hint = document.querySelector("[data-pointer-hint]");
-  const copy = hint?.querySelector(".pointer-hint-copy");
-  if (!(hint instanceof HTMLElement) || !(fallingCanvas instanceof HTMLCanvasElement)) return;
-  document.body.appendChild(hint);
-
-  const mark = 15;
-  const gap = 12;
-  /** Cursor to the text's left edge before the extra shift. */
-  const inset = mark + gap - mark / 2;
-  const pad = 14;
-  hint.hidden = false;
-  const shiftY = hint.offsetHeight / 2;
-  hint.hidden = true;
-  let shown = false;
-  let followId = 0;
-  let pointerX = 0;
-  let pointerY = 0;
-
-  function sync() {
-    const reach = aimMarkRightPx();
-    const shift = Math.max(8, Number.isFinite(reach) ? reach + pad - inset : 8);
-    hint.style.transform = `translate3d(${pointerX - mark / 2}px, ${pointerY - shiftY}px, 0)`;
-    if (copy instanceof HTMLElement) copy.style.transform = `translate(${shift}px, -8px)`;
-  }
-
-  function follow() {
-    if (!shown) {
-      followId = 0;
-      return;
-    }
-    sync();
-    followId = window.requestAnimationFrame(follow);
-  }
-
-  function showAt(clientX, clientY) {
-    if (gameControllerPresent()) {
-      hide();
-      return;
-    }
-    pointerX = clientX;
-    pointerY = clientY;
-    if (!shown) {
-      shown = true;
-      hint.hidden = false;
-      fallingCanvas.classList.add("has-pointer-hint");
-    }
-    sync();
-    if (!followId) followId = window.requestAnimationFrame(follow);
-  }
-
-  function hide() {
-    if (followId) window.cancelAnimationFrame(followId);
-    followId = 0;
-    hint.classList.remove("is-pressed");
-    if (!shown) return;
-    shown = false;
-    hint.hidden = true;
-    fallingCanvas.classList.remove("has-pointer-hint");
-  }
-
-  hidePointerHint = hide;
-
-  function overPlayfield(event) {
-    const hit = document.elementFromPoint(event.clientX, event.clientY);
-    if (hit === fallingCanvas) return true;
-    return hit instanceof Node && hint.contains(hit);
-  }
-
-  function draggingView() {
-    return (
-      fallingCanvas.classList.contains("is-grabbing") ||
-      fallingCanvas.classList.contains("is-yawing")
-    );
-  }
-
-  function onPointerMove(event) {
-    if (event.pointerType === "touch") return;
-    if (!overPlayfield(event) || draggingView()) {
-      hide();
-      return;
-    }
-    hint.classList.toggle("is-pressed", event.buttons !== 0);
-    showAt(event.clientX, event.clientY);
-  }
-
-  function onPointerDown(event) {
-    if (event.pointerType === "touch") return;
-    if (event.button === 1 || event.button === 2) {
-      hide();
-      return;
-    }
-    if (!overPlayfield(event)) return;
-    hint.classList.add("is-pressed");
-    showAt(event.clientX, event.clientY);
-  }
-
-  function onPointerUp(event) {
-    if (event.pointerType === "touch") return;
-    if (event.buttons !== 0) return;
-    hint.classList.remove("is-pressed");
-    if (!overPlayfield(event) || draggingView()) {
-      hide();
-      return;
-    }
-    showAt(event.clientX, event.clientY);
-  }
-
-  window.addEventListener("pointermove", onPointerMove, true);
-  window.addEventListener("pointerdown", onPointerDown, true);
-  window.addEventListener("pointerup", onPointerUp, true);
-  window.addEventListener("pointercancel", hide, true);
-  window.addEventListener("blur", hide);
-}
-
+mountUiScrolls();
 notify();
 updateCornerLabels();
 bindFallingAudioUi();
-bindPointerHint();
 renderDiagnostics();
 window.requestAnimationFrame(tick);
 connect();
