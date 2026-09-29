@@ -181,11 +181,11 @@ export class FallingInput {
       const n = Number(v) || 0;
       return Math.abs(n) < dead ? 0 : n;
     };
-    /** Prefer the stronger of mixer (Max/UI) vs live Gamepad API axes. */
+    /** Prefer the stronger of mixer UI vs live Gamepad API axes. */
     const mergeAxis = (fromMixer, fromPad) =>
       Math.abs(fromMixer) >= Math.abs(fromPad) ? fromMixer : fromPad;
 
-    // Standard mapping: 0/1 left stick, 2/3 right; Y inverted like Max / gamepad-input.
+    // Standard mapping: 0/1 left stick, 2/3 right; Y inverted like gamepad-input.
     const ax = pad?.axes || [];
     const padLx = axis(Number(ax[gamepadAxes.leftX]) || 0);
     const padLy = axis(-(Number(ax[gamepadAxes.leftY]) || 0));

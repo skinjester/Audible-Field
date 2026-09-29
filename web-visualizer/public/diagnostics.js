@@ -12,7 +12,7 @@ import {
   setTarget,
   state,
   STEM_CORNERS,
-} from "./mixer-core.js?v=65";
+} from "./mixer-core.js?v=66";
 import { audioEngine } from "./audio-engine.js?v=48";
 import { DualsenseHid } from "./dualsense-hid.js?v=5";
 import { openStemDropdown } from "./sample-picker.js?v=17";
@@ -79,16 +79,7 @@ const vols = {
   br: root?.querySelector('[data-vol="br"]'),
 };
 
-const VIZ_NAMES = {
-  tl: "Sphere",
-  tr: "Square",
-  bl: "Torus",
-  br: "Cylinder",
-};
-
 /** @type {null | {
- *   getInputMode: () => "max" | "browser",
- *   setInputMode: (mode: string) => Promise<void>,
  *   ensureBrowserAudio: () => Promise<void>,
  *   setStatus: (state: string, label: string) => void,
  *   browserStatusLabel: () => string,
@@ -146,14 +137,11 @@ export function setFxName(button, name) {
 }
 
 export function updateFxPluginState() {
-  const browser = deps?.getInputMode() === "browser";
   for (const btn of fxPluginBtns) {
-    btn.disabled = !browser;
-    btn.classList.toggle("is-interactive", browser);
+    btn.disabled = false;
+    btn.classList.toggle("is-interactive", true);
     const slot = btn.dataset.fxPlugin;
-    btn.title = browser
-      ? `Choose ${fxButtonLabels[slot] || slot} FX / WAM`
-      : "Switch to Browser audio to change FX";
+    btn.title = `Choose ${fxButtonLabels[slot] || slot} FX / WAM`;
   }
 }
 
@@ -301,9 +289,6 @@ function bindStickScaleControls() {
 async function assignFxPlugin(slot, choice) {
   if (!deps || slot === "cross") return;
   try {
-    if (deps.getInputMode() !== "browser") {
-      await deps.setInputMode("browser");
-    }
     await deps.ensureBrowserAudio();
     const assigned = await audioEngine.replaceFx(slot, choice);
     syncFxLabelsFromEngine();
@@ -319,10 +304,6 @@ async function assignFxPlugin(slot, choice) {
 
 function openFxPicker(slot, anchor) {
   if (!deps || slot === "cross") return;
-  if (deps.getInputMode() !== "browser") {
-    deps.setStatus("loading", "Switch to Browser audio to assign FX");
-    return;
-  }
   void openFxDropdown({
     anchor,
     slot,
@@ -332,11 +313,11 @@ function openFxPicker(slot, anchor) {
   });
 }
 
-/** UI and Max face presses while Diagnostics or Visualize is showing. */
+/** Face presses while Diagnostics or Visualize is showing. */
 export function onFaceCommand(button) {
   if (!deps || !controller.fx[button]) return;
   setActiveFx(button);
-  if (button === "cross" && deps.getInputMode() === "browser" && audioEngine.running) {
+  if (button === "cross" && audioEngine.running) {
     deps.setStatus("audio", "X · WAM Off");
   }
   renderDiagnostics();
@@ -352,21 +333,17 @@ export function updateCornerLabels() {
   for (const corner of Object.keys(STEM_CORNERS)) {
     const el = root?.querySelector(`[data-corner-name="${corner}"]`);
     if (!el) continue;
-    el.textContent =
-      deps?.getInputMode() === "browser" ? STEM_CORNERS[corner].label : VIZ_NAMES[corner];
+    el.textContent = STEM_CORNERS[corner].label;
   }
   updateStemSlotState();
 }
 
 function updateStemSlotState() {
-  const browser = deps?.getInputMode() === "browser";
   for (const slot of stemSlots) {
-    slot.disabled = !browser;
-    slot.classList.toggle("is-interactive", browser);
+    slot.disabled = false;
+    slot.classList.toggle("is-interactive", true);
     const corner = slot.dataset.stemSlot;
-    slot.title = browser
-      ? `Choose ${CORNER_TITLES[corner] || corner} sample`
-      : "Switch to Browser audio to change samples";
+    slot.title = `Choose ${CORNER_TITLES[corner] || corner} sample`;
   }
 }
 
@@ -381,9 +358,6 @@ async function assignCornerSample(corner, file) {
   if (!meta) return;
   updateCornerLabels();
   try {
-    if (deps.getInputMode() !== "browser") {
-      await deps.setInputMode("browser");
-    }
     await deps.ensureBrowserAudio();
     await audioEngine.replaceStem(corner, meta);
     deps.setStatus(
@@ -398,10 +372,6 @@ async function assignCornerSample(corner, file) {
 
 function openCornerPicker(corner, anchor) {
   if (!deps) return;
-  if (deps.getInputMode() !== "browser") {
-    deps.setStatus("loading", "Switch to Browser audio to assign samples");
-    return;
-  }
   void openStemDropdown({
     anchor,
     onSelect: (file) => {
@@ -486,20 +456,6 @@ function setTargetFromInput(nx, ny, source, snap) {
   renderDiagnostics();
 }
 
-function normalizePadAxis(n) {
-  const v = Number(n);
-  if (!Number.isFinite(v)) return 0.5;
-  if (v >= 0 && v <= 1) return v;
-  if (v >= -1.5 && v <= 1.5) return clamp01(v * 0.5 + 0.5);
-  return clamp01(v);
-}
-
-export function applyMaxPad(x, y, source) {
-  if (!deps || deps.getInputMode() === "browser") return;
-  setTargetFromInput(normalizePadAxis(x), normalizePadAxis(y), source, true);
-  deps.setStatus("live", "Live from Max");
-}
-
 export function noteDualSenseSource() {
   if (sourceEl) sourceEl.textContent = state.source;
 }
@@ -528,7 +484,6 @@ export function updateDualsenseHidUi() {
   if (!deps || !dsStatusEl || !dsConnectBtn) return;
   const dualsenseHid = deps.dualsenseHid;
 
-  const browser = deps.getInputMode() === "browser";
   const embedded = isEmbeddedIdeBrowser();
 
   if (!DualsenseHid.isSupported()) {
@@ -542,11 +497,6 @@ export function updateDualsenseHidUi() {
     dsConnectBtn.disabled = true;
     setDsConnectLabel("Use Chrome / Edge");
     dsConnectBtn.dataset.state = "unavailable";
-  } else if (!browser) {
-    dsStatusEl.textContent = "Touchpad: switch to Browser audio";
-    dsConnectBtn.disabled = true;
-    setDsConnectLabel(dsHadSession ? "Reconnect" : "Connect touchpad");
-    dsConnectBtn.dataset.state = "";
   } else if (dualsenseHid.connected) {
     dsHadSession = true;
     const via =
@@ -583,7 +533,7 @@ let lastDsHidUiKey = "";
 function dualSenseKey(embedded = isEmbeddedIdeBrowser()) {
   const dualsenseHid = deps?.dualsenseHid;
   if (!dualsenseHid) return "";
-  return `${deps.getInputMode()}|${dualsenseHid.connected}|${dualsenseHid.connectionType}|${dualsenseHid.padId}|${DualsenseHid.isSupported()}|${embedded}|${dualsenseHid.reportCount > 0}|${dualsenseHid.touch.active}|${dualsenseHid.touch.pressed}|${dualsenseHid.lastReportId}|${dsHadSession}`;
+  return `${dualsenseHid.connected}|${dualsenseHid.connectionType}|${dualsenseHid.padId}|${DualsenseHid.isSupported()}|${embedded}|${dualsenseHid.reportCount > 0}|${dualsenseHid.touch.active}|${dualsenseHid.touch.pressed}|${dualsenseHid.lastReportId}|${dsHadSession}`;
 }
 
 export function syncDualsenseHidUi() {
@@ -594,7 +544,7 @@ export function syncDualsenseHidUi() {
 
 /** XY mix for Diagnostics and Visualize. Falling Blocks does not call this. */
 export function tickXyAudio() {
-  if (!deps || deps.getInputMode() !== "browser" || !audioEngine.running) return;
+  if (!deps || !audioEngine.running) return;
   audioEngine.setStemPitch(null);
   audioEngine.setOutputLevel(1);
   audioEngine.setCameraPresence(0, 0);
@@ -652,7 +602,7 @@ function bindUiStick(stickEl) {
   };
 
   stickEl.addEventListener("pointerdown", (event) => {
-    if (!deps || deps.getInputMode() !== "browser") return;
+    if (!deps) return;
     if (event.button != null && event.button !== 0) return;
     event.preventDefault();
     dragging = true;
@@ -679,7 +629,7 @@ function bindUiShoulder(btn, side) {
   let holding = false;
 
   const press = (event) => {
-    if (!deps || deps.getInputMode() !== "browser") return;
+    if (!deps) return;
     if (event.button != null && event.button !== 0) return;
     event.preventDefault();
     holding = true;
@@ -711,7 +661,7 @@ function bindPad() {
     deps.dualsenseHid.uiLockPad = true;
     const point = pointFromEvent(event);
     setTargetFromInput(point.x, point.y, "mouse", true);
-    if (deps.getInputMode() === "browser") void deps.ensureBrowserAudio();
+    void deps.ensureBrowserAudio();
   });
 
   pad.addEventListener("pointermove", (event) => {
@@ -755,11 +705,7 @@ export function initDiagnostics(nextDeps) {
     dsConnectBtn.addEventListener("click", async () => {
       try {
         const ok = await deps.dualsenseHid.requestDevice();
-        if (deps.getInputMode() !== "browser") {
-          await deps.setInputMode("browser");
-        } else {
-          deps.dualsenseHid.enable();
-        }
+        deps.dualsenseHid.enable();
         updateDualsenseHidUi();
         if (ok) {
           deps.setStatus("audio", deps.browserStatusLabel());
@@ -781,7 +727,6 @@ export function initDiagnostics(nextDeps) {
     if (!card) continue;
     card.style.cursor = "pointer";
     card.addEventListener("click", () => {
-      if (deps.getInputMode() !== "browser") return;
       onFaceCommand(button);
     });
   }

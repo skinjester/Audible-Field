@@ -7,13 +7,12 @@ import {
   showFallingBlocks,
 } from "./falling-blocks.js?v=308";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=17";
-import { controller, setActiveFx } from "./mixer-core.js?v=65";
+import { controller, setActiveFx } from "./mixer-core.js?v=66";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
 const PLAYFIELD_FACE = new Set(["circle", "square", "cross"]);
 
 /** @type {null | {
- *   getInputMode: () => "max" | "browser",
  *   getActiveTab: () => string,
  *   ensureBrowserAudio: () => Promise<void>,
  *   enqueueAudio: (task: () => Promise<void>) => Promise<void>,
@@ -37,7 +36,7 @@ function syncFallingAudioButton() {
 export function setFallingAudioEnabled(enabled) {
   fallingAudioEnabled = !!enabled;
   syncFallingAudioButton();
-  if (!deps || deps.getActiveTab() !== "falling-blocks" || deps.getInputMode() !== "browser") {
+  if (!deps || deps.getActiveTab() !== "falling-blocks") {
     return;
   }
   if (fallingAudioEnabled) {
@@ -53,7 +52,6 @@ export function setFallingAudioEnabled(enabled) {
   resetFieldSonify();
   void deps.enqueueAudio(async () => {
     if (deps.getActiveTab() !== "falling-blocks" || isAudioEnabled()) return;
-    if (deps.getInputMode() !== "browser") return;
     if (audioEngine.running) {
       audioEngine.setStemPitch(null);
       await audioEngine.suspendPlayback();
@@ -86,14 +84,13 @@ export function show() {
   const mine = ++showGen;
   if (canvas) void showFallingBlocks(canvas, () => mine === showGen);
   if (!deps) return;
-  if (fallingAudioEnabled && deps.getInputMode() === "browser") {
+  if (fallingAudioEnabled) {
     void deps.ensureBrowserAudio();
     return;
   }
   if (!audioEngine.running) return;
   void deps.enqueueAudio(async () => {
     if (deps.getActiveTab() !== "falling-blocks" || isAudioEnabled()) return;
-    if (deps.getInputMode() !== "browser") return;
     if (!audioEngine.running) return;
     audioEngine.setStemPitch(null);
     await audioEngine.suspendPlayback();
@@ -107,7 +104,6 @@ export function hide() {
   if (!deps) return;
   void deps.enqueueAudio(async () => {
     if (deps.getActiveTab() === "falling-blocks") return;
-    if (deps.getInputMode() !== "browser") return;
     if (!(audioEngine.running && audioEngine.ctx?.state === "suspended")) return;
     await audioEngine.ensurePlaying();
     deps.setStatus(audioEngine.running ? "audio" : "offline", deps.browserStatusLabel());
@@ -115,7 +111,7 @@ export function hide() {
 }
 
 export function tick(frame) {
-  if (!deps || deps.getInputMode() !== "browser") return;
+  if (!deps) return;
   if (!(audioEngine.running && fallingAudioEnabled)) return;
   const snap = readGridSnapshot();
   const shadow = fieldFrame(snap, frame?.dt || 0);

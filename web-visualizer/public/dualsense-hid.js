@@ -11,7 +11,7 @@
  * so a finger aims the emitter instead of the mix pad.
  */
 
-import { setTarget } from "./mixer-core.js?v=65";
+import { setTarget } from "./mixer-core.js?v=66";
 
 const SONY_VENDOR = 0x054c;
 const PRODUCT_DUALSENSE = 0x0ce6;

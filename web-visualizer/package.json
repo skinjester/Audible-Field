@@ -2,14 +2,12 @@
   "name": "echoscape-mixer-viz",
   "private": true,
   "version": "0.1.0",
-  "description": "OSC-to-WebSocket bridge and 4-quadrant mixer visualizer for EchoScape",
+  "description": "4-quadrant mixer visualizer for EchoScape",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "osc-min": "^1.1.2",
-    "three": "^0.170.0",
-    "ws": "^8.18.3"
+    "three": "^0.170.0"
   },
   "devDependencies": {
     "playwright": "^1.62.1"

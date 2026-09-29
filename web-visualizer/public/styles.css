@@ -71,30 +71,6 @@ body {
   justify-content: flex-end;
 }
 
-.mode-toggle {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  overflow: hidden;
-  background: var(--panel);
-}
-
-.mode-toggle button {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 12px;
-  padding: 6px 12px;
-  cursor: pointer;
-}
-
-.mode-toggle button[aria-pressed="true"] {
-  background: var(--pill-selected);
-  color: var(--live);
-}
-
 .status[data-state="audio"] {
   color: var(--live);
   border-color: rgba(110, 231, 183, 0.35);
@@ -175,23 +151,6 @@ h1 {
   border-radius: 50%;
   background: var(--off);
   flex: 0 0 auto;
-}
-
-.status[data-state="live"] {
-  color: var(--live);
-}
-
-.status[data-state="live"] .dot {
-  background: var(--live);
-  box-shadow: 0 0 10px var(--live);
-}
-
-.status[data-state="open"] {
-  color: var(--warn);
-}
-
-.status[data-state="open"] .dot {
-  background: var(--warn);
 }
 
 .tabs {

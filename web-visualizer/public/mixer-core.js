@@ -286,21 +286,14 @@ export function notify() {
 
 export function setTarget(nx, ny, source, snap) {
   if (!Number.isFinite(nx) || !Number.isFinite(ny)) return;
-  const fromMax = typeof source === "string" && source.startsWith("Max");
-  if (
-    dpadAnim &&
-    source !== "D-pad" &&
-    source !== "mouse" &&
-    source !== "touchpad" &&
-    !fromMax
-  ) {
+  if (dpadAnim && source !== "D-pad" && source !== "mouse" && source !== "touchpad") {
     return;
   }
   if (source !== "D-pad") dpadAnim = null;
   state.targetX = clamp01(nx);
   state.targetY = clamp01(ny);
   state.source = source;
-  if (snap || fromMax) {
+  if (snap) {
     state.x = state.targetX;
     state.y = state.targetY;
   }

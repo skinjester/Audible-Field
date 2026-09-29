@@ -3,7 +3,6 @@ import { chromium } from "playwright";
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage();
 await page.goto("http://127.0.0.1:8080/", { waitUntil: "networkidle" });
-await page.locator('[data-mode="browser"]').click();
 await page.locator('[data-stem-slot="br"]').click();
 await page.waitForSelector(".stem-dropdown:not([hidden])");
 await page.waitForTimeout(500);

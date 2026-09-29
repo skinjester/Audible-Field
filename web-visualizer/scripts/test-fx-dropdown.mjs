@@ -11,7 +11,6 @@ const apiJson = await api.json();
 console.log("api/wams", JSON.stringify(apiJson, null, 2));
 
 await page.goto(BASE, { waitUntil: "networkidle" });
-await page.locator('[data-mode="browser"]').click();
 await page.waitForTimeout(800);
 
 const pluginBtn = page.locator('[data-fx-plugin="square"]');

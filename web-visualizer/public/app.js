@@ -1,31 +1,25 @@
-import { notify, setDpad, setFxStick, setRightStick, setShoulder, setStickClick, setTrigger, tickMixer, controller } from "./mixer-core.js?v=65";
+import { notify, tickMixer } from "./mixer-core.js?v=66";
 import { audioEngine } from "./audio-engine.js?v=48";
 import { gamepadInput } from "./gamepad-input.js?v=17";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=1";
-import * as fallingTab from "./falling-tab.js?v=1";
+import * as diagnostics from "./diagnostics.js?v=2";
+import * as fallingTab from "./falling-tab.js?v=2";
 import * as visualizeTab from "./visualize-tab.js?v=1";
 
 const statusEl = document.querySelector(".status");
 const statusLabel = document.querySelector("[data-status-label]");
 const tabButtons = document.querySelectorAll("[data-tab]");
 const panels = document.querySelectorAll("[data-panel]");
-const modeButtons = document.querySelectorAll("[data-mode]");
 
-const dpadDirs = new Set(["up", "down", "left", "right"]);
 const TAB_IDS = new Set(["diagnostics", "visualize", "falling-blocks"]);
 const TAB_STORAGE_KEY = "echoscape.tab";
-
-/** @type {"max" | "browser"} */
-let inputMode = "browser";
 /** @type {"diagnostics" | "visualize" | "falling-blocks"} */
 let activeTab = "diagnostics";
 let audioStarting = false;
 /** @type {Promise<void> | null} */
 let audioStartPromise = null;
 let audioChain = Promise.resolve();
-let lastLive = 0;
 let lastFrame = 0;
 let socketState = "offline";
 /** @type {number} */
@@ -133,7 +127,6 @@ function enqueueAudio(task) {
 }
 
 function unlockBedsFromGesture() {
-  if (inputMode !== "browser") return;
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return;
   audioEngine.beginGesture();
 }
@@ -142,7 +135,6 @@ document.addEventListener("pointerdown", unlockBedsFromGesture, true);
 document.addEventListener("keydown", unlockBedsFromGesture, true);
 
 async function runEnsureBrowserAudio() {
-  if (inputMode !== "browser") return;
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return;
   if (audioEngine.running) {
     await audioEngine.resume();
@@ -172,7 +164,6 @@ async function runEnsureBrowserAudio() {
 }
 
 function ensureBrowserAudio() {
-  if (inputMode !== "browser") return Promise.resolve();
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return Promise.resolve();
   audioEngine.beginGesture();
   if (!audioEngine.running && !audioStartPromise) {
@@ -182,57 +173,32 @@ function ensureBrowserAudio() {
   return enqueueAudio(runEnsureBrowserAudio);
 }
 
-async function setInputMode(mode) {
-  if (mode !== "max" && mode !== "browser") return;
-  inputMode = mode;
-
-  for (const button of modeButtons) {
-    button.setAttribute("aria-pressed", button.dataset.mode === mode ? "true" : "false");
-  }
-
+async function startBrowserAudio() {
+  gamepadInput.enable();
+  dualsenseHid.enable();
   diagnostics.updateCornerLabels();
   diagnostics.updateFxPluginState();
-
-  if (mode === "browser") {
-    gamepadInput.enable();
-    dualsenseHid.enable();
-    diagnostics.setFxName("cross", "WAM Off");
-    diagnostics.setFxName("square", "Comb");
-    diagnostics.setFxName("triangle", "Formant");
-    diagnostics.setFxName("circle", "Crystallizer");
-    setStatus(audioEngine.running ? "audio" : "loading", browserStatusLabel());
-    await ensureBrowserAudio();
-    diagnostics.syncFxLabelsFromEngine();
-    setStatus(audioEngine.running ? "audio" : "offline", browserStatusLabel());
-    diagnostics.updateDualsenseHidUi();
-  } else {
-    gamepadInput.disable();
-    dualsenseHid.disable();
-    await enqueueAudio(async () => {
-      if (inputMode !== "max") return;
-      if (audioEngine.running) await audioEngine.stop();
-    });
-    diagnostics.setFxName("cross", "WAM Off");
-    diagnostics.setFxName("square", "kHs Comb Filter");
-    diagnostics.setFxName("triangle", "kHs Formant Filter");
-    diagnostics.setFxName("circle", "Crystallizer");
-    setStatus(socketState === "live" ? "live" : "open", "Connected — waiting for Max");
-    diagnostics.updateDualsenseHidUi();
-  }
+  diagnostics.setFxName("cross", "WAM Off");
+  diagnostics.setFxName("square", "Comb");
+  diagnostics.setFxName("triangle", "Formant");
+  diagnostics.setFxName("circle", "Crystallizer");
+  setStatus(audioEngine.running ? "audio" : "loading", browserStatusLabel());
+  await ensureBrowserAudio();
+  diagnostics.syncFxLabelsFromEngine();
+  setStatus(audioEngine.running ? "audio" : "offline", browserStatusLabel());
+  diagnostics.updateDualsenseHidUi();
   diagnostics.renderDiagnostics();
 }
 
 function tick(now) {
   try {
     const frameDt = lastFrame ? Math.min(0.05, (now - lastFrame) / 1000) : 0;
-    if (inputMode === "browser") {
-      gamepadInput.poll();
-      for (const button of gamepadInput.takeFaceEdges()) {
-        tabs[activeTab].onFaceEdge(button);
-      }
-      if (dualsenseHid.poll()) diagnostics.noteDualSenseSource();
-      diagnostics.syncDualsenseHidUi();
+    gamepadInput.poll();
+    for (const button of gamepadInput.takeFaceEdges()) {
+      tabs[activeTab].onFaceEdge(button);
     }
+    if (dualsenseHid.poll()) diagnostics.noteDualSenseSource();
+    diagnostics.syncDualsenseHidUi();
     tickMixer(now, lastFrame);
     lastFrame = now;
     tabs[activeTab].tick({ dt: frameDt });
@@ -290,127 +256,8 @@ for (const button of tabButtons) {
   button.addEventListener("click", () => setActiveTab(button.dataset.tab));
 }
 
-for (const button of modeButtons) {
-  button.addEventListener("click", () => {
-    void setInputMode(button.dataset.mode);
-  });
-}
-
-function setFxButton(button, value) {
-  if (!controller.fx[button]) return;
-  if (Number(value) === 0) return;
-  tabs[activeTab].onFaceCommand(button);
-}
-
-function connect() {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}/ws`);
-
-  ws.addEventListener("open", () => {
-    if (inputMode === "max") setStatus("open", "Connected — waiting for Max");
-  });
-
-  ws.addEventListener("message", (event) => {
-    if (inputMode === "browser") return;
-
-    let msg;
-    try {
-      msg = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-
-    if (msg.type === "xy") {
-      const label = msg.source === "touch" ? "Max touch" : "Max mixer";
-      diagnostics.applyMaxPad(msg.x, msg.y, label);
-      lastLive = Date.now();
-    }
-
-    if (msg.type === "dpad") {
-      const dir = String(msg.dir || "").toLowerCase().trim();
-      if (!dpadDirs.has(dir)) return;
-      setDpad(dir, msg.value);
-      diagnostics.renderDiagnostics();
-      lastLive = Date.now();
-      setStatus("live", "Live from Max");
-    }
-
-    if (msg.type === "fx-select") {
-      setFxButton(msg.button, msg.value);
-      diagnostics.renderDiagnostics();
-      lastLive = Date.now();
-      setStatus("live", "Live from Max");
-    }
-
-    if (msg.type === "fx-stick") {
-      const button = String(msg.button);
-      if (!controller.fx[button]) return;
-      setFxStick(button, msg.x, msg.y);
-      diagnostics.renderDiagnostics();
-      lastLive = Date.now();
-      setStatus("live", "Live from Max");
-    }
-
-    if (msg.type === "fx-raw") {
-      diagnostics.applyRawStick(Number(msg.x), Number(msg.y));
-      diagnostics.renderDiagnostics();
-      lastLive = Date.now();
-      setStatus("live", "Live from Max");
-    }
-
-    if (msg.type === "pad-right") {
-      setRightStick(Number(msg.x), Number(msg.y));
-      diagnostics.renderDiagnostics();
-      lastLive = Date.now();
-      setStatus("live", "Live from Max");
-    }
-
-    if (msg.type === "pad-trigger") {
-      setTrigger(String(msg.side), msg.value);
-      diagnostics.renderDiagnostics();
-      lastLive = Date.now();
-      setStatus("live", "Live from Max");
-    }
-
-    if (msg.type === "pad-click") {
-      setStickClick(String(msg.side), msg.value);
-      diagnostics.renderDiagnostics();
-      lastLive = Date.now();
-      setStatus("live", "Live from Max");
-    }
-
-    if (msg.type === "pad-shoulder") {
-      setShoulder(String(msg.side), msg.value);
-      diagnostics.renderDiagnostics();
-      lastLive = Date.now();
-      setStatus("live", "Live from Max");
-    }
-
-    if (msg.type === "fx-name") {
-      diagnostics.setFxName(String(msg.button), String(msg.name || "").trim());
-      lastLive = Date.now();
-      setStatus("live", "Live from Max");
-    }
-  });
-
-  ws.addEventListener("close", () => {
-    if (inputMode === "max") setStatus("offline", "Server disconnected — retrying");
-    window.setTimeout(connect, 800);
-  });
-
-  ws.addEventListener("error", () => ws.close());
-}
-
-window.setInterval(() => {
-  if (inputMode === "max" && socketState === "live" && Date.now() - lastLive > 1500) {
-    setStatus("open", "Connected — waiting for Max");
-  }
-}, 400);
-
 const deps = {
-  getInputMode: () => inputMode,
   getActiveTab: () => activeTab,
-  setInputMode,
   ensureBrowserAudio,
   enqueueAudio,
   setStatus,
@@ -429,12 +276,6 @@ diagnostics.updateCornerLabels();
 diagnostics.updateDualsenseHidUi();
 diagnostics.renderDiagnostics();
 window.requestAnimationFrame(tick);
-connect();
 const hashTab = location.hash.replace("#", "");
 setActiveTab(TAB_IDS.has(hashTab) ? hashTab : storedTab());
-
-if (location.hash.replace("#", "") === "max") {
-  void setInputMode("max");
-} else {
-  void setInputMode("browser");
-}
+void startBrowserAudio();

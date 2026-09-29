@@ -35,13 +35,6 @@ page.on("console", (msg) => console.log("PAGE:", msg.type(), msg.text()));
 
 await page.goto(BASE, { waitUntil: "networkidle" });
 
-// Prefer Browser mode so stem slots are interactive.
-const browserBtn = page.locator('[data-mode="browser"]');
-if (await browserBtn.count()) {
-  await browserBtn.click();
-  await page.waitForTimeout(200);
-}
-
 const slot = page.locator('[data-stem-slot="br"]');
 await slot.waitFor({ state: "visible" });
 const disabled = await slot.isDisabled();

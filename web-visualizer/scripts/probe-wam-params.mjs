@@ -13,7 +13,6 @@ page.on("console", (m) => {
 });
 
 await page.goto("http://127.0.0.1:8080/", { waitUntil: "networkidle" });
-await page.locator('[data-mode="browser"]').click();
 await page.waitForTimeout(2500);
 
 const api = await (await page.request.get("http://127.0.0.1:8080/api/wams")).json();

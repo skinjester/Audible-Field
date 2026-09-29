@@ -1,6 +1,5 @@
 /**
- * DualSense (and generic gamepad) → mixer-core, for browser-audio mode
- * without Max / OSC.
+ * DualSense (and generic gamepad) → mixer-core.
  *
  * Button and axis indices live in input-bindings.js.
  * Touchpad XY needs WebHID — see dualsense-hid.js (Connect button in UI).
@@ -14,7 +13,7 @@ import {
   setStickClick,
   setTrigger,
   setFxStick,
-} from "./mixer-core.js?v=65";
+} from "./mixer-core.js?v=66";
 import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=13";
 
 function lerp(inMin, inMax, outMin, outMax, value) {
@@ -26,7 +25,7 @@ function deadzone(v, z = inputBindings.gamepad.mixerStickDeadzone) {
   return Math.abs(v) < z ? 0 : v;
 }
 
-/** Same stick→FX scaling as Max / app.js applyRawStick. */
+/** Same stick→FX scaling as diagnostics applyRawStick. */
 function applyRawStick(nx, ny) {
   setRawStick(nx, ny);
   setFxStick("cross", lerp(-1, 1, 0, 1, nx), lerp(0, 1, 0, 0.75, ny));

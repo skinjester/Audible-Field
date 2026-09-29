@@ -1,16 +1,10 @@
-import { createRequire } from "module";
-import dgram from "dgram";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { chromium } from "playwright";
 
-const require = createRequire(import.meta.url);
-const osc = require("osc-min");
-
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
-const OSC_PORT = Number(process.env.OSC_PORT) || 9000;
 const APP_URL = process.env.APP_URL || "http://127.0.0.1:8080/";
 
 function assert(cond, message) {
@@ -30,16 +24,11 @@ function meanAbsDiff(a, b) {
   return sum / n;
 }
 
-function sendOsc(address, args) {
-  return new Promise((resolve, reject) => {
-    const buf = osc.toBuffer({ address, args });
-    const socket = dgram.createSocket("udp4");
-    socket.send(buf, OSC_PORT, "127.0.0.1", (err) => {
-      socket.close();
-      if (err) reject(err);
-      else resolve();
-    });
-  });
+function moduleSpec(file, needle) {
+  const line = importLine(file, needle);
+  const match = line.match(/[\w.-]+\.js\?v=\d+/);
+  if (!match) throw new Error(`missing module spec for ${needle} in ${file}`);
+  return match[0];
 }
 
 const appImport = importLine("app.js", "mixer-core.js");
@@ -53,6 +42,8 @@ const appCore = appImport.match(/mixer-core\.js\?v=\d+/);
 const vizCore = vizImport.match(/mixer-core\.js\?v=\d+/);
 assert(appCore && vizCore && appCore[0] === vizCore[0], `split mixer-core modules:\n  app: ${appImport}\n  viz: ${vizImport}`);
 console.log("import check:", appCore[0]);
+const diagSpec = moduleSpec("app.js", "diagnostics.js");
+const mixerSpec = moduleSpec("app.js", "mixer-core.js");
 
 const mixerUrls = new Set();
 const browser = await chromium.launch();
@@ -86,7 +77,13 @@ await page.waitForTimeout(280);
 const idleB = await page.locator("[data-viz-canvas]").screenshot();
 const idleDiff = meanAbsDiff(idleA, idleB);
 
-await sendOsc("/fx/raw", [0.95, 0.85]);
+await page.evaluate(
+  async ({ diagSpec, raw }) => {
+    const diag = await import(`/${diagSpec}`);
+    diag.applyRawStick(raw[0], raw[1]);
+  },
+  { diagSpec, raw: [0.95, 0.85] }
+);
 await page.waitForTimeout(120);
 await page.waitForFunction(() => {
   const flags = document.querySelector("[data-viz-flags]")?.textContent || "";
@@ -99,7 +96,13 @@ const liveB = await page.locator("[data-viz-canvas]").screenshot();
 const liveDiff = meanAbsDiff(liveA, liveB);
 const flags1 = (await page.locator("[data-viz-flags]").textContent()) || "";
 
-await sendOsc("/mixer/xy", [0.05, 0.05]);
+await page.evaluate(
+  async ({ mixerSpec, xy }) => {
+    const mixer = await import(`/${mixerSpec}`);
+    mixer.setTarget(xy[0], xy[1], "mouse", true);
+  },
+  { mixerSpec, xy: [0.05, 0.05] }
+);
 await page.waitForTimeout(350);
 const mixShot = await page.locator("[data-viz-canvas]").screenshot();
 const mixDiff = meanAbsDiff(liveB, mixShot);

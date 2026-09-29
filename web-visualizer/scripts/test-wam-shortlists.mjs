@@ -10,7 +10,6 @@ const api = await (await page.request.get("http://127.0.0.1:8080/api/wams")).jso
 console.log("vendored count", api.plugins.length);
 
 await page.goto("http://127.0.0.1:8080/", { waitUntil: "networkidle" });
-await page.locator('[data-mode="browser"]').click();
 await page.waitForTimeout(6000);
 
 async function openSlot(slot) {

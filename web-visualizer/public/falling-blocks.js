@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=65";
+import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=66";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=13";
 import { fallingInput } from "./falling-input.js?v=37";
