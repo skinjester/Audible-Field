@@ -3812,9 +3812,11 @@ export function readGridSnapshot() {
   return audioSnap || GRID_SNAP_IDLE;
 }
 
-export async function showFallingBlocks(nextCanvas) {
+export async function showFallingBlocks(nextCanvas, isCurrent = () => true) {
   try {
     await loadCatalog();
+    // A tab switch during the catalog load must not attach over a newer show or a hide.
+    if (!isCurrent()) return;
     if (!scene) initScene(nextCanvas);
     else {
       canvas = nextCanvas;

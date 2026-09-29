@@ -7,7 +7,6 @@
  */
 
 import {
-  setActiveFx,
   setDpad,
   setRawStick,
   setRightStick,
@@ -73,6 +72,8 @@ export class GamepadInput {
       l1: false,
       r1: false,
     };
+    /** @type {string[]} */
+    this._edges = [];
   }
 
   enable() {
@@ -85,8 +86,19 @@ export class GamepadInput {
     this.padId = "";
   }
 
+  /**
+   * Rising face-button edges from the last poll. The active tab decides what they mean.
+   * @returns {string[]}
+   */
+  takeFaceEdges() {
+    const edges = this._edges;
+    this._edges = [];
+    return edges;
+  }
+
   /** Call once per animation frame while browser-audio mode is active. */
   poll() {
+    this._edges = [];
     if (!this.enabled || !navigator.getGamepads) return false;
     const pad = pickPad(navigator.getGamepads());
     if (!pad) {
@@ -119,15 +131,8 @@ export class GamepadInput {
       square: pressed(gamepadButtons.square),
       triangle: pressed(gamepadButtons.triangle),
     };
-    const playfield = document.querySelector("[data-panel='falling-blocks']");
-    const onPlayfield = !!playfield && !playfield.hidden;
     for (const [btn, on] of Object.entries(face)) {
-      // Square toggles field audio on the playfield; it does not select FX.
-      if (onPlayfield && btn === inputBindings.gamepad.audioToggle) {
-        this._prev[btn] = on;
-        continue;
-      }
-      if (on && !this._prev[btn]) setActiveFx(btn);
+      if (on && !this._prev[btn]) this._edges.push(btn);
       this._prev[btn] = on;
     }
 
