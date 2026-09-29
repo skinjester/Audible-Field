@@ -975,6 +975,18 @@ export class EchoScapeAudioEngine {
     this._fxWam[id] = null;
   }
 
+  /** Face-slot plugins plus per-stem Greyhole instances currently in the graph. */
+  loadedWamCount() {
+    let count = 0;
+    for (const instance of Object.values(this._fxWam || {})) {
+      if (instance) count += 1;
+    }
+    for (const rec of Object.values(this._stemReverbs || {})) {
+      if (rec?.instance) count += 1;
+    }
+    return count;
+  }
+
   /**
    * Tear down every loaded WAM and restore native inserts.
    * Prefer pressing X / Cross (setActiveFx) to mute WAMs without wiping

@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>EchoScape Web Visualizer</title>
-    <link rel="stylesheet" href="/styles.css?v=183" />
+    <title>Audible Field</title>
+    <link rel="stylesheet" href="/styles.css?v=185" />
     <script type="importmap">
       {
         "imports": {
@@ -17,17 +17,19 @@
   <body>
     <main class="app">
       <header class="top">
-        <div>
-          <p class="kicker">EchoScape</p>
-          <h1>Web Visualizer</h1>
-        </div>
-        <div class="top-actions">
-          <div class="status" data-state="offline">
-            <span class="dot"></span>
-            <span class="status-label-clip">
-              <span data-status-label>Browser audio — click pad to start</span>
-            </span>
-          </div>
+        <div class="brand">
+          <p class="status" data-state="offline">
+            <span data-status-audio class="is-off">Audio off</span>
+            <span class="status-sep" aria-hidden="true">·</span>
+            <span data-status-wams>… WAMs</span>
+            <span class="status-sep" aria-hidden="true">·</span>
+            <span data-status-samples>… samples</span>
+            <span class="status-sep" aria-hidden="true">·</span>
+            <span data-status-mouse>mouse</span>
+            <span class="status-sep" aria-hidden="true">·</span>
+            <span data-status-pad class="is-off">DualSense</span>
+          </p>
+          <h1>Audible Field</h1>
         </div>
       </header>
 
@@ -39,7 +41,7 @@
           Visualize
         </button>
         <button type="button" data-tab="falling-blocks" aria-selected="false">
-          Falling Blocks (Field-1)
+          Falling Blocks
         </button>
       </nav>
 
@@ -562,6 +564,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=355"></script>
+    <script type="module" src="/app.js?v=358"></script>
   </body>
 </html>

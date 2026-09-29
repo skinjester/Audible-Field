@@ -1,14 +1,23 @@
 import { notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=48";
+import { audioEngine } from "./audio-engine.js?v=49";
 import { gamepadInput } from "./gamepad-input.js?v=17";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=2";
-import * as fallingTab from "./falling-tab.js?v=2";
+import * as diagnostics from "./diagnostics.js?v=3";
+import * as fallingTab from "./falling-tab.js?v=3";
 import * as visualizeTab from "./visualize-tab.js?v=1";
 
 const statusEl = document.querySelector(".status");
-const statusLabel = document.querySelector("[data-status-label]");
+const statusParts = {
+  audio: document.querySelector("[data-status-audio]"),
+  wams: document.querySelector("[data-status-wams]"),
+  samples: document.querySelector("[data-status-samples]"),
+  mouse: document.querySelector("[data-status-mouse]"),
+  pad: document.querySelector("[data-status-pad]"),
+};
+let statusText = "";
+let statusKey = "";
+let mouseSeen = false;
 const tabButtons = document.querySelectorAll("[data-tab]");
 const panels = document.querySelectorAll("[data-panel]");
 
@@ -22,8 +31,10 @@ let audioStartPromise = null;
 let audioChain = Promise.resolve();
 let lastFrame = 0;
 let socketState = "offline";
-/** @type {number} */
-let statusMarqueeRaf = 0;
+/** @type {number | null} */
+let sampleCount = null;
+/** @type {number | null} */
+let wamCount = null;
 
 const tabs = {
   diagnostics: diagnostics,
@@ -33,82 +44,139 @@ const tabs = {
 
 function setStatus(nextState, label) {
   socketState = nextState;
+  statusText = label;
   if (statusEl) statusEl.dataset.state = nextState;
-  if (statusLabel) statusLabel.textContent = label;
-  stopStatusMarquee();
+  paintStatusLine();
+  statusKey = statusSignature();
 }
 
 function statusDiffers(label) {
-  return socketState !== "audio" || statusLabel?.textContent !== label;
+  return statusText !== label;
 }
 
-function stopStatusMarquee() {
-  if (!statusEl || !statusLabel) return;
-  if (statusMarqueeRaf) {
-    cancelAnimationFrame(statusMarqueeRaf);
-    statusMarqueeRaf = 0;
+function paintStatusPart(el, text, on) {
+  if (!el) return;
+  if (el.textContent !== text) el.textContent = text;
+  el.classList.toggle("is-off", !on);
+}
+
+function countPhrase(count, singular, plural) {
+  if (count == null) return `… ${plural}`;
+  const n = Number(count) || 0;
+  return `${n} ${n === 1 ? singular : plural}`;
+}
+
+function mouseAvailable() {
+  if (mouseSeen) return true;
+  const fine = window.matchMedia?.("(any-pointer: fine), (pointer: fine), (hover: hover)");
+  if (fine?.matches) return true;
+  return navigator.maxTouchPoints === 0;
+}
+
+function noteMouse(event) {
+  if (event.pointerType === "mouse" || event.pointerType === "pen") mouseSeen = true;
+}
+
+window.addEventListener("pointerdown", noteMouse, true);
+window.addEventListener("pointermove", noteMouse, true);
+
+function dualSenseAvailable() {
+  if (dualsenseHid.connected || gamepadInput.connected) return true;
+  const pads = navigator.getGamepads?.();
+  if (!pads) return false;
+  for (const pad of pads) {
+    if (pad) return true;
   }
-  statusEl.classList.remove("is-marquee");
-  statusEl.style.removeProperty("--marquee-duration");
-  statusLabel.style.transition = "none";
-  statusLabel.style.transform = "translateX(0)";
-  void statusLabel.offsetWidth;
-  statusLabel.style.transition = "";
+  return false;
 }
 
-function startStatusMarquee() {
-  if (!statusEl || !statusLabel) return;
-  stopStatusMarquee();
-
-  const clip = statusEl.querySelector(".status-label-clip");
-  if (!clip) return;
-
-  statusLabel.style.maxWidth = "none";
-  statusLabel.style.overflow = "visible";
-  statusLabel.style.textOverflow = "clip";
-  const fullWidth = statusLabel.scrollWidth;
-  statusLabel.style.maxWidth = "";
-  statusLabel.style.overflow = "";
-  statusLabel.style.textOverflow = "";
-
-  const overflow = fullWidth - clip.clientWidth;
-  if (overflow <= 2) return;
-
-  const duration = Math.min(0.6, Math.max(0.12, overflow / 900));
-  statusEl.style.setProperty("--marquee-duration", `${duration}s`);
-  statusEl.classList.add("is-marquee");
-  statusLabel.style.transform = "translateX(0)";
-
-  statusMarqueeRaf = requestAnimationFrame(() => {
-    statusMarqueeRaf = requestAnimationFrame(() => {
-      statusLabel.style.transform = `translateX(-${overflow}px)`;
-      statusMarqueeRaf = 0;
-    });
-  });
+function audioKindLabel() {
+  if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return "Audio off";
+  if (audioStarting) return "Loading audio";
+  if (!audioEngine.running) return "Audio off";
+  if (audioEngine.ctx?.state === "suspended") return "Audio paused";
+  return "Browser audio";
 }
 
-if (statusEl) {
-  statusEl.addEventListener("mouseenter", startStatusMarquee);
-  statusEl.addEventListener("mouseleave", stopStatusMarquee);
-  statusEl.addEventListener("focusin", startStatusMarquee);
-  statusEl.addEventListener("focusout", stopStatusMarquee);
+function audioStatusState() {
+  if (audioStarting) return "loading";
+  if (audioKindLabel() === "Browser audio") return "audio";
+  return "offline";
+}
+
+function statusFacts() {
+  const audio = audioKindLabel();
+  const mouse = mouseAvailable();
+  const pad = dualSenseAvailable();
+  return {
+    audio,
+    wamsText: countPhrase(wamCount, "WAM", "WAMs"),
+    wamsOn: wamCount > 0,
+    samplesText: countPhrase(sampleCount, "sample", "samples"),
+    samplesOn: sampleCount > 0,
+    mouse,
+    pad,
+    label: [
+      audio,
+      countPhrase(wamCount, "WAM", "WAMs"),
+      countPhrase(sampleCount, "sample", "samples"),
+      "mouse",
+      "DualSense",
+    ].join(" · "),
+  };
+}
+
+function statusSignature() {
+  const facts = statusFacts();
+  return [
+    audioStatusState(),
+    facts.label,
+    facts.audio === "Browser audio",
+    facts.wamsOn,
+    facts.samplesOn,
+    facts.mouse,
+    facts.pad,
+  ].join("|");
+}
+
+function paintStatusLine() {
+  const facts = statusFacts();
+  paintStatusPart(statusParts.audio, facts.audio, facts.audio === "Browser audio");
+  paintStatusPart(statusParts.wams, facts.wamsText, facts.wamsOn);
+  paintStatusPart(statusParts.samples, facts.samplesText, facts.samplesOn);
+  paintStatusPart(statusParts.mouse, "mouse", facts.mouse);
+  paintStatusPart(statusParts.pad, "DualSense", facts.pad);
 }
 
 function browserStatusLabel() {
-  if (activeTab === "falling-blocks") {
-    return fallingTab.isAudioEnabled()
-      ? "Falling Blocks — quadrants"
-      : "Falling Blocks — audio off";
+  return statusFacts().label;
+}
+
+function refreshStatusLine() {
+  const key = statusSignature();
+  if (key === statusKey) return;
+  setStatus(audioStatusState(), browserStatusLabel());
+}
+
+async function loadCatalogCounts() {
+  try {
+    const [samplesRes, wamsRes] = await Promise.all([
+      fetch("/catalog/samples-all.json"),
+      fetch("/catalog/wams.json"),
+    ]);
+    if (samplesRes.ok) {
+      const data = await samplesRes.json();
+      const groups = Array.isArray(data?.groups) ? data.groups : [];
+      sampleCount = groups.reduce((sum, group) => sum + (group.files?.length || 0), 0);
+    }
+    if (wamsRes.ok) {
+      const data = await wamsRes.json();
+      wamCount = Array.isArray(data?.plugins) ? data.plugins.length : 0;
+    }
+  } catch (err) {
+    console.warn("Could not count catalogs:", err);
   }
-  if (audioStarting) return "Loading beds…";
-  if (!audioEngine.running) return "Browser audio — click pad to start";
-  if (audioEngine.ctx?.state === "suspended") {
-    return "Browser audio — click pad to unmute";
-  }
-  if (dualsenseHid.connected) {
-    return "Browser audio · DualSense touchpad";
-  }
-  return "Browser audio · mouse + DualSense";
+  refreshStatusLine();
 }
 
 /**
@@ -202,6 +270,7 @@ function tick(now) {
     tickMixer(now, lastFrame);
     lastFrame = now;
     tabs[activeTab].tick({ dt: frameDt });
+    refreshStatusLine();
   } catch (err) {
     console.error("EchoScape diagnostics tick failed:", err);
   }
@@ -276,6 +345,7 @@ diagnostics.updateCornerLabels();
 diagnostics.updateDualsenseHidUi();
 diagnostics.renderDiagnostics();
 window.requestAnimationFrame(tick);
+void loadCatalogCounts();
 const hashTab = location.hash.replace("#", "");
 setActiveTab(TAB_IDS.has(hashTab) ? hashTab : storedTab());
 void startBrowserAudio();

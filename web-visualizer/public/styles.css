@@ -63,26 +63,33 @@ body {
   flex: 0 0 auto;
 }
 
-.top-actions {
+.brand {
+  min-width: 0;
+}
+
+.status {
   display: flex;
-  align-items: center;
-  gap: 10px;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  align-items: baseline;
+  gap: 0.35em;
+  margin: 0 0 2px;
+  font-size: 10px;
+  line-height: 1.35;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink);
 }
 
-.status[data-state="audio"] {
+.status .is-off {
+  color: var(--off);
+}
+
+.status [data-status-audio]:not(.is-off) {
   color: var(--live);
-  border-color: rgba(110, 231, 183, 0.35);
 }
 
-.status[data-state="audio"] .dot {
-  background: var(--live);
-  box-shadow: 0 0 0 3px rgba(110, 231, 183, 0.2);
-}
-
-.status[data-state="loading"] {
-  color: var(--warn);
+.status .status-sep {
+  color: var(--muted);
 }
 
 .kicker {
@@ -98,51 +105,6 @@ h1 {
   font-size: clamp(18px, 2.2vw, 24px);
   font-weight: 600;
   line-height: 1.15;
-}
-
-.status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel);
-  color: var(--muted);
-  font-size: 12px;
-  width: 220px;
-  max-width: min(220px, 42vw);
-  min-width: 0;
-  flex: 0 0 auto;
-  overflow: hidden;
-  box-sizing: border-box;
-}
-
-.status-label-clip {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.status [data-status-label] {
-  display: inline-block;
-  white-space: nowrap;
-  vertical-align: bottom;
-  transform: translateX(0);
-}
-
-/* Ellipsis only when idle (not scrolling) */
-.status:not(.is-marquee) [data-status-label] {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.status.is-marquee [data-status-label] {
-  max-width: none;
-  overflow: visible;
-  text-overflow: clip;
-  transition: transform var(--marquee-duration, 2.5s) linear;
 }
 
 .dot {
