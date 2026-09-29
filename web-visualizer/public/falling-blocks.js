@@ -3176,6 +3176,14 @@ function initScene(nextCanvas) {
   surface = new THREE.Group();
   scene.add(surface);
 
+  // A fresh field always starts with the emitter over the grid's center.
+  surface.position.set(0, 0, 0);
+  surface.rotation.set(0, 0, 0);
+  aimWorldX = 0;
+  aimWorldZ = 0;
+  stickAimPointer = null;
+  cameraDist = CAMERA_DIST_DEFAULT;
+
   camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
   syncCamera();
 

@@ -4,7 +4,7 @@ import { gamepadInput } from "./gamepad-input.js?v=17";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
 import * as diagnostics from "./diagnostics.js?v=3";
-import * as fallingTab from "./falling-tab.js?v=3";
+import * as fallingTab from "./falling-tab.js?v=4";
 import * as visualizeTab from "./visualize-tab.js?v=1";
 
 const statusEl = document.querySelector(".status");
@@ -22,9 +22,9 @@ const tabButtons = document.querySelectorAll("[data-tab]");
 const panels = document.querySelectorAll("[data-panel]");
 
 const TAB_IDS = new Set(["diagnostics", "visualize", "falling-blocks"]);
-const TAB_STORAGE_KEY = "echoscape.tab";
+const TAB_STORAGE_KEY = "audible-field.tab";
 /** @type {"diagnostics" | "visualize" | "falling-blocks"} */
-let activeTab = "diagnostics";
+let activeTab = "falling-blocks";
 let audioStarting = false;
 /** @type {Promise<void> | null} */
 let audioStartPromise = null;
@@ -284,7 +284,7 @@ function storedTab() {
   } catch {
     /* storage unavailable */
   }
-  return "diagnostics";
+  return "falling-blocks";
 }
 
 function rememberTab(tabId) {
