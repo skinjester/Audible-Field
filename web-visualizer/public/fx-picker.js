@@ -119,7 +119,7 @@ function positionDropdown(anchor) {
 
 async function loadWamPlugins() {
   if (wamCache) return wamCache;
-  const res = await fetch("/api/wams");
+  const res = await fetch("/catalog/wams.json");
   if (!res.ok) throw new Error(`Could not load WAMs (${res.status})`);
   const data = await res.json();
   wamCache = Array.isArray(data.plugins) ? data.plugins : [];
@@ -205,7 +205,7 @@ export async function openFxDropdown(opts = {}) {
   if (!FX_SLOTS.includes(slot)) return;
 
   ensureDropdownDom();
-  const { closeStemDropdown } = await import("./sample-picker.js?v=17");
+  const { closeStemDropdown } = await import("./sample-picker.js?v=18");
   closeStemDropdown();
 
   if (

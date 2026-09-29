@@ -138,9 +138,9 @@ async function navigateTo(relPath) {
 
   const token = ++loadToken;
   try {
-    const res = await fetch(`/api/samples?path=${encodeURIComponent(currentPath)}`);
-    if (!res.ok) throw new Error(`Could not open folder (${res.status})`);
-    const data = await res.json();
+    const catalog = await loadAllSamples();
+    const data = listingFromCatalog(catalog.groups || [], currentPath);
+    if (!data) throw new Error("Could not open folder");
     if (token !== loadToken) return;
 
     listEl.replaceChildren();
@@ -396,10 +396,42 @@ function renderDropdownGroups(groups) {
 
 async function loadAllSamples() {
   if (dropdownCache) return dropdownCache;
-  const res = await fetch("/api/samples/all");
+  const res = await fetch("/catalog/samples-all.json");
   if (!res.ok) throw new Error(`Could not load samples (${res.status})`);
   dropdownCache = await res.json();
   return dropdownCache;
+}
+
+/**
+ * Folder rows for the unused library browser, derived from the flat catalog.
+ * Nature beds stay in the stem dropdown via urlBase and are not sample folders.
+ * @param {{ folder?: string, urlBase?: string, files?: string[] }[]} groups
+ * @param {string} relPath
+ */
+function listingFromCatalog(groups, relPath) {
+  const cleaned = String(relPath || "").replace(/^\/+|\/+$/g, "");
+  const dirs = new Set();
+  let files = null;
+  let known = cleaned === "";
+  for (const group of groups) {
+    if (group.urlBase) continue;
+    const folder = String(group.folder || "").replace(/\\/g, "/");
+    if (folder === cleaned) {
+      files = group.files || [];
+      known = true;
+      continue;
+    }
+    const prefix = cleaned ? `${cleaned}/` : "";
+    if (!folder.startsWith(prefix)) continue;
+    known = true;
+    const next = folder.slice(prefix.length).split("/")[0];
+    if (next) dirs.add(next);
+  }
+  if (!known) return null;
+  return {
+    dirs: [...dirs].sort((a, b) => a.localeCompare(b)),
+    files: (files || []).slice().sort((a, b) => a.localeCompare(b)),
+  };
 }
 
 /**
@@ -409,7 +441,7 @@ async function loadAllSamples() {
  */
 export async function openStemDropdown(opts = {}) {
   ensureDropdownDom();
-  const { closeFxDropdown } = await import("./fx-picker.js?v=4");
+  const { closeFxDropdown } = await import("./fx-picker.js?v=5");
   closeFxDropdown();
 
   // Toggle closed if the same slot is already open.

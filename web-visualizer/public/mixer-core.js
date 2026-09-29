@@ -174,15 +174,7 @@ function writeStemCache(payload) {
 }
 
 function persistStemCorners(savedAt = Date.now()) {
-  const payload = stemPayload(savedAt);
-  writeStemCache(payload);
-  void fetch("/api/stem-defaults", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  }).catch((err) => {
-    console.warn("[EchoScape] could not save stem defaults:", err);
-  });
+  writeStemCache(stemPayload(savedAt));
 }
 
 function applyStemMap(map) {

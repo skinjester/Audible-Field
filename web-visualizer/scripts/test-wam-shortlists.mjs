@@ -6,7 +6,7 @@ page.on("console", (m) => {
   if (m.type() === "warning" || m.type() === "error") console.log(m.type(), m.text());
 });
 
-const api = await (await page.request.get("http://127.0.0.1:8080/api/wams")).json();
+const api = await (await page.request.get("http://127.0.0.1:8080/catalog/wams.json")).json();
 console.log("vendored count", api.plugins.length);
 
 await page.goto("http://127.0.0.1:8080/", { waitUntil: "networkidle" });

@@ -12,11 +12,11 @@ import {
   setTarget,
   state,
   STEM_CORNERS,
-} from "./mixer-core.js?v=66";
+} from "./mixer-core.js?v=67";
 import { audioEngine } from "./audio-engine.js?v=48";
 import { DualsenseHid } from "./dualsense-hid.js?v=5";
-import { openStemDropdown } from "./sample-picker.js?v=17";
-import { openFxDropdown } from "./fx-picker.js?v=4";
+import { openStemDropdown } from "./sample-picker.js?v=18";
+import { openFxDropdown } from "./fx-picker.js?v=5";
 import {
   DEFAULT_STICK_SCALE,
   STICK_SCALE_STEP,

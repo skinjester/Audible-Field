@@ -15,7 +15,7 @@ page.on("console", (m) => {
 await page.goto("http://127.0.0.1:8080/", { waitUntil: "networkidle" });
 await page.waitForTimeout(2500);
 
-const api = await (await page.request.get("http://127.0.0.1:8080/api/wams")).json();
+const api = await (await page.request.get("http://127.0.0.1:8080/catalog/wams.json")).json();
 
 const result = await page.evaluate(async (plugins) => {
   const { loadWam, listStickParams } = await import("/wam-host.js?v=4");

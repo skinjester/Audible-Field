@@ -1,4 +1,4 @@
-import { notify, tickMixer } from "./mixer-core.js?v=66";
+import { notify, tickMixer } from "./mixer-core.js?v=67";
 import { audioEngine } from "./audio-engine.js?v=48";
 import { gamepadInput } from "./gamepad-input.js?v=17";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";

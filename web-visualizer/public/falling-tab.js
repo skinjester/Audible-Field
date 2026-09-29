@@ -7,7 +7,7 @@ import {
   showFallingBlocks,
 } from "./falling-blocks.js?v=308";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=17";
-import { controller, setActiveFx } from "./mixer-core.js?v=66";
+import { controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
 const PLAYFIELD_FACE = new Set(["circle", "square", "cross"]);

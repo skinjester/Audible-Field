@@ -13,7 +13,7 @@ import {
   setStickClick,
   setTrigger,
   setFxStick,
-} from "./mixer-core.js?v=66";
+} from "./mixer-core.js?v=67";
 import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=13";
 
 function lerp(inMin, inMax, outMin, outMax, value) {

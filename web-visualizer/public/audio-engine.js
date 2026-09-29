@@ -20,7 +20,7 @@ import {
   state as mixerState,
   controller as mixerController,
   setActiveFx as setMixerActiveFx,
-} from "./mixer-core.js?v=66";
+} from "./mixer-core.js?v=67";
 import {
   loadWam,
   resolveStickBinding,
