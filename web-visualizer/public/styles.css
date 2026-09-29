@@ -84,12 +84,9 @@ body {
   color: var(--off);
 }
 
-.status [data-status-audio]:not(.is-off) {
-  color: var(--live);
-}
-
 .status .status-sep {
-  color: var(--muted);
+  color: var(--ink);
+  letter-spacing: 0;
 }
 
 .kicker {
@@ -131,6 +128,13 @@ h1 {
   font: inherit;
   font-size: 12px;
   cursor: pointer;
+}
+
+.tabs button:hover,
+.tabs button:focus-visible {
+  color: var(--live);
+  border-color: rgba(110, 231, 183, 0.35);
+  outline: none;
 }
 
 .tabs button[aria-selected="true"] {
