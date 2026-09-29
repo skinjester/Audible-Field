@@ -273,6 +273,8 @@ let stickAimPointer = null;
 let aimWorldZ = 0;
 let emitAcc = 0;
 let emitting = false;
+/** Shift is previewing a one-cell pour, before or during the click. */
+let shiftStream = false;
 /** Quantized emitter size last applied. A change restarts the settle wait. */
 let emitSizeKey = -1;
 let emitSizeHold = 0;
@@ -313,6 +315,15 @@ const scratchQuat = new THREE.Quaternion();
 const scratchMat4 = new THREE.Matrix4();
 
 /**
+ * How hard the ground mark mixes toward black.
+ * A wide field stays a light shade. A single stream is solid black so the
+ * small square still reads, and a trigger pull fades between those as the
+ * footprint grows.
+ */
+const LAND_INK_WIDE = 0.45;
+const LAND_INK_TIGHT = 1;
+
+/**
  * Filled square on the ground under the emitter, the size of the pour.
  * Hidden while atoms are pouring.
  */
@@ -323,13 +334,22 @@ const landingTarget = {
   yaw: { value: 0 },
   /** 1 while aiming, 0 while atoms are pouring. */
   on: { value: 1 },
+  /** Mix toward black. 1 is solid black. */
+  ink: { value: LAND_INK_WIDE },
+  /** Surface origin in world XZ. The atom grid is locked to the playfield. */
+  origin: { value: new THREE.Vector2() },
+  pitch: { value: ATOM_SIZE },
 };
 
-function compileLandingTarget(shader) {
+function compileLandingTarget(shader, grid) {
   shader.uniforms.uLandCenter = landingTarget.center;
   shader.uniforms.uLandHalf = landingTarget.half;
   shader.uniforms.uLandYaw = landingTarget.yaw;
   shader.uniforms.uLandOn = landingTarget.on;
+  shader.uniforms.uLandInk = landingTarget.ink;
+  shader.uniforms.uSurfOrigin = landingTarget.origin;
+  shader.uniforms.uGridPitch = landingTarget.pitch;
+  shader.uniforms.uGridOn = { value: grid ? 1 : 0 };
   shader.vertexShader = shader.vertexShader
     .replace("#include <common>", "#include <common>\nvarying vec3 vLandWorld;")
     .replace(
@@ -351,11 +371,28 @@ varying vec3 vLandWorld;
 uniform vec2 uLandCenter;
 uniform float uLandHalf;
 uniform float uLandYaw;
-uniform float uLandOn;`,
+uniform float uLandOn;
+uniform float uLandInk;
+uniform vec2 uSurfOrigin;
+uniform float uGridPitch;
+uniform float uGridOn;`,
     )
     .replace(
       "#include <opaque_fragment>",
       `{
+  if (uGridOn > 0.5) {
+    vec2 sd = vLandWorld.xz - uSurfOrigin;
+    float gc = cos(uLandYaw);
+    float gs = sin(uLandYaw);
+    vec2 surf = vec2(gc * sd.x - gs * sd.y, gs * sd.x + gc * sd.y);
+    vec2 cell = surf / max(uGridPitch, 0.0001);
+    vec2 gfw = max(fwidth(cell), vec2(0.0001));
+    vec2 dist = abs(fract(cell - 0.5) - 0.5);
+    float dPx = min(dist.x / gfw.x, dist.y / gfw.y);
+    float line = 1.0 - smoothstep(0.0, 1.0, dPx);
+    float keep = 1.0 - smoothstep(0.35, 0.75, max(gfw.x, gfw.y));
+    outgoingLight += vec3(0.028) * line * keep;
+  }
   vec2 d = vLandWorld.xz - uLandCenter;
   float c = cos(uLandYaw);
   float s = sin(uLandYaw);
@@ -366,15 +403,15 @@ uniform float uLandOn;`,
   float coverY = 1.0 - smoothstep(halfE - fw.y, halfE + fw.y, abs(local.y));
   float cover = coverX * coverY;
   if (uLandOn > 0.5 && cover > 0.001) {
-    outgoingLight = mix(outgoingLight, vec3(0.0), 0.45 * cover);
+    outgoingLight = mix(outgoingLight, vec3(0.0), uLandInk * cover);
   }
 }
 #include <opaque_fragment>`,
     );
 }
 
-function attachLandingTarget(material) {
-  material.onBeforeCompile = compileLandingTarget;
+function attachLandingTarget(material, grid = false) {
+  material.onBeforeCompile = (shader) => compileLandingTarget(shader, grid);
 }
 
 function compileRiseFade(shader) {
@@ -389,21 +426,39 @@ function compileRiseFade(shader) {
     .replace("#include <opaque_fragment>", "#include <opaque_fragment>\ngl_FragColor.a *= vAtomOpacity;");
 }
 
+/**
+ * Smallest stream is black. The wide field keeps the light shade.
+ * Analog trigger pressure changes the footprint, so the mark darkens as that
+ * square shrinks and lightens as it grows.
+ */
+function landingInkForFootprint(brush, scale) {
+  const edge = brush * scale;
+  const minEdge = ATOM_SCALE_MIN;
+  const maxEdge = BRUSH_MAX;
+  const span = maxEdge - minEdge;
+  const t = span > 0 ? clamp01((edge - minEdge) / span) : 1;
+  return LAND_INK_TIGHT + t * (LAND_INK_WIDE - LAND_INK_TIGHT);
+}
+
 function syncLandingTarget() {
   landingTarget.center.value.set(aimWorldX, aimWorldZ);
   const edge = atomSize * emitScale;
-  landingTarget.half.value = brushN * edge * 0.5;
-  landingTarget.yaw.value = surface ? surface.rotation.y : 0;
+  const pourHalf = brushN * edge * 0.5;
+  const yaw = surface ? surface.rotation.y : 0;
+  landingTarget.yaw.value = yaw;
+  landingTarget.half.value = pourHalf;
   landingTarget.on.value = emitting ? 0 : 1;
+  landingTarget.ink.value = landingInkForFootprint(brushN, emitScale);
+  landingTarget.origin.value.set(surface ? surface.position.x : 0, surface ? surface.position.z : 0);
+  canvas?.classList.toggle("is-emitting", emitting);
+  canvas?.classList.toggle("is-single-stream", shiftStream);
 }
 
 const aimMarkNdc = new THREE.Vector3();
 
-/** How far the aim square reaches to the right of the aim point, in CSS pixels. */
-export function aimMarkRightPx() {
+/** How far a ground square of this half-extent reaches to the right of the aim point, in CSS pixels. */
+function aimReachPx(half, yaw) {
   if (!camera || !renderer) return 0;
-  const half = landingTarget.half.value;
-  const yaw = landingTarget.yaw.value;
   const c = Math.cos(yaw);
   const s = Math.sin(yaw);
   const view = renderer.domElement;
@@ -428,6 +483,11 @@ export function aimMarkRightPx() {
     if (px > right) right = px;
   }
   return right;
+}
+
+/** How far the aim square reaches to the right of the aim point, in CSS pixels. */
+export function aimMarkRightPx() {
+  return aimReachPx(landingTarget.half.value, landingTarget.yaw.value);
 }
 
 function showError(message) {
@@ -1944,6 +2004,7 @@ function applyInput(dt) {
 
   // Shift previews a single stream. A trigger pull resizes with pressure.
   // Atoms wait until that footprint stops changing.
+  shiftStream = !!frame.shiftHeld;
   let brush = BRUSH_MAX;
   let scale = 1;
   if (frame.shiftHeld) {
@@ -3199,8 +3260,8 @@ function initScene(nextCanvas) {
   fill.position.set(-7, 6, -5);
   scene.add(fill);
 
-  const groundMat = new THREE.MeshStandardMaterial({ color: 0x1a4f6e, roughness: 0.85, metalness: 0.05 });
-  attachLandingTarget(groundMat);
+  const groundMat = new THREE.MeshStandardMaterial({ color: 0x267494, roughness: 0.85, metalness: 0.05 });
+  attachLandingTarget(groundMat, true);
   groundMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(GROUND_PLANE_SIZE, GROUND_PLANE_SIZE),
     groundMat,
@@ -3822,6 +3883,8 @@ export function hideFallingBlocks() {
   if (canvas) canvas.style.filter = "";
   fallingInput.detach();
   emitting = false;
+  shiftStream = false;
+  canvas?.classList.remove("is-emitting", "is-single-stream");
   emitAcc = 0;
   if (rafId) window.cancelAnimationFrame(rafId);
   rafId = 0;

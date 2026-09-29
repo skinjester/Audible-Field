@@ -94,6 +94,19 @@ function strikePlan(count, room) {
   return Math.min(STRIKE_VOICES, Math.max(free, spread));
 }
 
+/**
+ * Seconds before this repeat attacks.
+ * A few landings in the same moment are spaced far enough to count.
+ * A heavy pour stays a short roll.
+ * @param {number} count
+ * @param {number} index
+ */
+function strikeDelay(count, index) {
+  if (count <= 1 || index <= 0) return 0;
+  const gap = count <= 6 ? 0.062 : Math.min(0.035, 0.16 / (count - 1));
+  return index * gap;
+}
+
 /** Up to `max` strikes spread across lifetime, then pitch. */
 function sampleLifetimes(lives, max) {
   const sorted = lives
@@ -1777,25 +1790,27 @@ export class EchoScapeAudioEngine {
     const buffer = this._strikeBuffers?.[corner] || null;
     const folded = Math.max(1, audible.length / chosen.length);
     const weight = Math.min(1.5, Math.pow(folded, 0.35));
+    const bedTime = Number(stem.el?.currentTime) || 0;
     for (let i = 0; i < chosen.length; i += 1) {
       const dur = Math.min(5, Math.max(0.1, strikeLife(chosen[i]) || 0.1));
       const rate = strikeRate(chosen[i]);
+      const when = t + strikeDelay(chosen.length, i);
       const gain = ctx.createGain();
       const delay = ctx.createDelay(0.2);
       delay.delayTime.value = 0.05;
       const filter = ctx.createBiquadFilter();
       filter.type = "lowpass";
       filter.Q.value = 0.85;
-      filter.frequency.setValueAtTime(9000, t);
-      filter.frequency.exponentialRampToValueAtTime(180, t + dur);
+      filter.frequency.setValueAtTime(9000, when);
+      filter.frequency.exponentialRampToValueAtTime(180, when + dur);
       const pan = ctx.createStereoPanner();
       pan.pan.value = panValue;
       const release = Math.min(0.15, dur * 0.3);
       const peak = (0.42 / Math.sqrt(rate)) * weight;
-      gain.gain.setValueAtTime(0.001, t);
-      gain.gain.exponentialRampToValueAtTime(peak, t + 0.012);
-      if (dur > release + 0.04) gain.gain.setValueAtTime(peak, t + dur - release);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      gain.gain.setValueAtTime(0.001, when);
+      gain.gain.exponentialRampToValueAtTime(peak, when + 0.012);
+      if (dur > release + 0.04) gain.gain.setValueAtTime(peak, when + dur - release);
+      gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
       const nodes = [gain, delay, filter, pan];
       /** @type {AudioBufferSourceNode | null} */
       let voice = null;
@@ -1806,10 +1821,12 @@ export class EchoScapeAudioEngine {
         voice.buffer = buffer;
         voice.loop = true;
         voice.playbackRate.value = rate;
-        const offset = buffer.duration > 0 ? (Number(stem.el?.currentTime) || 0) % buffer.duration : 0;
+        const span = buffer.duration > 0 ? buffer.duration : 0;
+        const skew = (i + 1) / (chosen.length + 1);
+        const offset = span > 0 ? (bedTime + skew * span) % span : 0;
         voice.connect(gain);
-        voice.start(t, offset);
-        voice.stop(t + dur + 0.08);
+        voice.start(when, offset);
+        voice.stop(when + dur + 0.08);
         nodes.push(voice);
       } else {
         tap = stem.source;
@@ -1823,7 +1840,7 @@ export class EchoScapeAudioEngine {
       stem.strikes.push(strike);
       strike.timer = window.setTimeout(() => {
         this._releaseStrike(stem, strike);
-      }, (dur + 0.08) * 1000);
+      }, (when - t + dur + 0.08) * 1000);
     }
   }
 

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EchoScape Web Visualizer</title>
-    <link rel="stylesheet" href="/styles.css?v=165" />
+    <link rel="stylesheet" href="/styles.css?v=174" />
     <script type="importmap">
       {
         "imports": {
@@ -359,7 +359,6 @@
               <span class="pointer-hint-copy">click to emit clumps<br>Shift+click to emit streams</span>
             </div>
             <p class="viz-error" data-falling-error hidden></p>
-            <button type="button" class="falling-about falling-pill" data-falling-about>About</button>
               <dialog class="falling-about-dialog" data-falling-about-dialog aria-labelledby="falling-about-title">
                 <form method="dialog" class="falling-about-panel">
                   <header class="falling-about-head">
@@ -404,6 +403,8 @@
                   </section>
                 </form>
               </dialog>
+              <div class="falling-side">
+              <button type="button" class="falling-about falling-pill" data-falling-about>About</button>
               <div class="falling-material-bar">
                 <div class="falling-material-row">
                   <span class="pad-glyph" data-falling-shoulder="prev" role="img" aria-label="L2">&#x011A;</span>
@@ -413,6 +414,7 @@
                 <span class="falling-material-label">Materials</span>
               </div>
               <div class="falling-hud">
+                <span class="falling-material-label falling-global-label">Global</span>
                 <div class="falling-palette-row">
                   <button type="button" class="falling-clear falling-face falling-pill" data-falling-clear title="Clear board">
                     <span class="pad-glyph" aria-hidden="true">&#x0115;</span>
@@ -431,6 +433,7 @@
                     Emit Clump
                   </span>
                 </div>
+              </div>
               </div>
             <aside class="falling-readout" data-falling-readout>
               <table class="falling-measures" aria-label="Corner measures">
@@ -537,6 +540,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=350"></script>
+    <script type="module" src="/app.js?v=351"></script>
   </body>
 </html>
