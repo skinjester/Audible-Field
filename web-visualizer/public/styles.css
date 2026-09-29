@@ -1367,7 +1367,8 @@ dd {
   line-height: 1.55;
 }
 
-.falling-about-how > p + p {
+.falling-about-how > p + p,
+.falling-about-how > .falling-about-triggers + p {
   margin-top: 12px;
 }
 
@@ -1384,6 +1385,34 @@ dd {
   font-weight: 600;
   line-height: 1.4;
   vertical-align: 1px;
+}
+
+.falling-about-triggers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.falling-about-triggers p {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.falling-about-pad {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 16px;
+}
+
+.falling-about-pad .pad-glyph {
+  font-size: 24px;
+  line-height: 1;
+  color: var(--ink);
 }
 
 .falling-about-mouse {
