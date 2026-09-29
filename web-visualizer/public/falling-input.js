@@ -224,14 +224,16 @@ export class FallingInput {
     const mouseEmit = mouseFull || mouseLight;
     const keyEmit = this._keyEmit;
 
-    // RT: light pull is a single stream. LT is the mirror: a hard pull is a single stream.
-    // The trigger pulled further wins. LMB is always the largest emitter.
+    // RT opens from a single stream to the wide field as the pull deepens.
+    // LT is a single stream at any pull past the threshold. The trigger
+    // pulled further wins. LMB is always the largest emitter.
     // Shift+LMB is always the smallest. A touchpad click emits a clump.
     // A finger on the pad only aims.
     const rtActive = rt >= g.emitAnalogThreshold;
     const ltActive = lt >= g.emitAnalogThreshold;
     let analog = 0;
     let curveInvert = false;
+    let ltSingle = false;
     if (rtActive || ltActive) {
       if (!ltActive || rt >= lt) {
         analog = rt;
@@ -239,6 +241,7 @@ export class FallingInput {
       } else {
         analog = lt;
         curveInvert = true;
+        ltSingle = true;
       }
     }
     if (mouseEmit) {
@@ -287,6 +290,7 @@ export class FallingInput {
       brushMode,
       analog,
       curveInvert,
+      ltSingle,
       orbitDelta,
       yawing: this._yawing() || rx !== 0,
       zoomFactor,

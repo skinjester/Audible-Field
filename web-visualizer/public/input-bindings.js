@@ -93,7 +93,7 @@ export const inputBindings = {
     stickDeadzone: 0.12,
     /** Names from gamepadButtons. */
     emitDigital: "cross",
-    /** Either trigger emits once it passes this. RT and LT use opposite curves. */
+    /** Either trigger emits once it passes this. RT widens with pressure. LT stays a single stream. */
     emitAnalogThreshold: 0.08,
     emitDigitalBrush: /** @type {BrushMode} */ ("max"),
     clear: "circle",

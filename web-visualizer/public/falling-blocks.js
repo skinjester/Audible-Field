@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=65";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=13";
-import { fallingInput } from "./falling-input.js?v=36";
+import { fallingInput } from "./falling-input.js?v=37";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -58,9 +58,8 @@ const AIM_VIEW_LIMIT = 0.8;
  */
 const BRUSH_MAX = 11;
 /**
- * Trigger→brush ease: >1 keeps the thin-stream end of each trigger longer.
- * RT opens the wide field only on a deep pull. LT reaches a single stream
- * only on a deep pull.
+ * Trigger→brush ease: >1 keeps the thin-stream end of RT longer.
+ * RT opens the wide field only on a deep pull. LT is always a single stream.
  */
 const BRUSH_RT_GAMMA = 2.6;
 /**
@@ -1966,17 +1965,17 @@ function applyInput(dt) {
   setAimFromWorld();
   syncEmitter();
 
-  // Shift previews a single stream. A trigger pull resizes with pressure.
+  // Shift and LT preview a single stream. RT resizes with pressure.
   // Atoms wait until that footprint stops changing.
   shiftStream = !!frame.shiftHeld;
   let brush = BRUSH_MAX;
   let scale = 1;
-  if (frame.shiftHeld) {
+  if (frame.shiftHeld || frame.ltSingle) {
     brush = 1;
     scale = ATOM_SCALE_MIN;
-  } else if (frame.ltHeld || frame.rtHeld) {
-    brush = brushSizeFromTrigger(frame.analog, frame.curveInvert);
-    scale = emitScaleFromTrigger(frame.analog, frame.curveInvert);
+  } else if (frame.rtHeld) {
+    brush = brushSizeFromTrigger(frame.analog, false);
+    scale = emitScaleFromTrigger(frame.analog, false);
   } else if (frame.emit) {
     brush = brushSizeFromMode(frame.brushMode, frame.analog, frame.curveInvert);
     scale = emitScaleFromMode(frame.brushMode, frame.analog, frame.curveInvert);
@@ -2026,9 +2025,9 @@ function updateEmitStream(dt, active) {
 /**
  * Sand1-style brush: scatter atoms across a flat N×N field centered on aim.
  * Each cell rolls EMIT_CHANCE so the column cascades instead of falling as one slab.
- * Brush edge and atom size follow the active trigger. A light RT pull emits
- * half-size atoms in a single stream; a full RT pull emits full-size atoms
- * across the wide field. LT is the mirror of that curve. Left click always
+ * Brush edge and atom size follow RT. A light RT pull emits half-size atoms
+ * in a single stream; a full RT pull emits full-size atoms across the wide
+ * field. LT emits that same single stream at any pull. Left click always
  * uses the largest emitter. Shift+left click always uses the smallest.
  * Shift+right-drag and Alt+right-drag yaw the view.
  */
