@@ -1,8 +1,10 @@
-# EchoScape
+# Audible Field
 
-Audible Field is a browser instrument for mixing four sound sources across a field. Pointer, mouse, and DualSense input move the mix. The same audio graph drives three views: a diagnostics mixer, a 3D visualization, and Falling Blocks.
+Audible Field is an activity-driven browser instrument that mixes sound sources to sonify a three-dimensional visual field. Mike Wilcox created the original Max/MSP patch for his interactive audio installation work at Colgate University. I reimplemented that patch with the Web Audio API so it could run in a browser, using it as a foundation for expanding the scope of the project. The VST effects used in the original Max patch are recreated in the browser with local [Web Audio Modules](https://www.webaudiomodules.org/) (WAM2).
 
-The browser app recreates the EchoScape Max mix path with the Web Audio API. Face-button effects can load local [Web Audio Modules](https://www.webaudiomodules.org/) (WAM2). Native VST plugins stay in the Max patch and are not loaded in the browser.
+## Current input support
+
+Audible Field has been tested with a mouse and keyboard and with a PlayStation DualSense wireless controller. Support for touchscreens and the built-in MacBook trackpad is forthcoming.
 
 ## Features
 
@@ -28,13 +30,19 @@ Chrome or Edge is required for DualSense touchpad input (WebHID). Sticks, trigge
 
 ## Views
 
-**Diagnostics** is the mixer. A pad maps pointer or stick position onto four quadrants. Each quadrant holds a sample. Triggers, shoulders, and face buttons drive tone, reverb, delay, and the active plugin.
+### Diagnostics
 
-**Visualize** uses the same mix and draws it as a Three.js scene.
-
-**Falling Blocks** pours atoms onto a ground plane. Pile width and height drive the four stems. Materials change how piles form. See [documentation/falling-blocks.md](documentation/falling-blocks.md).
+Diagnostics is a control panel for testing gamepad input, assigning audio sources, and mapping controls to DSP effects. Its four-quadrant pad maps pointer or stick position to sample levels, while triggers, shoulders, and face buttons control tone, reverb, delay, and the active plugin.
 
 Click a quadrant name to choose another sample. Samples are WAV files under `samples/`. The build copies them into the site and writes the library catalog.
+
+### Visualize
+
+Visualize translates the shared four-way mix into a GPU-displaced Three.js landscape. Moving between quadrants blends sphere, cube, torus, and cylinder terrain characteristics. Face-button effects generate ripples, waves, drift, and rings; the sticks shape those effects and control the camera.
+
+### Falling Blocks
+
+Mouse, keyboard, and DualSense game-controller input controls the emission of different atom types, whose behavior and interactions drive the mix. Each quadrant is mapped to a sound. Pour atoms into one quadrant or across several to mix them. Wider piles get louder and brighter. Taller piles increase reverb and decay. Material rules determine how atoms fall, spread, transform, and disappear. See [documentation/falling-blocks.md](documentation/falling-blocks.md).
 
 ## App structure
 
