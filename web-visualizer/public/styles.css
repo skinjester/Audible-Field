@@ -1137,6 +1137,36 @@ dd {
   cursor: url("/cursor-yaw.svg") 16 16, crosshair;
 }
 
+button.falling-touch-emit {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  [data-panel="falling-blocks"] .falling-touch-emit {
+    display: grid;
+    place-items: center;
+    position: absolute;
+    right: max(16px, env(safe-area-inset-right));
+    bottom: max(72px, calc(16px + env(safe-area-inset-bottom)));
+    z-index: 4;
+    width: 112px;
+    height: 112px;
+    padding: 0;
+    border-radius: 50%;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    cursor: pointer;
+  }
+}
+
+.falling-touch-emit.is-pressed {
+  background: var(--pill-selected);
+  color: var(--live);
+  border-color: rgba(110, 231, 183, 0.45);
+}
+
 .falling-pill {
   display: inline-flex;
   align-items: center;

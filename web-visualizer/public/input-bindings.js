@@ -1,6 +1,7 @@
 /**
- * Mouse, keyboard, and controller bindings.
- * Edit controls here. falling-input.js and gamepad-input.js only read this file.
+ * Mouse, keyboard, controller, and touch bindings.
+ * Edit controls here. falling-input.js and gamepad-input.js read this file.
+ * falling-input.js passes the touch block into touch-input.js.
  *
  * Mouse:
  *   move            → aim emitter
@@ -26,6 +27,13 @@
  *   X hold          → emit
  *   Tab             → next material (never moves focus)
  *   Shift+Tab       → previous material
+ *
+ * Touchscreen:
+ *   one finger       → aim the emitter (does not emit)
+ *   two-finger drag  → slide the playfield
+ *   two-finger twist → yaw the playfield
+ *   pinch            → zoom
+ *   Emit button      → largest emitter while held
  */
 
 /** @typedef {"pressure" | "max" | "single"} BrushMode */
@@ -105,5 +113,14 @@ export const inputBindings = {
     orbitStickRate: 1.15,
     /** Right-stick Y → zoom exp rate. */
     zoomStickRate: 1.15,
+  },
+  touch: {
+    /**
+     * Screen angle uses y-down atan2, so a clockwise twist is positive.
+     * 1 yaws the surface with that twist. -1 reverses it.
+     */
+    orbitSign: 1,
+    /** 1 matches the pinch ratio to camera distance. Above 1 is more sensitive. */
+    zoomGain: 1,
   },
 };
