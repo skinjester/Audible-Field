@@ -4,8 +4,8 @@
  */
 
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
-import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=14";
-import { TouchInput } from "./touch-input.js?v=1";
+import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=15";
+import { TouchInput } from "./touch-input.js?v=2";
 
 /** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
 
@@ -19,6 +19,12 @@ import { TouchInput } from "./touch-input.js?v=1";
  *   analog: number,
  *   curveInvert: boolean,
  *   orbitDelta: number,
+ *   touchTwist: {
+ *     a0: { x: number, y: number },
+ *     b0: { x: number, y: number },
+ *     a1: { x: number, y: number },
+ *     b1: { x: number, y: number },
+ *   } | null,
  *   yawing: boolean,
  *   zoomFactor: number,
  *   aimStickX: number,
@@ -231,7 +237,6 @@ export class FallingInput {
     }
 
     const screen = this._screenTouch.consume();
-    if (screen.orbitDelta) orbitDelta += screen.orbitDelta;
     if (screen.zoomFactor !== 1) zoomFactor *= screen.zoomFactor;
 
     const rt = readAnalogTrigger(mixer?.rt, pad, gamepadButtons.rt);
@@ -300,18 +305,14 @@ export class FallingInput {
     this._prevCycleNext = cycleNext;
 
     const touchDelta = this._consumeTouchDelta();
-    let dx = this._moveX + touchDelta.x;
-    let dy = this._moveY + touchDelta.y;
-    if (screen.panDelta) {
-      dx += screen.panDelta.x;
-      dy += screen.panDelta.y;
-    }
+    const dx = this._moveX + touchDelta.x;
+    const dy = this._moveY + touchDelta.y;
     this._moveX = 0;
     this._moveY = 0;
 
     return {
       pointerDelta: dx || dy ? { x: dx, y: dy } : null,
-      pointerAt: screen.panDelta ? screen.pointerAt : this._pointerAt,
+      pointerAt: this._pointerAt,
       aimAt: screen.active ? screen.aimAt : this._aimAt,
       emit,
       brushMode,
@@ -319,6 +320,7 @@ export class FallingInput {
       curveInvert,
       ltSingle,
       orbitDelta,
+      touchTwist: screen.twist,
       yawing: this._yawing() || rx !== 0,
       zoomFactor,
       aimStickX,

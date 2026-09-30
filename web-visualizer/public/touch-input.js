@@ -1,52 +1,55 @@
 /**
  * Touchscreen gesture sampler. No atoms, materials, or scene graph.
- * One contact aims. Two contacts pan, yaw, and zoom from their geometry.
+ * One contact aims. Two contacts report the finger chord; the sim turns
+ * that chord into a ground yaw and slide. Pinch zoom stays on screen span.
  * FallingInput merges the consumed frame with mouse, keys, and the pad.
  */
 
 /**
+ * @typedef {{ x: number, y: number }} ScreenPoint
+ * @typedef {{
+ *   a0: ScreenPoint,
+ *   b0: ScreenPoint,
+ *   a1: ScreenPoint,
+ *   b1: ScreenPoint,
+ * }} TouchChord
  * @typedef {{
  *   active: boolean,
- *   aimAt: { x: number, y: number } | null,
- *   panDelta: { x: number, y: number } | null,
- *   pointerAt: { x: number, y: number } | null,
- *   orbitDelta: number,
+ *   aimAt: ScreenPoint | null,
+ *   twist: TouchChord | null,
  *   zoomFactor: number,
  * }} TouchInputFrame
  */
 
 /**
  * @typedef {{
- *   orbitSign?: number,
  *   zoomGain?: number,
  * }} TouchBindings
  */
+
+/** Screen span below this does not pinch. A short chord can still yaw. */
+const PINCH_MIN_PX = 8;
 
 export class TouchInput {
   /**
    * @param {TouchBindings} [bindings]
    */
   constructor(bindings = {}) {
-    /** Positive screen-angle change (y-down atan2, clockwise) times this becomes yaw. */
-    this.orbitSign = bindings.orbitSign ?? 1;
     /** 1 matches pinch ratio to camera zoom. Above 1 is more sensitive. */
     this.zoomGain = bindings.zoomGain ?? 1;
     /** @type {Map<number, { x: number, y: number, order: number }>} */
     this.pointers = new Map();
     this._order = 0;
-    /** @type {{ x: number, y: number } | null} */
+    /** @type {ScreenPoint | null} */
     this._aimAt = null;
-    /** @type {{ x: number, y: number } | null} */
-    this._pointerAt = null;
-    this._panX = 0;
-    this._panY = 0;
-    this._orbit = 0;
-    this._zoom = 1;
     /**
-     * Seeded pair. The first sample after a pair change does not jump.
-     * @type {{ idA: number, idB: number, cx: number, cy: number, angle: number, dist: number } | null}
+     * Last settled pair. A new pair does not jump.
+     * @type {{ idA: number, idB: number, a: ScreenPoint, b: ScreenPoint } | null}
      */
     this._pair = null;
+    /** Chord since the last consume. Endpoints update; the start stays put. */
+    /** @type {TouchChord | null} */
+    this._pending = null;
   }
 
   /**
@@ -83,33 +86,22 @@ export class TouchInput {
   reset() {
     this.pointers.clear();
     this._aimAt = null;
-    this._pointerAt = null;
-    this._panX = 0;
-    this._panY = 0;
-    this._orbit = 0;
-    this._zoom = 1;
     this._pair = null;
+    this._pending = null;
   }
 
   /**
-   * Take the gesture deltas accumulated since the last sample.
+   * Take the gesture accumulated since the last sample.
    * @returns {TouchInputFrame}
    */
   consume() {
-    const panX = this._panX;
-    const panY = this._panY;
-    const orbitDelta = this._orbit;
-    const zoomFactor = this._zoom;
-    this._panX = 0;
-    this._panY = 0;
-    this._orbit = 0;
-    this._zoom = 1;
+    const pending = this._pending;
+    this._pending = null;
+    const zoomFactor = pending ? pinchFactor(pending, this.zoomGain) : 1;
     return {
       active: this.pointers.size > 0,
       aimAt: this._aimAt ? { x: this._aimAt.x, y: this._aimAt.y } : null,
-      panDelta: panX || panY ? { x: panX, y: panY } : null,
-      pointerAt: this._pointerAt ? { x: this._pointerAt.x, y: this._pointerAt.y } : null,
-      orbitDelta,
+      twist: pending,
       zoomFactor,
     };
   }
@@ -131,38 +123,46 @@ export class TouchInput {
     this._aimAt = null;
     const [idA, a] = ordered[0];
     const [idB, b] = ordered[1];
-    const cx = (a.x + b.x) / 2;
-    const cy = (a.y + b.y) / 2;
-    const angle = Math.atan2(b.y - a.y, b.x - a.x);
-    const dist = Math.hypot(b.x - a.x, b.y - a.y);
     const same = this._pair && this._pair.idA === idA && this._pair.idB === idB;
-    this._pointerAt = { x: cx, y: cy };
     if (!same) {
-      this._pair = { idA, idB, cx, cy, angle, dist };
+      this._pair = { idA, idB, a: point(a), b: point(b) };
+      this._pending = null;
       return;
     }
-
-    this._panX += cx - this._pair.cx;
-    this._panY += cy - this._pair.cy;
-    this._orbit += wrapAngle(angle - this._pair.angle) * this.orbitSign;
-    if (this._pair.dist > 8 && dist > 8) {
-      const ratio = this._pair.dist / dist;
-      this._zoom *= this.zoomGain === 1 ? ratio : Math.pow(ratio, this.zoomGain);
+    if (
+      a.x === this._pair.a.x &&
+      a.y === this._pair.a.y &&
+      b.x === this._pair.b.x &&
+      b.y === this._pair.b.y
+    ) {
+      return;
     }
-    this._pair.cx = cx;
-    this._pair.cy = cy;
-    this._pair.angle = angle;
-    this._pair.dist = dist;
+    if (!this._pending) {
+      this._pending = { a0: this._pair.a, b0: this._pair.b, a1: point(a), b1: point(b) };
+    } else {
+      this._pending.a1 = point(a);
+      this._pending.b1 = point(b);
+    }
+    this._pair = { idA, idB, a: point(a), b: point(b) };
   }
 }
 
 /**
- * @param {number} delta
+ * @param {{ x: number, y: number }} p
  */
-function wrapAngle(delta) {
-  const turn = Math.PI * 2;
-  let wrapped = delta % turn;
-  if (wrapped > Math.PI) wrapped -= turn;
-  if (wrapped < -Math.PI) wrapped += turn;
-  return wrapped;
+function point(p) {
+  return { x: p.x, y: p.y };
+}
+
+/**
+ * Screen-span pinch. Ground distance is foreshortened, so zoom does not use it.
+ * @param {TouchChord} chord
+ * @param {number} gain
+ */
+function pinchFactor(chord, gain) {
+  const d0 = Math.hypot(chord.b0.x - chord.a0.x, chord.b0.y - chord.a0.y);
+  const d1 = Math.hypot(chord.b1.x - chord.a1.x, chord.b1.y - chord.a1.y);
+  if (d0 <= PINCH_MIN_PX || d1 <= PINCH_MIN_PX) return 1;
+  const ratio = d0 / d1;
+  return gain === 1 ? ratio : Math.pow(ratio, gain);
 }

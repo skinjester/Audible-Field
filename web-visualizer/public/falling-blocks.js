@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
-import { inputBindings } from "./input-bindings.js?v=14";
-import { fallingInput } from "./falling-input.js?v=38";
+import { inputBindings } from "./input-bindings.js?v=15";
+import { fallingInput } from "./falling-input.js?v=39";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -39,8 +39,8 @@ const SPLASH_LIFE = 0.42;
 const CLICK_SLOP = 6;
 const RULE_HZ = 22;
 
-/** Fixed isometric-style view: 45° down; distance is zoomable. */
-const CAMERA_PITCH = Math.PI / 4;
+/** Fixed view, 60° down, so a finger twist stays closer to the ground heading. Distance is zoomable. */
+const CAMERA_PITCH = Math.PI / 3;
 const CAMERA_YAW = Math.PI / 4;
 const CAMERA_DIST_DEFAULT = 30;
 const CAMERA_DIST_MIN = 10;
@@ -1403,7 +1403,7 @@ function placeEmitterAtPointer(pointer) {
   placeEmitterAtWorld(hit.x, hit.z);
 }
 
-/** Yaw the playfield around the emitter target. */
+/** Yaw the playfield around the emitter target. Mouse and stick use this. */
 function rotateSurface(deltaYaw) {
   if (!surface || !deltaYaw) return;
   setSurfaceYaw(surface.rotation.y + deltaYaw);
@@ -1412,20 +1412,72 @@ function rotateSurface(deltaYaw) {
 function setSurfaceYaw(nextYaw) {
   if (!surface) return;
   const applied = nextYaw - surface.rotation.y;
-  if (Math.abs(applied) < 1e-8) return;
-  const pivot = { x: aimWorldX, z: aimWorldZ };
+  if (!yawAbout(applied, { x: aimWorldX, z: aimWorldZ })) return;
+  setAimFromWorld();
+  syncEmitter();
+  syncSceneBackground();
+}
+
+/**
+ * Yaw the playfield and the emitter about a world XZ pivot.
+ * Positive yaw is clockwise from above. The emitter stays on its cell.
+ * @returns {boolean}
+ */
+function yawAbout(applied, pivot) {
+  if (!surface || !applied || Math.abs(applied) < 1e-8) return false;
   const c = Math.cos(applied);
   const s = Math.sin(applied);
   const vx = pivot.x - surface.position.x;
   const vz = pivot.z - surface.position.z;
-  const rx = c * vx + s * vz;
-  const rz = -s * vx + c * vz;
-  surface.position.x = pivot.x - rx;
-  surface.position.z = pivot.z - rz;
-  surface.rotation.y = nextYaw;
-  setAimFromWorld();
-  syncEmitter();
-  syncSceneBackground();
+  surface.position.x = pivot.x - (c * vx + s * vz);
+  surface.position.z = pivot.z - (-s * vx + c * vz);
+  surface.rotation.y += applied;
+  const ax = aimWorldX - pivot.x;
+  const az = aimWorldZ - pivot.z;
+  aimWorldX = pivot.x + (c * ax + s * az);
+  aimWorldZ = pivot.z + (-s * ax + c * az);
+  return true;
+}
+
+/**
+ * Two-finger chord, in client pixels. Yaw matches the ground heading of that
+ * chord and slides with its midpoint. Zoom stays on the screen span.
+ * @param {{ a0: { x: number, y: number }, b0: { x: number, y: number }, a1: { x: number, y: number }, b1: { x: number, y: number } }} chord
+ */
+function twistGround(chord) {
+  if (!surface || !canvas || !chord) return;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return;
+  const ground = (p) => groundAtPixels(p.x - rect.left, p.y - rect.top, rect);
+  const a0 = ground(chord.a0);
+  const b0 = ground(chord.b0);
+  const a1 = ground(chord.a1);
+  const b1 = ground(chord.b1);
+  if (!a0 || !b0 || !a1 || !b1) return;
+  const mid0x = (a0.x + b0.x) * 0.5;
+  const mid0z = (a0.z + b0.z) * 0.5;
+  const mid1x = (a1.x + b1.x) * 0.5;
+  const mid1z = (a1.z + b1.z) * 0.5;
+  const dx0 = b0.x - a0.x;
+  const dz0 = b0.z - a0.z;
+  const dx1 = b1.x - a1.x;
+  const dz1 = b1.z - a1.z;
+  if (dx0 * dx0 + dz0 * dz0 > 1e-8 && dx1 * dx1 + dz1 * dz1 > 1e-8) {
+    const applied = -wrapAngle(Math.atan2(dz1, dx1) - Math.atan2(dz0, dx0));
+    if (yawAbout(applied, { x: mid0x, z: mid0z })) syncSceneBackground();
+  }
+  dragGround(mid1x - mid0x, mid1z - mid0z);
+}
+
+/**
+ * @param {number} delta
+ */
+function wrapAngle(delta) {
+  const turn = Math.PI * 2;
+  let wrapped = delta % turn;
+  if (wrapped > Math.PI) wrapped -= turn;
+  if (wrapped < -Math.PI) wrapped += turn;
+  return wrapped;
 }
 
 /**
@@ -1939,6 +1991,7 @@ function applyInput(dt) {
 
   const stickAim = !!(frame.aimStickX || frame.aimStickY);
   const dragging = !!frame.pointerDelta;
+  const twisting = !!frame.touchTwist;
   const aim = frame.aimAt;
 
   if (stickAim) {
@@ -1950,14 +2003,15 @@ function applyInput(dt) {
   ) {
     stickAimPointer = null;
   }
-  if (dragging) stickAimPointer = null;
+  if (dragging || twisting) stickAimPointer = null;
 
   // A bare move places the emitter on the ground. Right-drag slides the grid.
-  // Stick and D-pad move the emitter on that same plane and are not snapped
-  // back to a cursor that is just resting.
+  // Two fingers yaw and slide about their ground chord. Stick and D-pad move
+  // the emitter on that same plane and are not snapped back to a resting cursor.
   const stickHoldsAim = stickAim || !!stickAimPointer;
-  if (aim && !dragging && !stickHoldsAim) placeEmitterAtPointer(aim);
-  if (dragging) slidePointer(frame.pointerDelta.x, frame.pointerDelta.y, frame.pointerAt);
+  if (aim && !dragging && !twisting && !stickHoldsAim) placeEmitterAtPointer(aim);
+  if (dragging && !twisting) slidePointer(frame.pointerDelta.x, frame.pointerDelta.y, frame.pointerAt);
+  if (twisting) twistGround(frame.touchTwist);
   if (stickAim) moveAim(frame.aimStickX, frame.aimStickY, dt);
   if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
   if (frame.zoomFactor !== 1) zoomCamera(frame.zoomFactor);

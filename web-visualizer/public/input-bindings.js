@@ -31,8 +31,8 @@
  * Touchscreen:
  *   one finger       → aim the emitter (does not emit)
  *   two-finger drag  → slide the playfield
- *   two-finger twist → yaw the playfield
- *   pinch            → zoom
+ *   two-finger twist → yaw about the ground midpoint of the two fingers
+ *   pinch            → zoom from the screen span
  *   Emit button      → largest emitter while held
  */
 
@@ -115,11 +115,6 @@ export const inputBindings = {
     zoomStickRate: 1.15,
   },
   touch: {
-    /**
-     * Screen angle uses y-down atan2, so a clockwise twist is positive.
-     * 1 yaws the surface with that twist. -1 reverses it.
-     */
-    orbitSign: 1,
     /** 1 matches the pinch ratio to camera distance. Above 1 is more sensitive. */
     zoomGain: 1,
   },

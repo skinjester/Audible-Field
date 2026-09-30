@@ -31,6 +31,10 @@ An emitter sits above the plane and follows the pointer, left stick, or D-pad. H
 | Right trigger | Pressure. A light pull is the single half-size stream. A deep pull opens the wide full-size field. |
 | Right-drag | Slide the playfield. |
 | Middle-drag, Shift+right-drag, Alt+right-drag, or right stick X | Yaw the playfield under the emitter. |
+| One finger | Aim the emitter. |
+| Two-finger drag | Slide the playfield. |
+| Two-finger twist | Yaw the playfield about the ground midpoint of the two fingers. The emitter rides with that turn. |
+| Pinch | Zoom from the screen span between the fingers. |
 | Wheel or right stick Y | Zoom. |
 | L1 / R1, or Tab / Shift+Tab | Previous / next material. |
 | Circle, or the clear button | Clear the board. |
@@ -42,7 +46,7 @@ Each cell of a multi-cell brush rolls a chance (`EMIT_CHANCE` 0.4), so a clump c
 
 ## Field
 
-Fixed atom pitch 0.25 on a 16-unit plane. The camera sits at a fixed 45° pitch. Distance zooms (default 30, range 10–60). Yaw and slide move the surface, not the camera orbit.
+Fixed atom pitch 0.25 on a 16-unit plane. The camera sits at a fixed 60° pitch. Distance zooms (default 30, range 10–60). Yaw and slide move the surface, not the camera orbit.
 
 The plane is split into four quadrants. Those quadrants are the four stems:
 
