@@ -6,7 +6,7 @@ import {
   readGridSnapshot,
   showFallingBlocks,
 } from "./falling-blocks.js?v=311";
-import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=17";
+import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=18";
 import { controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */

@@ -1,9 +1,10 @@
 /**
  * Quadrant sonification.
  * Footprint (ground cells occupied) sets each sample's level.
- * Maximum column height opens that sample's Greyhole send.
- * Diffuse grains that are rising add their drawn altitude to that height, and the
- * Greyhole tail goes to a very long decay for as long as the rise is in the air.
+ * Maximum column height can open that sample's Greyhole send. That path is off
+ * (HEIGHT_REVERB): moving Greyhole's delay with the stack was glitching playback.
+ * Diffuse grains that are rising would add their drawn altitude to that height, and the
+ * Greyhole tail would go to a very long decay for as long as the rise is in the air.
  * More ground covered opens that sample's low-pass.
  * Closer to the center of its quadrant raises that sample's pitch, up to an octave.
  * Farther from that center lowers it, down to the sample's own pitch at the corners.
@@ -30,6 +31,11 @@ function follow(current, target, dt, tau) {
 const FOOTPRINT_FULL = 0.045;
 /** Below 1, small patches stay audible while a single column stays quieter than a wide pile. */
 const FOOTPRINT_CURVE = 0.55;
+/**
+ * Pile height and rising grains open each stem's Greyhole send.
+ * Off for now: Greyhole rewrites delayTime as that send moves, and the crossfade glitches.
+ */
+const HEIGHT_REVERB = false;
 /** World-unit stack that counts as full reverb. Taller than this stays fully wet. */
 const HEIGHT_OPEN = 2.5 / 12;
 /**
@@ -160,9 +166,9 @@ export function fieldFrame(snap, dt) {
     gains,
     cutoffs,
     rates: pitches,
-    reverbs: heights,
-    decays,
-    longTails,
+    reverbs: HEIGHT_REVERB ? heights : { tl: 0, tr: 0, bl: 0, br: 0 },
+    decays: HEIGHT_REVERB ? decays : { tl: 0, tr: 0, bl: 0, br: 0 },
+    longTails: HEIGHT_REVERB ? longTails : { tl: false, tr: false, bl: false, br: false },
     pans: snap?.pans || { tl: 0, tr: 0, bl: 0, br: 0 },
     splash,
     controller: DRY_BEDS,
