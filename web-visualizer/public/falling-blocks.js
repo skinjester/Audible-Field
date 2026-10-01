@@ -75,9 +75,12 @@ let surface = null;
 let camera = null;
 let renderer = null;
 let emitter = null;
+let emitterFill = null;
+let emitterEdge = null;
+let emitterMark = null;
+let emitterStem = null;
 let groundMesh = null;
 let blockGeo = null;
-let emitterGeo = null;
 let splashGeo = null;
 let resizeObserver = null;
 let paletteEl = null;
@@ -1711,23 +1714,63 @@ function emitterBoxSize() {
 }
 
 function rebuildEmitterGeometry() {
-  if (!emitter) return;
-  emitterGeo?.dispose();
-  emitterGeo = null;
+  if (!emitterFill || !emitterEdge || !emitterMark) return;
   const size = emitterBoxSize();
-  const box = new THREE.BoxGeometry(size.x, size.y, size.z);
-  emitterGeo = new THREE.EdgesGeometry(box);
-  box.dispose();
-  emitter.geometry = emitterGeo;
+  emitterFill.geometry.dispose();
+  emitterFill.geometry = new THREE.PlaneGeometry(size.x, size.z);
+
+  const hx = size.x / 2;
+  const hz = size.z / 2;
+  const y = 0.012;
+  emitterEdge.geometry.dispose();
+  const edge = new THREE.BufferGeometry();
+  edge.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(
+      [
+        -hx, y, -hz, hx, y, -hz,
+        hx, y, -hz, hx, y, hz,
+        hx, y, hz, -hx, y, hz,
+        -hx, y, hz, -hx, y, -hz,
+      ],
+      3,
+    ),
+  );
+  emitterEdge.geometry = edge;
+
+  const arm = Math.min(0.15, Math.min(size.x, size.z) * 0.36);
+  const my = y + 0.008;
+  emitterMark.geometry.dispose();
+  const mark = new THREE.BufferGeometry();
+  mark.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(
+      [-arm, my, 0, arm, my, 0, 0, my, -arm, 0, my, arm],
+      3,
+    ),
+  );
+  emitterMark.geometry = mark;
+}
+
+function syncEmitterStem() {
+  if (!emitterStem) return;
+  const down = Math.max(0.15, emitWorldY() - 0.02);
+  const up = 0.28;
+  const pos = emitterStem.geometry.attributes.position;
+  pos.setXYZ(0, 0, up, 0);
+  pos.setXYZ(1, 0, -down, 0);
+  pos.needsUpdate = true;
 }
 
 function syncEmitter() {
   if (!emitter) return;
   const draw = emitterDrawXZ();
   emitter.position.set(draw.x, emitWorldY(), draw.z);
-  // Footprint follows the grid yaw so the box covers the cells pourBrush fills.
+  // Footprint follows the grid yaw so the plane covers the cells pourBrush fills.
   emitter.rotation.y = surface ? surface.rotation.y : 0;
-  emitter.material.opacity = emitting ? 0.9 : 0.42;
+  if (emitterFill) emitterFill.material.opacity = emitting ? 0.14 : 0.08;
+  if (emitterEdge) emitterEdge.material.opacity = emitting ? 0.95 : 0.78;
+  syncEmitterStem();
   emitter.visible = true;
 }
 
@@ -3395,38 +3438,66 @@ function initScene(nextCanvas) {
   addQuadrantAxes();
 
   blockGeo = new THREE.BoxGeometry(1, 1, 1);
-  {
-    const size = emitterBoxSize();
-    const box = new THREE.BoxGeometry(size.x, size.y, size.z);
-    emitterGeo = new THREE.EdgesGeometry(box);
-    box.dispose();
-  }
   splashGeo = new THREE.RingGeometry(atomSize * 0.55, atomSize * 0.8, 28);
 
-  emitter = new THREE.LineSegments(
-    emitterGeo,
+  const size = emitterBoxSize();
+  emitter = new THREE.Group();
+  emitterFill = new THREE.Mesh(
+    new THREE.PlaneGeometry(size.x, size.z),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.08,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.DoubleSide,
+    }),
+  );
+  emitterFill.rotation.x = -Math.PI / 2;
+  emitterFill.renderOrder = 4;
+  emitter.add(emitterFill);
+
+  emitterEdge = new THREE.LineSegments(
+    new THREE.BufferGeometry(),
     new THREE.LineBasicMaterial({
       color: 0xffffff,
       transparent: true,
-      opacity: 0.42,
+      opacity: 0.78,
       depthWrite: false,
+      depthTest: false,
     }),
   );
-  emitter.renderOrder = 2;
-  {
-    const s = 0.28;
-    const crossGeo = new THREE.BufferGeometry();
-    crossGeo.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute([-s, 0, 0, s, 0, 0, 0, 0, -s, 0, 0, s], 3),
-    );
-    const cross = new THREE.LineSegments(
-      crossGeo,
-      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }),
-    );
-    cross.renderOrder = 3;
-    emitter.add(cross);
-  }
+  emitterEdge.renderOrder = 5;
+  emitter.add(emitterEdge);
+
+  emitterMark = new THREE.LineSegments(
+    new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+      depthTest: false,
+    }),
+  );
+  emitterMark.renderOrder = 6;
+  emitter.add(emitterMark);
+
+  const stemGeo = new THREE.BufferGeometry();
+  stemGeo.setAttribute("position", new THREE.Float32BufferAttribute([0, 0.28, 0, 0, -1, 0], 3));
+  emitterStem = new THREE.LineSegments(
+    stemGeo,
+    new THREE.LineBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.7,
+      depthWrite: false,
+      depthTest: false,
+    }),
+  );
+  emitterStem.renderOrder = 5;
+  emitter.add(emitterStem);
+  rebuildEmitterGeometry();
   // World-space emitter so surface yaw spins the grid underneath it.
   scene.add(emitter);
 
