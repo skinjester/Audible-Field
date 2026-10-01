@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=40";
+import { fallingInput } from "./falling-input.js?v=43";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -1830,9 +1830,6 @@ function syncPaletteUi() {
     const on = btn.getAttribute("data-material") === activeMaterialId;
     btn.setAttribute("aria-pressed", on ? "true" : "false");
   }
-  const emit = document.querySelector("[data-falling-touch-emit]");
-  const mat = catalog?.byId.get(activeMaterialId);
-  if (emit instanceof HTMLElement && mat?.color) emit.style.setProperty("--swatch", mat.color);
 }
 
 function syncShoulderGlyphs(prevHeld, nextHeld) {
@@ -2060,6 +2057,9 @@ function applyInput(dt) {
   } else if (frame.emit) {
     brush = brushSizeFromMode(frame.brushMode, frame.analog, frame.curveInvert);
     scale = emitScaleFromMode(frame.brushMode, frame.analog, frame.curveInvert);
+  } else if (frame.emitSizing) {
+    brush = brushSizeFromTrigger(frame.analog, false);
+    scale = emitScaleFromTrigger(frame.analog, false);
   }
   const settled = emitterSizeSettled(dt, brush, scale);
   updateEmitStream(dt, frame.emit && settled);

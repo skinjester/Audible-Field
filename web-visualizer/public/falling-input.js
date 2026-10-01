@@ -15,6 +15,7 @@ import { TouchInput } from "./touch-input.js?v=2";
  *   pointerAt: { x: number, y: number } | null,
  *   aimAt: { x: number, y: number } | null,
  *   emit: boolean,
+ *   emitSizing: boolean,
  *   brushMode: BrushMode,
  *   analog: number,
  *   curveInvert: boolean,
@@ -53,10 +54,14 @@ export class FallingInput {
     /** @type {HTMLButtonElement | null} */
     this._emitButton = null;
     this._emitHeld = false;
-    /** On-screen Emit control. A vertical drag sets clump size. */
+    /** Finger is down on Emit. Pouring only while this is true and the finger has not dragged. */
     this._touchEmit = false;
+    this._emitHeldDown = false;
+    this._emitDragging = false;
+    this._emitSizeLatched = false;
     this._emitAnalog = 0.5;
     this._emitOriginY = 0;
+    this._emitDownY = 0;
     this._shiftHeld = false;
     this._altHeld = false;
     this._mouseFull = false;
@@ -158,6 +163,9 @@ export class FallingInput {
   resetTransient() {
     this._emitHeld = false;
     this._touchEmit = false;
+    this._emitHeldDown = false;
+    this._emitDragging = false;
+    this._emitSizeLatched = false;
     this._emitAnalog = 0.5;
     this._emitButton?.classList.remove("is-pressed");
     this._emitButton?.setAttribute("aria-pressed", "false");
@@ -280,6 +288,17 @@ export class FallingInput {
       analog = this._emitAnalog;
       curveInvert = false;
     }
+    const emitSizing =
+      (this._emitDragging || this._emitSizeLatched) &&
+      !this._touchEmit &&
+      !mouseEmit &&
+      !keyEmit &&
+      !rtActive &&
+      !ltActive;
+    if (emitSizing) {
+      analog = this._emitAnalog;
+      curveInvert = false;
+    }
 
     const analogActive = rtActive || ltActive;
     const emit = mouseEmit || keyEmit || digitalPad || touch.emit || analogActive || this._touchEmit;
@@ -320,6 +339,7 @@ export class FallingInput {
       pointerAt: this._pointerAt,
       aimAt: screen.active ? screen.aimAt : this._aimAt,
       emit,
+      emitSizing,
       brushMode,
       analog,
       curveInvert,
@@ -617,7 +637,11 @@ export class FallingInput {
     btn.removeEventListener("contextmenu", this._onEmitContextMenu);
     this._emitButton?.classList.remove("is-pressed");
     this._emitButton?.setAttribute("aria-pressed", "false");
-    this._paintEmitDrag(true);
+    this._emitAnalog = 0.5;
+    this._emitButton.style.transform = "";
+    this._emitButton.removeAttribute("data-drag");
+    this._emitButton.parentElement?.querySelector(".falling-emit-clump")?.classList.remove("is-lit");
+    this._emitButton.parentElement?.querySelector(".falling-emit-single")?.classList.remove("is-lit");
     this._emitButton = null;
   }
 
@@ -627,11 +651,14 @@ export class FallingInput {
   _onEmitPointerDown(event) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
     this._touchEmit = true;
-    this._emitOriginY = event.clientY;
-    this._emitAnalog = 0.5;
+    this._emitHeldDown = true;
+    this._emitDragging = false;
+    this._emitDownY = event.clientY;
+    const span = 72;
+    this._emitOriginY = event.clientY - (0.5 - this._emitAnalog) * span;
     this._emitButton?.classList.add("is-pressed");
     this._emitButton?.setAttribute("aria-pressed", "true");
-    this._paintEmitDrag(false);
+    this._paintEmitDrag();
     event.preventDefault();
     event.stopPropagation();
     this._emitButton?.setPointerCapture?.(event.pointerId);
@@ -642,26 +669,21 @@ export class FallingInput {
    * @param {PointerEvent} event
    */
   _onEmitPointerMove(event) {
-    if (!this._touchEmit) return;
+    if (!this._emitHeldDown) return;
+    if (!this._emitDragging && Math.abs(event.clientY - this._emitDownY) <= 10) return;
+    this._emitDragging = true;
+    this._emitSizeLatched = true;
+    this._touchEmit = false;
     const span = 72;
     this._emitAnalog = clamp(0.5 - (event.clientY - this._emitOriginY) / span, 0, 1);
-    this._paintEmitDrag(false);
+    this._paintEmitDrag();
   }
 
-  /**
-   * @param {boolean} [reset]
-   */
-  _paintEmitDrag(reset) {
+  /** Keep the button at the size it was dragged to. */
+  _paintEmitDrag() {
     const btn = this._emitButton;
     if (!btn) return;
     const dock = btn.parentElement;
-    if (reset || !this._touchEmit) {
-      btn.style.transform = "";
-      btn.removeAttribute("data-drag");
-      dock?.querySelector(".falling-emit-clump")?.classList.remove("is-lit");
-      dock?.querySelector(".falling-emit-single")?.classList.remove("is-lit");
-      return;
-    }
     const shift = (0.5 - this._emitAnalog) * 28;
     btn.style.transform = `translateY(${shift}px)`;
     const dir = this._emitAnalog > 0.62 ? "up" : this._emitAnalog < 0.38 ? "down" : "mid";
@@ -670,15 +692,13 @@ export class FallingInput {
     dock?.querySelector(".falling-emit-single")?.classList.toggle("is-lit", dir === "down");
   }
 
-  /**
-   * @param {PointerEvent} event
-   */
   _onEmitPointerUp() {
     this._touchEmit = false;
-    this._emitAnalog = 0.5;
+    this._emitHeldDown = false;
+    this._emitDragging = false;
     this._emitButton?.classList.remove("is-pressed");
     this._emitButton?.setAttribute("aria-pressed", "false");
-    this._paintEmitDrag(true);
+    this._paintEmitDrag();
   }
 
   /**

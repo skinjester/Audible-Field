@@ -1180,10 +1180,10 @@ button.falling-touch-emit,
     height: 84px;
     min-width: 0;
     padding: 0;
-    border: 0;
     border-radius: 50%;
-    background: var(--swatch, #c4624e);
-    color: #fff;
+    background: var(--panel);
+    color: var(--ink);
+    border: 1px solid var(--line);
     font-size: 15px;
     font-weight: 600;
     touch-action: none;
