@@ -22,6 +22,10 @@ let dropdownAnchor = null;
 let dropdownOnSelect = null;
 /** @type {object[] | null} */
 let wamCache = null;
+/** Path of the WAM currently assigned to the open slot. */
+let dropdownSelectedPath = "";
+/** Ignore the click that lands on the face button after the menu closes under the pointer. */
+let suppressAnchorClickUntil = 0;
 
 function closeFxDropdown() {
   if (dropdownOutsideHandler) {
@@ -157,6 +161,20 @@ function buildGroups(slot, plugins) {
   return groups;
 }
 
+function chooseDropdownItem(item) {
+  const cb = dropdownOnSelect;
+  suppressAnchorClickUntil = performance.now() + 400;
+  closeFxDropdown();
+  if (typeof cb === "function") cb(item);
+}
+
+/** True once, when a just-closed menu would otherwise reopen from the same tap. */
+export function consumeSuppressedFxClick() {
+  if (performance.now() >= suppressAnchorClickUntil) return false;
+  suppressAnchorClickUntil = 0;
+  return true;
+}
+
 function renderGroups(groups) {
   if (!dropdownListEl) return;
   dropdownListEl.replaceChildren();
@@ -181,15 +199,35 @@ function renderGroups(groups) {
       btn.type = "button";
       btn.className = "stem-dropdown-item";
       btn.setAttribute("role", "option");
+      const selected = !!item.path && item.path === dropdownSelectedPath;
+      if (selected) {
+        btn.classList.add("is-selected");
+        btn.setAttribute("aria-selected", "true");
+      }
       btn.textContent = item.label;
       btn.title = item.kind === "wam" ? item.path : item.label;
-      btn.addEventListener("click", (event) => {
+      let chosen = false;
+      /** @type {{ x: number, y: number, id: number } | null} */
+      let press = null;
+      const choose = (event) => {
+        if (chosen) return;
+        chosen = true;
         event.preventDefault();
         event.stopPropagation();
-        const cb = dropdownOnSelect;
-        closeFxDropdown();
-        if (typeof cb === "function") cb(item);
+        chooseDropdownItem(item);
+      };
+      btn.addEventListener("pointerdown", (event) => {
+        if (event.button != null && event.button !== 0) return;
+        press = { x: event.clientX, y: event.clientY, id: event.pointerId };
       });
+      btn.addEventListener("pointerup", (event) => {
+        if (!press || event.pointerId !== press.id) return;
+        const moved = Math.hypot(event.clientX - press.x, event.clientY - press.y);
+        press = null;
+        if (moved > 10) return;
+        choose(event);
+      });
+      btn.addEventListener("click", choose);
       dropdownListEl.appendChild(btn);
     }
   }
@@ -198,7 +236,7 @@ function renderGroups(groups) {
 
 /**
  * Open FX/WAM picker for a face-button slot.
- * @param {{ anchor: HTMLElement, slot: string, onSelect?: (choice: object) => void }} opts
+ * @param {{ anchor: HTMLElement, slot: string, selectedPath?: string, onSelect?: (choice: object) => void }} opts
  */
 export async function openFxDropdown(opts = {}) {
   const slot = opts.slot;
@@ -227,6 +265,7 @@ export async function openFxDropdown(opts = {}) {
   }
 
   dropdownOnSelect = typeof opts.onSelect === "function" ? opts.onSelect : null;
+  dropdownSelectedPath = String(opts.selectedPath || "");
   dropdownListEl.replaceChildren();
   const loading = document.createElement("p");
   loading.className = "stem-dropdown-empty";

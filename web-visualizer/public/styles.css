@@ -2214,7 +2214,8 @@ button.falling-touch-emit {
 }
 
 .stem-dropdown-item:hover,
-.stem-dropdown-item:focus-visible {
+.stem-dropdown-item:focus-visible,
+.stem-dropdown-item.is-selected {
   background: rgba(110, 231, 183, 0.16);
   color: var(--live);
   outline: none;

@@ -441,7 +441,7 @@ function listingFromCatalog(groups, relPath) {
  */
 export async function openStemDropdown(opts = {}) {
   ensureDropdownDom();
-  const { closeFxDropdown } = await import("./fx-picker.js?v=5");
+  const { closeFxDropdown } = await import("./fx-picker.js?v=6");
   closeFxDropdown();
 
   // Toggle closed if the same slot is already open.

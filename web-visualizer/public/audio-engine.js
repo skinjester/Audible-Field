@@ -26,7 +26,7 @@ import {
   resolveStickBinding,
   applyWamDefaults,
   applyStickToWamParams,
-} from "./wam-host.js?v=7";
+} from "./wam-host.js?v=8";
 import {
   NATIVE_FX,
   DEFAULT_STICK_SCALE,
@@ -183,6 +183,18 @@ function saveFxPrefs(payload) {
     localStorage.setItem(FX_STORAGE_KEY, JSON.stringify(payload));
   } catch (err) {
     console.warn("[EchoScape] could not save FX prefs:", err);
+  }
+}
+
+/** Drop a previous mono explicit mode so the next insert can connect. */
+function relaxInsertChannels(node) {
+  if (!node) return;
+  try {
+    node.channelCountMode = "max";
+    node.channelCount = 2;
+    node.channelInterpretation = "speakers";
+  } catch {
+    /* some nodes refuse a channel-count change while connected */
   }
 }
 
@@ -397,6 +409,7 @@ export class EchoScapeAudioEngine {
     await this._playAll();
     await this._safeResume(300);
     void this._loadStemReverbs();
+    void this._loadHall();
 
     // Restore WAMs after audible beds are up (best-effort, time-boxed).
     try {
@@ -1154,6 +1167,8 @@ export class EchoScapeAudioEngine {
     } else {
       await this.resume();
     }
+    if (!this._fxUserSlots) this._fxUserSlots = new Set();
+    this._fxUserSlots.add(button);
     const assigned = await this._assignFxSlot(button, choice);
     this._persistFxPrefs();
     return assigned;
@@ -1223,7 +1238,7 @@ export class EchoScapeAudioEngine {
             label: String(choice.label || choice.path),
             path: String(choice.path),
           },
-          { activate: false }
+          { activate: false, restore: true }
         );
         restored.push(slot);
       } catch (err) {
@@ -1235,6 +1250,7 @@ export class EchoScapeAudioEngine {
     }
 
     if (!restored.length) return;
+    if (this._fxUserSlots?.size) return;
 
     const preferred = prefs.activeFx;
     const face = FX_PICK_SLOTS.includes(preferred)
@@ -1254,11 +1270,34 @@ export class EchoScapeAudioEngine {
   }
 
   /**
+   * One assign at a time per face. A saved-pref restore that is still in
+   * flight must not finish after a dropdown choice and put the old WAM back.
    * @param {string} button
    * @param {{ id: string, kind: 'native'|'wam', label: string, path?: string }} choice
-   * @param {{ activate?: boolean }} [opts] activate — select this face after assign (default true for WAM)
+   * @param {{ activate?: boolean, restore?: boolean }} [opts]
    */
-  async _assignFxSlot(button, choice, opts = {}) {
+  _assignFxSlot(button, choice, opts = {}) {
+    if (!this._fxAssignTail) this._fxAssignTail = {};
+    const prev = this._fxAssignTail[button] || Promise.resolve();
+    const run = prev.catch(() => undefined).then(async () => {
+      if (opts.restore && this._fxUserSlots?.has(button)) {
+        return this.fxAssignment?.[button];
+      }
+      return this._assignFxSlotBody(button, choice, opts);
+    });
+    this._fxAssignTail[button] = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  /**
+   * @param {string} button
+   * @param {{ id: string, kind: 'native'|'wam', label: string, path?: string }} choice
+   * @param {{ activate?: boolean, restore?: boolean }} [opts] activate — select this face after assign (default true for WAM)
+   */
+  async _assignFxSlotBody(button, choice, opts = {}) {
     if (!FX_IDS.includes(button)) throw new Error(`Unknown FX slot ${button}`);
     if (!choice?.kind) throw new Error("replaceFx requires choice.kind");
     if (button === "cross" && choice.kind === "wam") {
@@ -1282,6 +1321,7 @@ export class EchoScapeAudioEngine {
       /* ignore */
     }
     slot.teardownNative = null;
+    relaxInsertChannels(insertIn);
 
     if (choice.kind === "wam") {
       const path = choice.path;
@@ -1481,6 +1521,11 @@ export class EchoScapeAudioEngine {
     tone.type = "lowpass";
     tone.frequency.value = 20000;
     tone.Q.value = 0.7;
+    const body = this.ctx.createBiquadFilter();
+    body.type = "peaking";
+    body.frequency.value = 1200;
+    body.Q.value = 0.9;
+    body.gain.value = 0;
     const weights = equalPowerMix(mixerState.x, mixerState.y);
     const initialGain =
       typeof opts.initialGain === "number" ? opts.initialGain : weights[corner] ?? 0;
@@ -1489,10 +1534,13 @@ export class EchoScapeAudioEngine {
     source.connect(gain);
     gain.connect(mono);
     mono.connect(pan);
-    pan.connect(tone);
+    pan.connect(body);
+    body.connect(tone);
     tone.connect(this._sum);
     const reverbSend = this._stemReverbs?.[corner]?.send;
     if (reverbSend) tone.connect(reverbSend);
+    const hallSend = this._hallSends?.[corner];
+    if (hallSend) pan.connect(hallSend);
 
     if (prev) {
       this._releaseStrikes(prev);
@@ -1517,6 +1565,11 @@ export class EchoScapeAudioEngine {
         /* ignore */
       }
       try {
+        prev.body?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      try {
         prev.tone?.disconnect();
       } catch {
         /* ignore */
@@ -1535,7 +1588,7 @@ export class EchoScapeAudioEngine {
       }
     }
 
-    this.stems[corner] = { el, source, gain, mono, pan, tone, meta, strikes: [] };
+    this.stems[corner] = { el, source, gain, mono, pan, body, tone, meta, strikes: [] };
     this._primeStrikeBuffer(corner, url);
 
     el.volume = 1;
@@ -1694,6 +1747,62 @@ export class EchoScapeAudioEngine {
   }
 
   /**
+   * One shared hall. Each bed has its own send.
+   * Microverb's room samples are not in the project, and its generated tail
+   * was too quiet to read as height, so this is a native convolver with a
+   * softened noise room turned up enough to hear.
+   * The send is taken before the mid bump, so rising grains do not resonate.
+   */
+  async _loadHall() {
+    if (this._hall || !this.ctx || !this._sum) return;
+    this._hallSends = {};
+    const ctx = this.ctx;
+    const input = ctx.createGain();
+    input.gain.value = 1;
+    const verb = this._createShoulderReverb();
+    const damp = ctx.createBiquadFilter();
+    damp.type = "lowpass";
+    damp.frequency.value = 6500;
+    damp.Q.value = 0.5;
+    const ret = ctx.createGain();
+    ret.gain.value = 0.85;
+    input.connect(verb);
+    verb.connect(damp);
+    damp.connect(ret);
+    ret.connect(this._sum);
+    this._hall = { input, verb, ret };
+    for (const corner of CORNERS) {
+      const send = ctx.createGain();
+      send.gain.value = 0;
+      const stem = this.stems[corner];
+      if (stem?.pan) stem.pan.connect(send);
+      send.connect(input);
+      this._hallSends[corner] = send;
+    }
+  }
+
+  /**
+   * Pile body. `halls` is the hall send (resting stack or rising grains).
+   * `resonances` is a mid bump on the dry bed from the resting stack only.
+   * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} halls
+   * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} resonances
+   */
+  setPileBody(halls, resonances) {
+    if (!this.running) return;
+    for (const corner of CORNERS) {
+      const send = this._hallSends?.[corner];
+      if (send) {
+        const level = Math.min(1, Math.max(0, Number(halls?.[corner]) || 0));
+        send.gain.value = level;
+      }
+      const body = this.stems[corner]?.body;
+      if (!body) continue;
+      const amount = Math.min(1, Math.max(0, Number(resonances?.[corner]) || 0));
+      body.gain.value = amount * 9;
+    }
+  }
+
+  /**
    * One Greyhole per bed. Height opens that channel's send; the tail stays on that sample.
    */
   async _loadStemReverbs() {
@@ -1710,20 +1819,61 @@ export class EchoScapeAudioEngine {
         send.channelInterpretation = "speakers";
         const ret = this.ctx.createGain();
         // Same wet level as the diagnostics face slot (wet bus at 0.45).
-        ret.gain.value = 0.45;
+        ret.gain.value = 0.5;
         const stem = this.stems[corner];
         if (stem?.tone) stem.tone.connect(send);
         send.connect(node);
         node.connect(ret);
         ret.connect(this._sum);
-        this._applyGreyholeHeight(node, 0);
-        this._stemReverbs[corner] = { instance, send, ret, node, applied: -1, longTail: false };
+        this._applyAiryGreyhole(node);
+        this._stemReverbs[corner] = { instance, send, ret, node, applied: 1, longTail: false, hold: true };
       } catch (err) {
         console.warn(`[EchoScape audio] Greyhole failed for ${corner}:`, err?.message || err);
       }
     }
     const loaded = Object.keys(this._stemReverbs);
     if (loaded.length) console.info("[EchoScape audio] Greyhole per stem", loaded.join(", "));
+  }
+
+  /**
+   * Fixed Greyhole for rising Diffuse grains.
+   * Size and delay stay put. Moving them crossfades the long buffer and glitches.
+   * @param {{ setParamValue?: Function }} node
+   */
+  _applyAiryGreyhole(node) {
+    if (!node?.setParamValue) return;
+    const delay = Math.min(1.05, this._greyholeDelayCeil() * 0.92);
+    const targets = {
+      "/greyhole/bypass": 0,
+      "/greyhole/damping": 0.1,
+      "/greyhole/modDepth": 0.16,
+      "/greyhole/modFreq": 0.3,
+      "/greyhole/size": 2.75,
+      "/greyhole/delayTime": delay,
+      "/greyhole/feedback": 0.86,
+      "/greyhole/diffusion": 0.94,
+    };
+    for (const [name, value] of Object.entries(targets)) {
+      try {
+        node.setParamValue(name, value);
+      } catch {
+        /* param name differs */
+      }
+    }
+  }
+
+  /**
+   * Greyhole send for rising Diffuse grains. Delay time and size are not touched.
+   * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} levels
+   */
+  setDiffuseGreyhole(levels) {
+    if (!this.running || !this._stemReverbs) return;
+    for (const corner of CORNERS) {
+      const rec = this._stemReverbs[corner];
+      if (!rec?.send) continue;
+      const level = Math.min(1, Math.max(0, Number(levels?.[corner]) || 0));
+      rec.send.gain.value = level;
+    }
   }
 
   /**
@@ -1799,6 +1949,7 @@ export class EchoScapeAudioEngine {
     for (const corner of CORNERS) {
       const rec = this._stemReverbs[corner];
       if (!rec?.send) continue;
+      if (rec.hold) continue;
       const level = Math.min(1, Math.max(0, Number(levels?.[corner]) || 0));
       const decay = Math.min(1, Math.max(0, Number(decays?.[corner] ?? level) || 0));
       const longTail = Boolean(longTails?.[corner]);

@@ -3645,11 +3645,12 @@ function planeViewportPan() {
  * `rise` is the drawn altitude of grains that are climbing (diffuse blow), in world units.
  * That climb is included in `peak` and `height`, so the height parameter goes up as they lift.
  */
-function quadAudio(cells, peak, rise, pitchSum, quadCells) {
+function quadAudio(cells, peak, rise, stack, pitchSum, quadCells) {
   const top = Math.max(peak, rise);
   return {
     coverage: cells / quadCells,
     height: Math.min(1, Math.max(0, top / EMIT_HEIGHT_MAX_U)),
+    stack: Math.min(1, Math.max(0, stack / EMIT_HEIGHT_MAX_U)),
     cells,
     peak: top,
     rise,
@@ -3704,6 +3705,8 @@ function captureAudioSnapshot(dt) {
   const peak = { tl: 0, tr: 0, bl: 0, br: 0 };
   /** Highest drawn altitude of grains that are currently rising, world units. */
   const risePeak = { tl: 0, tr: 0, bl: 0, br: 0 };
+  /** Tallest resting column, world units. Rising grains are not included. */
+  const stackPeak = { tl: 0, tr: 0, bl: 0, br: 0 };
   const panSum = { tl: 0, tr: 0, bl: 0, br: 0 };
   const pitchSum = { tl: 0, tr: 0, bl: 0, br: 0 };
   const activity = emptyActivity();
@@ -3717,6 +3720,7 @@ function captureAudioSnapshot(dt) {
       const id = colX < mid ? (colZ < mid ? "tl" : "bl") : (colZ < mid ? "tr" : "br");
       let n = 0;
       let top = 0;
+      let stackTop = 0;
       for (let k = 0; k < list.length; k += 1) {
         const i = list[k];
         if (cells[i] <= 0 || !materialSonifies(cells[i])) continue;
@@ -3726,8 +3730,10 @@ function captureAudioSnapshot(dt) {
         const yCenter = posY[i] > 0 ? posY[i] : half;
         // Rising grains (diffuse blow) count at the height they are drawn, not the cell they left.
         const lift = (riseT?.[i] || 0) > 0 ? riseOffset(decoded.x, decoded.y, decoded.z) : 0;
-        const tip = yCenter + half + lift;
+        const restTip = yCenter + half;
+        const tip = restTip + lift;
         if (tip > top) top = tip;
+        if (lift <= 0 && restTip > stackTop) stackTop = restTip;
         if (lift > 0 && tip > risePeak[id]) risePeak[id] = tip;
       }
       if (top > maxTop) maxTop = top;
@@ -3735,6 +3741,7 @@ function captureAudioSnapshot(dt) {
       if (n > 0) {
         fp[id] += 1;
         if (top > peak[id]) peak[id] = top;
+        if (stackTop > stackPeak[id]) stackPeak[id] = stackTop;
         const colXw = worldXForCell(colX, ATOM_SIZE);
         const colZw = worldZForCell(colZ, ATOM_SIZE);
         panSum[id] += screenPan(colXw, colZw, yaw);
@@ -3808,10 +3815,10 @@ function captureAudioSnapshot(dt) {
     weight: sumW,
     mass: count,
     quads: {
-      tl: quadAudio(fp.tl, peak.tl, risePeak.tl, pitchSum.tl, quadCells),
-      tr: quadAudio(fp.tr, peak.tr, risePeak.tr, pitchSum.tr, quadCells),
-      bl: quadAudio(fp.bl, peak.bl, risePeak.bl, pitchSum.bl, quadCells),
-      br: quadAudio(fp.br, peak.br, risePeak.br, pitchSum.br, quadCells),
+      tl: quadAudio(fp.tl, peak.tl, risePeak.tl, stackPeak.tl, pitchSum.tl, quadCells),
+      tr: quadAudio(fp.tr, peak.tr, risePeak.tr, stackPeak.tr, pitchSum.tr, quadCells),
+      bl: quadAudio(fp.bl, peak.bl, risePeak.bl, stackPeak.bl, pitchSum.bl, quadCells),
+      br: quadAudio(fp.br, peak.br, risePeak.br, stackPeak.br, pitchSum.br, quadCells),
     },
     activity,
     pans: {

@@ -1,10 +1,9 @@
 /**
  * Quadrant sonification.
  * Footprint (ground cells occupied) sets each sample's level.
- * Maximum column height can open that sample's Greyhole send. That path is off
- * (HEIGHT_REVERB): moving Greyhole's delay with the stack was glitching playback.
- * Diffuse grains that are rising would add their drawn altitude to that height, and the
- * Greyhole tail would go to a very long decay for as long as the rise is in the air.
+ * Stack height sweeps a resonant peak up the dry bed, so a taller pile sounds like it is growing.
+ * Rising Diffuse grains open that bed's Greyhole send. Delay time and size stay fixed.
+ * Greyhole stays closed: moving its delay with the stack was glitching playback.
  * More ground covered opens that sample's low-pass.
  * Closer to the center of its quadrant raises that sample's pitch, up to an octave.
  * Farther from that center lowers it, down to the sample's own pitch at the corners.
@@ -67,6 +66,12 @@ const longTails = { tl: false, tr: false, bl: false, br: false };
 /** Holds the long tail after rising grains have cleared. */
 const riseLatch = { tl: false, tr: false, bl: false, br: false };
 const pitches = { tl: 1, tr: 1, bl: 1, br: 1 };
+/** 0..1 short hall from the resting stack. */
+const halls = { tl: 0, tr: 0, bl: 0, br: 0 };
+/** 0..1 mid bump from the resting stack. Rising grains do not move this. */
+const resonances = { tl: 0, tr: 0, bl: 0, br: 0 };
+/** 0..1 Greyhole send from rising Diffuse grains. The resting stack does not open it. */
+const diffuses = { tl: 0, tr: 0, bl: 0, br: 0 };
 let gen = -1;
 
 function hitLife(hit) {
@@ -101,6 +106,9 @@ export function resetFieldSonify() {
     decays[id] = 0;
     riseLatch[id] = false;
     pitches[id] = 1;
+    halls[id] = 0;
+    resonances[id] = 0;
+    diffuses[id] = 0;
   }
   gen = -1;
 }
@@ -117,12 +125,11 @@ export function fieldFrame(snap, dt) {
     const coverage = clamp01(quad.coverage);
     const height = clamp01(quad.height);
     const gainTarget = footprintGain(coverage);
-    const stackOpen = coverage <= 0 ? 0 : clamp01(height / HEIGHT_OPEN);
+    const stackNorm = clamp01(Number.isFinite(Number(quad.stack)) ? quad.stack : height);
+    const stackOpen = coverage <= 0 ? 0 : clamp01(Math.pow(stackNorm / HEIGHT_OPEN, 0.45));
     const riseTip = Math.max(0, Number(quad.rise) || 0);
     const rising = riseTip > 0;
-    // Rising altitude is the height parameter: the send opens as those grains climb.
-    // A gentle curve so the first lift already raises the height parameter, then the climb fills it.
-    const riseOpen = rising ? clamp01(Math.pow(riseTip / RISE_FULL, 0.55)) : 0;
+    const riseOpen = rising ? clamp01(Math.pow(riseTip / RISE_FULL, 0.4)) : 0;
     const reverbTarget = Math.max(stackOpen, riseOpen);
     if (rising) riseLatch[id] = true;
     let decayTarget = reverbTarget;
@@ -139,6 +146,9 @@ export function fieldFrame(snap, dt) {
     gains[id] = gainTarget <= 0 ? 0 : follow(gains[id], gainTarget, dt, 0.08);
     heights[id] = reverbTarget <= 0 ? 0 : follow(heights[id], reverbTarget, dt, rising ? 0.12 : 0.25);
     decays[id] = follow(decays[id], decayTarget, dt, decayTau);
+    halls[id] = 0;
+    resonances[id] = stackOpen <= 0 ? 0 : follow(resonances[id], stackOpen, dt, 0.2);
+    diffuses[id] = riseOpen <= 0 ? 0 : follow(diffuses[id], riseOpen, dt, rising ? 0.12 : 0.35);
     cutoffs[id] = cutoffHz(gains[id]);
     const rateTarget = Number(quad.rate);
     const nextRate = Number.isFinite(rateTarget) && rateTarget > 0 ? rateTarget : 1;
@@ -169,6 +179,9 @@ export function fieldFrame(snap, dt) {
     reverbs: HEIGHT_REVERB ? heights : { tl: 0, tr: 0, bl: 0, br: 0 },
     decays: HEIGHT_REVERB ? decays : { tl: 0, tr: 0, bl: 0, br: 0 },
     longTails: HEIGHT_REVERB ? longTails : { tl: false, tr: false, bl: false, br: false },
+    halls,
+    resonances,
+    diffuses,
     pans: snap?.pans || { tl: 0, tr: 0, bl: 0, br: 0 },
     splash,
     controller: DRY_BEDS,
