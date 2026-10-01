@@ -1,4 +1,4 @@
-import { audioEngine } from "./audio-engine.js?v=49";
+import { audioEngine } from "./audio-engine.js?v=51";
 import {
   clearBoard,
   hideFallingBlocks,
@@ -104,7 +104,8 @@ export function hide() {
   if (!deps) return;
   void deps.enqueueAudio(async () => {
     if (deps.getActiveTab() === "falling-blocks") return;
-    if (!(audioEngine.running && audioEngine.ctx?.state === "suspended")) return;
+    const state = audioEngine.ctx?.state;
+    if (!(audioEngine.running && (state === "suspended" || state === "interrupted"))) return;
     await audioEngine.ensurePlaying();
     deps.setStatus(audioEngine.running ? "audio" : "offline", deps.browserStatusLabel());
   });

@@ -13,7 +13,7 @@ import {
   state,
   STEM_CORNERS,
 } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=49";
+import { audioEngine } from "./audio-engine.js?v=51";
 import { DualsenseHid } from "./dualsense-hid.js?v=5";
 import { openStemDropdown } from "./sample-picker.js?v=18";
 import { openFxDropdown } from "./fx-picker.js?v=5";
@@ -33,6 +33,7 @@ const sourceEl = root?.querySelector("[data-source]");
 const xEl = root?.querySelector("[data-x]");
 const yEl = root?.querySelector("[data-y]");
 const dpadEl = root?.querySelector("[data-dpad]");
+const audioDetailEl = root?.querySelector("[data-audio-detail]");
 const fxActiveEl = root?.querySelector("[data-fx-active]");
 const stickRawXEl = root?.querySelector("[data-stick-raw-x]");
 const stickRawYEl = root?.querySelector("[data-stick-raw-y]");
@@ -384,7 +385,14 @@ function setDpadLabel() {
   if (dpadEl) dpadEl.textContent = controller.dpadDir || "—";
 }
 
+function paintAudioDetail() {
+  if (!audioDetailEl) return;
+  const text = audioEngine.audioHealthLabel();
+  if (audioDetailEl.textContent !== text) audioDetailEl.textContent = text;
+}
+
 export function renderDiagnostics() {
+  paintAudioDetail();
   if (!cursor || !crosshairX || !crosshairY) return;
 
   cursor.style.left = `${state.x * 100}%`;

@@ -1,5 +1,6 @@
 const http = require("http");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const HTTP_PORT = Number(process.env.PORT) || 8080;
@@ -102,7 +103,23 @@ if (!fs.existsSync(path.join(DIST_DIR, "index.html"))) {
   process.exit(1);
 }
 
-httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
+function lanAddresses() {
+  const addresses = [];
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const addr of addrs || []) {
+      const v4 = addr.family === "IPv4" || addr.family === 4;
+      if (v4 && !addr.internal && !addr.address.startsWith("169.254.")) {
+        addresses.push(addr.address);
+      }
+    }
+  }
+  return addresses;
+}
+
+httpServer.listen(HTTP_PORT, "0.0.0.0", () => {
   console.log(`EchoScape mixer viz`);
-  console.log(`  Web app      http://127.0.0.1:${HTTP_PORT}`);
+  console.log(`  This machine  http://127.0.0.1:${HTTP_PORT}`);
+  for (const address of lanAddresses()) {
+    console.log(`  On your LAN   http://${address}:${HTTP_PORT}`);
+  }
 });

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=189" />
+    <link rel="stylesheet" href="/styles.css?v=190" />
     <script type="importmap">
       {
         "imports": {
@@ -29,6 +29,7 @@
             <span class="status-sep" aria-hidden="true">•</span>
             <span data-status-pad class="is-off">DualSense</span>
           </p>
+          <p class="audio-health" data-audio-health>—</p>
           <h1>Audible Field</h1>
         </div>
       </header>
@@ -107,6 +108,10 @@
                 <div>
                   <dt>D-pad</dt>
                   <dd data-dpad>—</dd>
+                </div>
+                <div class="readout-wide">
+                  <dt>Audio</dt>
+                  <dd data-audio-detail>—</dd>
                 </div>
               </dl>
             </aside>
@@ -565,6 +570,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=362"></script>
+    <script type="module" src="/app.js?v=364"></script>
   </body>
 </html>

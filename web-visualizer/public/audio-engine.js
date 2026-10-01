@@ -74,8 +74,21 @@ function strikeRate(hit) {
   return Math.min(4, Math.max(0.25, rate));
 }
 
-/** Concurrent landing repeats per quadrant. Each one lasts the ground-ring lifetime. */
-const STRIKE_VOICES = 24;
+/** Phone-class pointer: coarse primary pointer and a touch screen. */
+function isCoarseTouch() {
+  const coarse = window.matchMedia?.("(pointer: coarse)")?.matches === true;
+  const touch = (navigator.maxTouchPoints || 0) > 0;
+  return coarse && touch;
+}
+
+/**
+ * Concurrent landing repeats per quadrant. Each one lasts the ground-ring lifetime.
+ * A phone speaker does not need the desktop pool, and 24 × 4 voices is a heavy
+ * Web Audio graph for iOS Safari.
+ */
+function strikeVoiceCap() {
+  return isCoarseTouch() ? 8 : 24;
+}
 
 /**
  * How many repeats this burst should start.
@@ -91,7 +104,12 @@ function strikePlan(count, room) {
   const free = Math.max(0, room | 0);
   if (n <= free) return n;
   const spread = Math.min(n, Math.max(1, Math.round(Math.log2(n) + 2)));
-  return Math.min(STRIKE_VOICES, Math.max(free, spread));
+  return Math.min(strikeVoiceCap(), Math.max(free, spread));
+}
+
+/** Safari uses "interrupted" after a lock, a call, or a backgrounded tab. */
+function contextNeedsResume(ctx) {
+  return !!ctx && (ctx.state === "suspended" || ctx.state === "interrupted");
 }
 
 /**
@@ -258,6 +276,8 @@ export class EchoScapeAudioEngine {
     this._comp = null;
     this._l1Held = false;
     this._r1Held = false;
+    /** @type {AudioContext | null} */
+    this._watchedCtx = null;
     /** @type {'pending' | 'wam' | 'native'} */
     this.circleFxMode = "pending";
     /** @type {Record<string, { id: string, label: string, kind: string, path?: string }>} */
@@ -291,6 +311,7 @@ export class EchoScapeAudioEngine {
     }
 
     if (!this.ctx || this.ctx.state === "closed") this.ctx = new AC();
+    this._watchContext(this.ctx);
     // Outside a user gesture, some Chromium builds never resolve resume().
     await this._safeResume(300);
 
@@ -408,6 +429,15 @@ export class EchoScapeAudioEngine {
     return this;
   }
 
+  /** Log context transitions once per AudioContext instance. */
+  _watchContext(ctx) {
+    if (!ctx || ctx === this._watchedCtx) return;
+    this._watchedCtx = ctx;
+    ctx.addEventListener("statechange", () => {
+      console.info("[EchoScape audio] AudioContext:", ctx.state);
+    });
+  }
+
   /** Resume without hanging when autoplay policy blocks the promise. */
   async _safeResume(timeoutMs = 300) {
     if (!this.ctx || this.ctx.state === "running") return;
@@ -434,6 +464,7 @@ export class EchoScapeAudioEngine {
   beginGesture() {
     const AC = window.AudioContext || window.webkitAudioContext;
     if ((!this.ctx || this.ctx.state === "closed") && AC) this.ctx = new AC();
+    this._watchContext(this.ctx);
     const poke = () => {
       for (const corner of CORNERS) {
         const wired = this.stems[corner]?.el;
@@ -447,11 +478,95 @@ export class EchoScapeAudioEngine {
       }
     };
     poke();
-    if (this.ctx && this.ctx.state === "suspended") {
+    if (contextNeedsResume(this.ctx)) {
       void this.ctx.resume().then(() => {
         if (navigator.userActivation?.isActive) poke();
       });
     }
+  }
+
+  /**
+   * Bring sound back after the page returns to the foreground.
+   * An interrupted or suspended context gets Safari's suspend-then-resume.
+   * A context that stayed running only restarts beds that actually paused.
+   */
+  async recoverForeground() {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state === "closed") return;
+    if (contextNeedsResume(ctx)) {
+      try {
+        await ctx.suspend();
+      } catch {
+        /* an interrupted context may reject suspend */
+      }
+      try {
+        await ctx.resume();
+      } catch {
+        /* the next tap retries */
+      }
+      this.beginGesture();
+      return;
+    }
+    if (ctx.state === "running") this._pokePausedBeds();
+  }
+
+  /** Restart bed elements that stopped while the context kept running. */
+  _pokePausedBeds() {
+    for (const corner of CORNERS) {
+      const wired = this.stems[corner]?.el;
+      if (wired) {
+        if (wired.paused) this._playEl(wired, true);
+        continue;
+      }
+      const pending = this._pendingEls[corner];
+      if (pending?.paused) this._playEl(pending, false);
+    }
+  }
+
+  /**
+   * Snapshot for the header and Diagnostics readout.
+   * WAM count is plugins in the graph, not the catalog total.
+   */
+  audioHealth() {
+    /** @type {Record<string, string>} */
+    const beds = {};
+    /** @type {Record<string, number>} */
+    const strikes = {};
+    let bedsPlaying = 0;
+    let strikeTotal = 0;
+    for (const corner of CORNERS) {
+      const el = this.stems[corner]?.el || this._pendingEls[corner] || null;
+      const bed = !el ? "missing" : el.paused ? "paused" : "playing";
+      beds[corner] = bed;
+      if (bed === "playing") bedsPlaying += 1;
+      const count = this.stems[corner]?.strikes?.length || 0;
+      strikes[corner] = count;
+      strikeTotal += count;
+    }
+    return {
+      state: this.ctx?.state || "none",
+      sampleRate: this.ctx?.sampleRate || 0,
+      beds,
+      bedsPlaying,
+      strikes,
+      strikeTotal,
+      strikeCap: strikeVoiceCap(),
+      wams: this.loadedWamCount(),
+    };
+  }
+
+  /** One line: rate, context, beds, strike voices, cap, loaded WAMs. */
+  audioHealthLabel() {
+    const health = this.audioHealth();
+    const khz = health.sampleRate ? `${Math.round(health.sampleRate / 1000)} kHz` : "—";
+    const strikes = CORNERS.map((corner) => health.strikes[corner]).join(" ");
+    const quiet = CORNERS.filter((corner) => health.beds[corner] !== "playing");
+    const beds = !quiet.length
+      ? "beds 4/4"
+      : quiet.every((corner) => health.beds[corner] === "missing")
+        ? `beds ${health.bedsPlaying}/4`
+        : `beds ${health.bedsPlaying}/4 ${quiet.map((corner) => `${corner} ${health.beds[corner]}`).join(" ")}`;
+    return `${khz} · ${health.state} · ${beds} · strikes ${strikes} · cap ${health.strikeCap} · WAMs ${health.wams}`;
   }
 
   async ensurePlaying() {
@@ -1592,7 +1707,7 @@ export class EchoScapeAudioEngine {
         node.connect(ret);
         ret.connect(this._sum);
         this._applyGreyholeHeight(node, 0);
-        this._stemReverbs[corner] = { instance, send, node, applied: -1 };
+        this._stemReverbs[corner] = { instance, send, ret, node, applied: -1, longTail: false };
       } catch (err) {
         console.warn(`[EchoScape audio] Greyhole failed for ${corner}:`, err?.message || err);
       }
@@ -1602,31 +1717,58 @@ export class EchoScapeAudioEngine {
   }
 
   /**
+   * greyhole.dsp stores the main echo in de.sdelay(65536, 22050, …).
+   * delayTime is in seconds, then multiplied by the sample rate and clamped
+   * to 65533. A 1.45s time at 48 kHz lands on the end of that buffer, and the
+   * 22050-sample crossfade glitches for as long as delayTime keeps moving.
+   * Stay a full crossfade inside the buffer.
+   */
+  _greyholeDelayCeil() {
+    const rate = this.ctx?.sampleRate || 48000;
+    const samples = 65536 - 22050 - 64;
+    return Math.min(1.45, Math.max(0.2, samples / rate));
+  }
+
+  /**
    * Match the diagnostics Square Grey Hole. Stick scales 2.6 and 3.8 pin
    * center-stick to the top of size, delayTime, feedback, and diffusion.
    * Height 1 is that setting. Shorter stacks move toward it.
-   * A rising tail sits on the longest delay and size, with feedback just under runaway
-   * so the bloom decays over a few minutes instead of holding forever.
+   * A rising tail holds a long feedback bloom. On a phone that bloom stays
+   * inside a lighter size and feedback so four Greyholes are not pinned
+   * at the densest setting for the whole rise.
+   * @param {number} height01
+   * @param {boolean} longTail
+   */
+  _greyholeTargets(height01, longTail) {
+    const h = Math.min(1, Math.max(0, Number(height01) || 0));
+    const shaped = longTail ? Math.min(1, 0.82 + 0.18 * h) : h;
+    const mobileTail = longTail && isCoarseTouch();
+    const feedbackCeil = longTail ? (mobileTail ? 0.92 : 0.98) : 1;
+    const sizeMax = mobileTail ? 2 : 3;
+    const diffusion = (mobileTail ? 0.72 : 0.99) * shaped;
+    return {
+      "/greyhole/bypass": 0,
+      "/greyhole/damping": 0,
+      "/greyhole/modDepth": mobileTail ? 0 : 0.1,
+      "/greyhole/modFreq": 2,
+      "/greyhole/size": 0.5 + (sizeMax - 0.5) * shaped,
+      "/greyhole/delayTime": Math.min(0.001 + (1.45 - 0.001) * shaped, this._greyholeDelayCeil()),
+      "/greyhole/feedback": Math.min(feedbackCeil, longTail ? shaped : h),
+      "/greyhole/diffusion": diffusion,
+    };
+  }
+
+  /**
    * @param {{ setParamValue?: Function }} node
    * @param {number} height01
    * @param {boolean} [longTail]
+   * @param {boolean} [moveDelays] When false, leave delayTime and size where they are.
    */
-  _applyGreyholeHeight(node, height01, longTail = false) {
+  _applyGreyholeHeight(node, height01, longTail = false, moveDelays = true) {
     if (!node?.setParamValue) return;
-    const h = Math.min(1, Math.max(0, Number(height01) || 0));
-    const shaped = longTail ? Math.min(1, 0.82 + 0.18 * h) : h;
-    const feedback = longTail ? Math.min(0.98, shaped) : h;
-    const pairs = [
-      ["/greyhole/bypass", 0],
-      ["/greyhole/damping", 0],
-      ["/greyhole/modDepth", 0.1],
-      ["/greyhole/modFreq", 2],
-      ["/greyhole/size", 0.5 + (3 - 0.5) * shaped],
-      ["/greyhole/delayTime", 0.001 + (1.45 - 0.001) * shaped],
-      ["/greyhole/feedback", feedback],
-      ["/greyhole/diffusion", 0.99 * shaped],
-    ];
-    for (const [name, value] of pairs) {
+    const targets = this._greyholeTargets(height01, longTail);
+    for (const [name, value] of Object.entries(targets)) {
+      if (!moveDelays && (name === "/greyhole/delayTime" || name === "/greyhole/size")) continue;
       try {
         node.setParamValue(name, value);
       } catch {
@@ -1651,10 +1793,19 @@ export class EchoScapeAudioEngine {
       const decay = Math.min(1, Math.max(0, Number(decays?.[corner] ?? level) || 0));
       const longTail = Boolean(longTails?.[corner]);
       rec.send.gain.value = level;
-      if (Math.abs(decay - rec.applied) < 0.01 && rec.longTail === longTail) continue;
+      if (rec.ret) {
+        const wet = isCoarseTouch() && longTail ? 0.28 : 0.45;
+        if (Math.abs(rec.ret.gain.value - wet) > 0.001) rec.ret.gain.value = wet;
+      }
+      // delayTime and size move a 65536-sample crossfade. The diffuse tail
+      // slews for about 14s, so those two stay put until the tail starts or ends.
+      // Feedback still steps down with the decay, which is what lets the bloom release.
+      const step = longTail ? 0.12 : 0.04;
+      const entered = rec.longTail !== longTail;
+      if (!entered && Math.abs(decay - rec.applied) < step) continue;
       rec.applied = decay;
       rec.longTail = longTail;
-      this._applyGreyholeHeight(rec.node, decay, longTail);
+      this._applyGreyholeHeight(rec.node, decay, longTail, entered || !longTail);
     }
   }
 
@@ -1787,9 +1938,10 @@ export class EchoScapeAudioEngine {
     if (!stem.strikes) stem.strikes = [];
     const audible = lives.filter((hit) => strikeLife(hit) > 0);
     const active = stem.strikes.length;
-    const want = strikePlan(audible.length, STRIKE_VOICES - active);
+    const cap = strikeVoiceCap();
+    const want = strikePlan(audible.length, cap - active);
     if (want <= 0) return;
-    const overflow = active + want - STRIKE_VOICES;
+    const overflow = active + want - cap;
     if (overflow > 0) {
       const oldest = stem.strikes.slice(0, overflow);
       for (const strike of oldest) this._releaseStrike(stem, strike);

@@ -89,6 +89,15 @@ body {
   letter-spacing: 0;
 }
 
+.audio-health {
+  margin: 2px 0 4px;
+  font-size: 10px;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .kicker {
   margin: 0 0 2px;
   letter-spacing: 0.18em;
@@ -454,6 +463,10 @@ h1 {
 
 .readout dl > div {
   font-size: 12px;
+}
+
+.readout dl > .readout-wide {
+  grid-column: 1 / -1;
 }
 
 dl {

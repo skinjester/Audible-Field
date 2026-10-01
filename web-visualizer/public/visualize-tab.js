@@ -4,7 +4,7 @@ import {
   onFaceEdge,
   renderDiagnostics,
   tickXyAudio,
-} from "./diagnostics.js?v=2";
+} from "./diagnostics.js?v=5";
 
 const canvas = document.querySelector("[data-viz-canvas]");
 

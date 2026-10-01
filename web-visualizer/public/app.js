@@ -1,13 +1,14 @@
 import { notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=49";
+import { audioEngine } from "./audio-engine.js?v=51";
 import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=3";
-import * as fallingTab from "./falling-tab.js?v=6";
-import * as visualizeTab from "./visualize-tab.js?v=1";
+import * as diagnostics from "./diagnostics.js?v=5";
+import * as fallingTab from "./falling-tab.js?v=8";
+import * as visualizeTab from "./visualize-tab.js?v=3";
 
 const statusEl = document.querySelector(".status");
+const audioHealthEl = document.querySelector("[data-audio-health]");
 const statusParts = {
   audio: document.querySelector("[data-status-audio]"),
   wams: document.querySelector("[data-status-wams]"),
@@ -17,6 +18,7 @@ const statusParts = {
 };
 let statusText = "";
 let statusKey = "";
+let audioHealthKey = "";
 let mouseSeen = false;
 const tabButtons = document.querySelectorAll("[data-tab]");
 const panels = document.querySelectorAll("[data-panel]");
@@ -94,8 +96,25 @@ function audioKindLabel() {
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return "Audio off";
   if (audioStarting) return "Loading audio";
   if (!audioEngine.running) return "Audio off";
-  if (audioEngine.ctx?.state === "suspended") return "Audio paused";
+  const state = audioEngine.ctx?.state;
+  if (state === "suspended") return "Audio paused";
+  if (state === "interrupted") return "Audio interrupted";
+  if (state === "closed") return "Audio closed";
+  if (state && state !== "running") return "Audio paused";
   return "Browser audio";
+}
+
+function audioShouldBeAudible() {
+  if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return false;
+  return !!(audioEngine.running || audioEngine.ctx);
+}
+
+function paintAudioHealth() {
+  if (!audioHealthEl) return;
+  const text = audioEngine.audioHealthLabel();
+  if (text === audioHealthKey) return;
+  audioHealthKey = text;
+  audioHealthEl.textContent = text;
 }
 
 function audioStatusState() {
@@ -201,6 +220,11 @@ function unlockBedsFromGesture() {
 
 document.addEventListener("pointerdown", unlockBedsFromGesture, true);
 document.addEventListener("keydown", unlockBedsFromGesture, true);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  if (!audioShouldBeAudible()) return;
+  void audioEngine.recoverForeground();
+});
 
 async function runEnsureBrowserAudio() {
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return;
@@ -271,6 +295,7 @@ function tick(now) {
     lastFrame = now;
     tabs[activeTab].tick({ dt: frameDt });
     refreshStatusLine();
+    paintAudioHealth();
   } catch (err) {
     console.error("EchoScape diagnostics tick failed:", err);
   }
