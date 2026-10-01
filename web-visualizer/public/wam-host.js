@@ -11,43 +11,6 @@ const WAM_PLUGIN_BASE = "/wams/";
 
 /** @type {string | null} */
 let hostGroupId = null;
-let connectPatched = false;
-
-/**
- * Faust WAMs often pin a mono worklet to channelCountMode "explicit".
- * A normal stereo GainNode then throws on connect, and the slot falls back
- * to the native effect — the WAM the user picked never stays selected.
- * Match the source to that explicit count and retry once.
- */
-function installWamConnectPatch() {
-  if (connectPatched || typeof AudioNode === "undefined") return;
-  connectPatched = true;
-  const orig = AudioNode.prototype.connect;
-  AudioNode.prototype.connect = function connect(destination, output, input) {
-    try {
-      return orig.call(this, destination, output, input);
-    } catch (err) {
-      const count = destination?.channelCount;
-      if (
-        !destination ||
-        destination.channelCountMode !== "explicit" ||
-        !Number.isFinite(count) ||
-        count < 1 ||
-        this.channelCount === count
-      ) {
-        throw err;
-      }
-      try {
-        this.channelCountMode = "explicit";
-        this.channelCount = count;
-        this.channelInterpretation = destination.channelInterpretation || "speakers";
-        return orig.call(this, destination, output, input);
-      } catch {
-        throw err;
-      }
-    }
-  };
-}
 
 /**
  * @param {BaseAudioContext} audioContext
@@ -66,7 +29,6 @@ export async function ensureWamHost(audioContext) {
  * @param {string} pluginPath path under /wams/ e.g. "wimmics/OwlShimmer/index.js"
  */
 export async function loadWam(audioContext, pluginPath) {
-  installWamConnectPatch();
   const groupId = await ensureWamHost(audioContext);
   const url = pluginPath.startsWith("/") || pluginPath.startsWith("http")
     ? pluginPath

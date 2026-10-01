@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=191" />
+    <link rel="stylesheet" href="/styles.css?v=198" />
     <script type="importmap">
       {
         "imports": {
@@ -433,37 +433,49 @@
                   </div>
                 </form>
               </dialog>
-              <div class="falling-side">
-              <button type="button" class="falling-about falling-pill" data-falling-about>About</button>
+              <div class="falling-topbar">
+                <button type="button" class="falling-icon-btn falling-about" data-falling-about aria-label="About">?</button>
+                <p class="falling-frame" aria-live="polite">
+                  <span data-falling-fps>--</span> fps
+                  <span aria-hidden="true">·</span>
+                  <span data-falling-atoms>--</span> atoms
+                  <span aria-hidden="true">·</span>
+                  <span data-falling-tris>--</span> polys
+                </p>
+                <button type="button" class="falling-icon-btn falling-settings" data-falling-settings aria-label="Settings" aria-expanded="false" aria-controls="falling-settings-panel">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.2 7.2 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.58.22-1.13.53-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.64.22l2.39-.96c.5.41 1.05.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.58-.22 1.13-.53 1.63-.94l2.39.96c.24.1.51 0 .64-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="falling-settings-panel" id="falling-settings-panel" data-falling-settings-panel hidden>
+                <div class="falling-hud">
+                  <div class="falling-palette-row">
+                    <button type="button" class="falling-clear falling-face falling-pill" data-falling-clear title="Clear board">
+                      <span class="pad-glyph" aria-hidden="true">&#x0115;</span>
+                      Clear
+                    </button>
+                    <button type="button" class="falling-audio falling-face falling-pill" data-falling-audio aria-pressed="true" title="Sonify the field">
+                      <span class="pad-glyph" aria-hidden="true">&#x0116;</span>
+                      Audio
+                    </button>
+                    <span class="falling-pill" data-falling-trigger="lt" role="img" aria-label="Left trigger emits a stream">
+                      <span class="pad-glyph" aria-hidden="true">&#x0108;</span>
+                      Emit Stream
+                    </span>
+                    <span class="falling-pill" data-falling-trigger="rt" role="img" aria-label="Right trigger emits a clump">
+                      <span class="pad-glyph" aria-hidden="true">&#x0109;</span>
+                      Emit Clump
+                    </span>
+                  </div>
+                </div>
+              </div>
               <div class="falling-material-bar">
                 <div class="falling-material-row">
                   <span class="pad-glyph" data-falling-shoulder="prev" role="img" aria-label="L2">&#x011A;</span>
-                  <div class="falling-palette" data-falling-palette role="group" aria-label="Material"></div>
+                  <div class="falling-palette" data-falling-palette role="group" aria-label="Materials"></div>
                   <span class="pad-glyph" data-falling-shoulder="next" role="img" aria-label="R2">&#x011B;</span>
                 </div>
-                <span class="falling-material-label">Materials</span>
-              </div>
-              <div class="falling-hud">
-                <span class="falling-material-label falling-global-label">Global</span>
-                <div class="falling-palette-row">
-                  <button type="button" class="falling-clear falling-face falling-pill" data-falling-clear title="Clear board">
-                    <span class="pad-glyph" aria-hidden="true">&#x0115;</span>
-                    Clear
-                  </button>
-                  <button type="button" class="falling-audio falling-face falling-pill" data-falling-audio aria-pressed="true" title="Sonify the field">
-                    <span class="pad-glyph" aria-hidden="true">&#x0116;</span>
-                    Audio
-                  </button>
-                  <span class="falling-pill" data-falling-trigger="lt" role="img" aria-label="Left trigger emits a stream">
-                    <span class="pad-glyph" aria-hidden="true">&#x0108;</span>
-                    Emit Stream
-                  </span>
-                  <span class="falling-pill" data-falling-trigger="rt" role="img" aria-label="Right trigger emits a clump">
-                    <span class="pad-glyph" aria-hidden="true">&#x0109;</span>
-                    Emit Clump
-                  </span>
-                </div>
-              </div>
               </div>
             <aside class="falling-readout" data-falling-readout>
               <table class="falling-measures" aria-label="Corner measures">
@@ -562,14 +574,10 @@
                 <ol data-falling-life-list></ol>
               </div>
             </aside>
-            <div class="viz-hud falling-stats" aria-live="polite">
-              <div><span data-falling-fps>--</span> fps</div>
-              <div><span data-falling-atoms>--</span> atoms · <span data-falling-tris>--</span> polys</div>
-            </div>
           </div>
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=371"></script>
+    <script type="module" src="/app.js?v=386"></script>
   </body>
 </html>

@@ -1156,28 +1156,46 @@ button.falling-touch-emit {
 
 @media (pointer: coarse) {
   [data-panel="falling-blocks"] .falling-touch-emit {
-    display: grid;
-    place-items: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     position: absolute;
     right: max(16px, env(safe-area-inset-right));
-    bottom: max(72px, calc(16px + env(safe-area-inset-bottom)));
+    bottom: max(16px, env(safe-area-inset-bottom));
     z-index: 4;
-    width: 112px;
-    height: 112px;
+    width: var(--falling-list-size);
+    min-width: 0;
+    height: var(--falling-list-size);
     padding: 0;
+    border: 0;
     border-radius: 50%;
+    background-color: transparent;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: contain;
+    color: #f4f4f4;
+    font-size: 14px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
     cursor: pointer;
   }
+
+  .falling-material-bar {
+    max-width: calc(100% - 180px - env(safe-area-inset-right, 0px));
+    bottom: max(16px, env(safe-area-inset-bottom));
+  }
+
+  .falling-material-bar .pad-glyph {
+    display: none;
+  }
 }
 
 .falling-touch-emit.is-pressed {
-  background: var(--pill-selected);
-  color: var(--live);
-  border-color: rgba(110, 231, 183, 0.45);
+  filter: brightness(1.2);
+  color: #fff;
 }
 
 .falling-pill {
@@ -1209,16 +1227,110 @@ button.falling-touch-emit {
 }
 
 .falling-about {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 3;
   cursor: pointer;
 }
 
+.falling-topbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.falling-icon-btn {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.falling-icon-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.falling-icon-btn:hover,
+.falling-icon-btn:focus-visible,
 .falling-about:hover {
   color: var(--live);
   border-color: rgba(110, 231, 183, 0.35);
+  outline: none;
+}
+
+.falling-about {
+  justify-self: start;
+}
+
+.falling-settings {
+  justify-self: end;
+}
+
+.falling-settings[aria-expanded="true"] {
+  color: var(--live);
+  border-color: rgba(110, 231, 183, 0.45);
+}
+
+.falling-frame {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 36px;
+  margin: 0;
+  justify-self: center;
+  min-width: max-content;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: rgba(8, 8, 8, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(230, 230, 230, 0.92);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.falling-settings-panel {
+  position: absolute;
+  top: 56px;
+  right: 12px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.falling-settings-panel[hidden] {
+  display: none;
+}
+
+.falling-settings-panel .falling-hud {
+  position: static;
+  bottom: auto;
+  left: auto;
+  align-items: flex-end;
 }
 
 .falling-about-dialog {
@@ -1443,31 +1555,30 @@ button.falling-touch-emit {
 
 .falling-material-bar {
   position: absolute;
-  top: 14px;
-  left: 50%;
+  left: 16px;
+  bottom: 20px;
   z-index: 2;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-end;
   gap: 6px;
   width: max-content;
-  max-width: calc(100% - 24px);
-  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
   pointer-events: none;
 }
 
 .falling-material-row {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   flex-wrap: nowrap;
   gap: 12px;
 }
 
 .falling-material-bar .pad-glyph {
   color: #000;
-  font-size: 44px;
+  font-size: 28px;
 }
 
 .falling-material-label {
@@ -1501,8 +1612,8 @@ button.falling-touch-emit {
 
 .falling-hud {
   position: absolute;
-  left: 12px;
-  bottom: 12px;
+  left: 16px;
+  bottom: 16px;
   z-index: 2;
   display: flex;
   flex-direction: column;
@@ -1519,7 +1630,7 @@ button.falling-touch-emit {
 
 .falling-readout {
   position: absolute;
-  top: 12px;
+  top: 56px;
   right: 12px;
   z-index: 2;
   display: flex;
@@ -1671,67 +1782,24 @@ button.falling-touch-emit {
   pointer-events: none;
 }
 
-/* Narrow stage: one left column. Materials, then the controls that sit along the bottom when wide. */
+/* Narrow stage: global controls stack inside the settings panel. */
 @container falling-stage (max-width: 820px) {
-  .falling-side {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    position: absolute;
-    top: 12px;
-    left: 12px;
-    z-index: 2;
-    gap: 24px;
-    width: max-content;
-    max-width: calc(100% - 24px);
-    pointer-events: none;
-  }
-
-  .falling-about,
-  .falling-material-bar,
-  .falling-hud {
-    position: static;
-    inset: auto;
-    align-items: stretch;
-    width: auto;
-    max-width: none;
-    transform: none;
-  }
-
-  .falling-material-bar,
-  .falling-material-row,
-  .falling-palette,
-  .falling-palette-row {
+  .falling-settings-panel .falling-palette-row {
     gap: 10px;
-  }
-
-  .falling-material-row,
-  .falling-palette,
-  .falling-palette-row {
     flex-direction: column;
     flex-wrap: nowrap;
     align-items: stretch;
     justify-content: flex-start;
   }
 
-  .falling-material-bar .pad-glyph,
-  .falling-hud [data-falling-trigger] {
+  .falling-settings-panel [data-falling-trigger] {
     display: none;
   }
+}
 
-  .falling-material-label {
-    order: -1;
-    transform: none;
-    margin: 0;
-    text-align: center;
-  }
-
-  .falling-hud {
-    gap: 10px;
-  }
-
-  .falling-global-label {
-    display: block;
+@container falling-stage (max-width: 520px) {
+  .falling-material-bar .pad-glyph {
+    display: none;
   }
 }
 
@@ -1759,38 +1827,71 @@ button.falling-touch-emit {
   border-color: rgba(110, 231, 183, 0.35);
 }
 
-.falling-palette button {
+[data-panel="falling-blocks"] {
+  --falling-list-size: 76px;
+}
+
+.falling-material-swatch {
+  box-sizing: border-box;
+  appearance: none;
+  width: var(--falling-list-size);
+  height: var(--falling-list-size);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
   cursor: pointer;
-  padding-left: 16px;
+  pointer-events: auto;
 }
 
-.falling-palette button::before {
-  content: "";
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--swatch, #888);
-  opacity: 0.35;
-  flex: 0 0 auto;
+.falling-material-swatch img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
-.falling-palette button:hover,
-.falling-palette button:focus-visible {
-  color: var(--live);
-  border-color: rgba(110, 231, 183, 0.35);
+.falling-material-swatch:hover,
+.falling-material-swatch:focus-visible {
   outline: none;
 }
 
-.falling-palette button[aria-pressed="true"] {
-  background: var(--pill-selected);
-  color: var(--live);
-  border-color: rgba(110, 231, 183, 0.35);
+.falling-material-swatch:hover img,
+.falling-material-swatch:focus-visible img {
+  filter: brightness(1.06);
 }
 
-.falling-palette button:hover::before,
-.falling-palette button:focus-visible::before,
-.falling-palette button[aria-pressed="true"]::before {
-  opacity: 1;
+.falling-material-swatch[aria-pressed="true"] img {
+  filter:
+    drop-shadow(1px 0 0 #fff)
+    drop-shadow(-1px 0 0 #fff)
+    drop-shadow(0 1px 0 #fff)
+    drop-shadow(0 -1px 0 #fff);
+}
+
+@media (pointer: coarse) {
+  [data-panel="falling-blocks"] .falling-material-bar {
+    right: calc(124px + env(safe-area-inset-right, 0px));
+    width: auto;
+    max-width: none;
+  }
+
+  [data-panel="falling-blocks"] .falling-material-row,
+  [data-panel="falling-blocks"] .falling-palette {
+    width: 100%;
+    min-width: 0;
+    gap: 6px;
+  }
+
+  [data-panel="falling-blocks"] .falling-material-swatch {
+    flex: 0 1 var(--falling-list-size);
+    width: auto;
+    max-width: var(--falling-list-size);
+    min-width: 0;
+    height: auto;
+    aspect-ratio: 1;
+  }
 }
 
 

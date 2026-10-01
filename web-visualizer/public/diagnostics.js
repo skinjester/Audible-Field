@@ -13,16 +13,16 @@ import {
   state,
   STEM_CORNERS,
 } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=57";
+import { audioEngine } from "./audio-engine.js?v=65";
 import { DualsenseHid } from "./dualsense-hid.js?v=5";
 import { openStemDropdown } from "./sample-picker.js?v=18";
-import { consumeSuppressedFxClick, openFxDropdown } from "./fx-picker.js?v=6";
+import { openFxDropdown } from "./fx-picker.js?v=5";
 import {
   DEFAULT_STICK_SCALE,
   STICK_SCALE_STEP,
   STICK_SCALE_MIN,
 } from "./wam-catalog.js?v=5";
-import { stickMultiplier } from "./wam-host.js?v=8";
+import { stickMultiplier } from "./wam-host.js?v=9";
 
 const root = document.querySelector('[data-panel="diagnostics"]');
 const pad = root?.querySelector("[data-pad]");
@@ -99,8 +99,6 @@ const vols = {
  *   },
  * }} */
 let deps = null;
-/** Label to show while a dropdown choice is still loading. */
-const pendingFxLabel = {};
 
 function fmt(n) {
   return Number.isFinite(n) ? n.toFixed(2) : "—";
@@ -160,7 +158,6 @@ export function syncFxLabelsFromEngine() {
     for (const wrap of scaleWraps) {
       wrap.hidden = !isWam;
     }
-    const pending = pendingFxLabel[slot];
     if (isWam) {
       for (const axis of ["x", "y"]) {
         const scaleInput = root?.querySelector(
@@ -183,11 +180,11 @@ export function syncFxLabelsFromEngine() {
       if (yLabel) {
         yLabel.textContent = yNames.length ? `Y · ${yNames.join(" + ")}` : "Stick Y";
       }
-      setFxName(slot, pending || assigned.label);
-    } else if (pending || assigned?.label) {
+      setFxName(slot, assigned.label);
+    } else if (assigned?.label) {
       if (xLabel) xLabel.textContent = "Stick X";
       if (yLabel) yLabel.textContent = "Stick Y";
-      setFxName(slot, pending || assigned.label);
+      setFxName(slot, assigned.label);
     }
   }
 }
@@ -292,33 +289,25 @@ function bindStickScaleControls() {
 
 async function assignFxPlugin(slot, choice) {
   if (!deps || slot === "cross") return;
-  const label = choice?.label || choice?.path || "";
-  if (label) {
-    pendingFxLabel[slot] = label;
-    setFxName(slot, label);
-  }
   try {
     await deps.ensureBrowserAudio();
     const assigned = await audioEngine.replaceFx(slot, choice);
+    syncFxLabelsFromEngine();
     setActiveFx(slot);
-    const shown = assigned?.label || label;
-    deps.setStatus("audio", `${fxButtonLabels[slot] || slot} ← ${shown}`);
+    const label = assigned?.label || choice.label;
+    deps.setStatus("audio", `${fxButtonLabels[slot] || slot} ← ${label}`);
     renderDiagnostics();
   } catch (err) {
     console.error(err);
     deps.setStatus("offline", err?.message || "FX load failed");
-  } finally {
-    delete pendingFxLabel[slot];
-    syncFxLabelsFromEngine();
   }
 }
 
 function openFxPicker(slot, anchor) {
-  if (!deps || slot === "cross" || consumeSuppressedFxClick()) return;
+  if (!deps || slot === "cross") return;
   void openFxDropdown({
     anchor,
     slot,
-    selectedPath: audioEngine.fxAssignment?.[slot]?.path || "",
     onSelect: (choice) => {
       void assignFxPlugin(slot, choice);
     },
