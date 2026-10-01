@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=67";
+import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
 import { fallingInput } from "./falling-input.js?v=43";
@@ -22,19 +22,9 @@ const GROUND_PLANE_SIZE = PLAYFIELD_SPAN;
 /** Cells across the playfield at the fixed atom pitch. */
 const GRID_XZ = Math.max(1, Math.floor(PLAYFIELD_SPAN / ATOM_SIZE + 1e-9));
 const GRID_MAX = GRID_XZ;
-/**
- * Falling-blocks sky / clear color by yaw quadrant.
- * Muted primaries (not the Max pad greys) so blends read while orbiting.
- *   tl red · tr yellow · bl blue · br green
- */
-const QUAD_COLORS = {
-  tl: new THREE.Color(0x8f4a4a),
-  tr: new THREE.Color(0x8f7e3d),
-  bl: new THREE.Color(0x3d5f8f),
-  br: new THREE.Color(0x3d7a55),
-};
-const SCENE_BG = QUAD_COLORS.tl.getHex();
-const scratchBg = new THREE.Color();
+/** Near-black field. Quadrant identity lives in the labels, not the sky. */
+const SCENE_BG = 0x070708;
+const scratchBg = new THREE.Color(SCENE_BG);
 const SPLASH_LIFE = 0.42;
 const CLICK_SLOP = 6;
 const RULE_HZ = 22;
@@ -1480,35 +1470,9 @@ function wrapAngle(delta) {
   return wrapped;
 }
 
-/**
- * Map surface yaw → pad x/y so cardinals land on quadrant corners
- * (same bilinear blend as the Max / visualize mixer).
- */
-function padFromYaw(yaw) {
-  // Amplitude √2/2 puts the four π/4 offsets on the square corners.
-  const x = clamp01(0.5 + Math.sin(yaw) * Math.SQRT1_2);
-  const y = clamp01(0.5 - Math.cos(yaw) * Math.SQRT1_2);
-  return { x, y };
-}
-
-function blendQuadColor(weights, target) {
-  target.setRGB(0, 0, 0);
-  for (const key of Object.keys(QUAD_COLORS)) {
-    const w = weights[key] || 0;
-    if (w <= 0) continue;
-    const part = QUAD_COLORS[key];
-    target.r += part.r * w;
-    target.g += part.g * w;
-    target.b += part.b * w;
-  }
-  return target;
-}
-
 function syncSceneBackground() {
   if (!scene) return;
-  const yaw = surface ? surface.rotation.y : 0;
-  const { x, y } = padFromYaw(yaw);
-  blendQuadColor(mix(x, y), scratchBg);
+  scratchBg.setHex(SCENE_BG);
   scene.background.copy(scratchBg);
   renderer?.setClearColor(scratchBg, 1);
 }
@@ -1748,12 +1712,12 @@ function emitterBoxSize() {
 
 function rebuildEmitterGeometry() {
   if (!emitter) return;
-  if (emitterGeo) {
-    emitterGeo.dispose();
-    emitterGeo = null;
-  }
+  emitterGeo?.dispose();
+  emitterGeo = null;
   const size = emitterBoxSize();
-  emitterGeo = new THREE.BoxGeometry(size.x, size.y, size.z);
+  const box = new THREE.BoxGeometry(size.x, size.y, size.z);
+  emitterGeo = new THREE.EdgesGeometry(box);
+  box.dispose();
   emitter.geometry = emitterGeo;
 }
 
@@ -1763,9 +1727,7 @@ function syncEmitter() {
   emitter.position.set(draw.x, emitWorldY(), draw.z);
   // Footprint follows the grid yaw so the box covers the cells pourBrush fills.
   emitter.rotation.y = surface ? surface.rotation.y : 0;
-  const matIndex = catalog?.indexById.get(activeMaterialId) || 0;
-  emitter.material.color.set(materialColor(matIndex));
-  emitter.material.opacity = emitting ? 0.72 : 0.45;
+  emitter.material.opacity = emitting ? 0.9 : 0.42;
   emitter.visible = true;
 }
 
@@ -1847,6 +1809,22 @@ function syncTriggerLabels(ltHeld, rtHeld) {
 }
 
 
+/** Line icons. Color is applied only on the selected glyph, via currentColor. */
+const MATERIAL_GLYPHS = {
+  block:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2 20.2 7.6 12 12 3.8 7.6Z M3.8 7.6V16.4L12 20.8V12 M20.2 7.6V16.4L12 20.8" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/></svg>',
+  sand:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="13.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="13.5" y="13.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="8.5" y="4.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>',
+  diffuse:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="1.15" fill="currentColor"/><circle cx="15.5" cy="6.5" r="1.15" fill="currentColor"/><circle cx="12" cy="12" r="1.15" fill="currentColor"/><circle cx="7" cy="16" r="1.15" fill="currentColor"/><circle cx="16.5" cy="15.5" r="1.15" fill="currentColor"/></svg>',
+  erode:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5V11 M12 15.5C8.2 14.4 6 10.6 8 7.2 M12 14.2C15.8 12.6 18.2 8.6 15.4 5.2 M12 12.4C11 8.8 13.2 6.2 12 3.8" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></svg>',
+};
+
+function materialGlyph(id) {
+  return MATERIAL_GLYPHS[id] || MATERIAL_GLYPHS.block;
+}
+
 function buildPalette() {
   paletteEl = document.querySelector("[data-falling-palette]");
   if (!paletteEl || !catalog) return;
@@ -1859,6 +1837,13 @@ function buildPalette() {
     btn.setAttribute("aria-label", mat.label);
     btn.title = mat.label;
     btn.style.setProperty("--swatch", mat.color);
+    const glyph = document.createElement("span");
+    glyph.className = "falling-material-glyph";
+    glyph.innerHTML = materialGlyph(mat.id);
+    const name = document.createElement("span");
+    name.className = "falling-material-name";
+    name.textContent = mat.label;
+    btn.append(glyph, name);
     btn.addEventListener("click", (event) => {
       event.stopPropagation();
       setActiveMaterial(mat.id);
@@ -2172,9 +2157,9 @@ function splashAnchor(x, y, z) {
 function spawnSplash(x, z, wx, wz) {
   if (!surface || !splashGeo) return;
   const material = new THREE.MeshBasicMaterial({
-    color: 0xf0d8cc,
+    color: 0xffffff,
     transparent: true,
-    opacity: 0.75,
+    opacity: 0.45,
     depthWrite: false,
     side: THREE.DoubleSide,
   });
@@ -3062,25 +3047,112 @@ function ensureEffectStorage() {
   blockAboveFlags = new Uint8Array(n);
 }
 
+/** Faint lattice outside the playfield, and a dotted grid on the surface. */
+function addFieldGrid() {
+  if (!surface) return;
+  const y = 0.01;
+  const extent = 32;
+  const bgStep = 1;
+  const half = PLAYFIELD_HALF;
+  const bg = [];
+  for (let x = -extent; x <= extent + 1e-6; x += bgStep) {
+    const onEdge = Math.abs(Math.abs(x) - half) < 1e-4;
+    const inside = Math.abs(x) < half - 1e-4;
+    if (onEdge) continue;
+    if (!inside) {
+      bg.push(x, y, -extent, x, y, extent);
+    } else {
+      bg.push(x, y, -extent, x, y, -half, x, y, half, x, y, extent);
+    }
+  }
+  for (let z = -extent; z <= extent + 1e-6; z += bgStep) {
+    const onEdge = Math.abs(Math.abs(z) - half) < 1e-4;
+    const inside = Math.abs(z) < half - 1e-4;
+    if (onEdge) continue;
+    if (!inside) {
+      bg.push(-extent, y, z, extent, y, z);
+    } else {
+      bg.push(-extent, y, z, -half, y, z, half, y, z, extent, y, z);
+    }
+  }
+  const bgGeo = new THREE.BufferGeometry();
+  bgGeo.setAttribute("position", new THREE.Float32BufferAttribute(bg, 3));
+  const bgLines = new THREE.LineSegments(
+    bgGeo,
+    new THREE.LineBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.07,
+      depthWrite: false,
+    }),
+  );
+  bgLines.renderOrder = 1;
+  surface.add(bgLines);
+
+  const step = 2;
+  const lineY = 0.02;
+  const lines = [];
+  const dots = [];
+  for (let x = -half; x <= half + 1e-6; x += step) {
+    lines.push(x, lineY, -half, x, lineY, half);
+  }
+  for (let z = -half; z <= half + 1e-6; z += step) {
+    lines.push(-half, lineY, z, half, lineY, z);
+  }
+  for (let x = -half; x <= half + 1e-6; x += step) {
+    for (let z = -half; z <= half + 1e-6; z += step) {
+      dots.push(x, lineY + 0.01, z);
+    }
+  }
+  const lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute("position", new THREE.Float32BufferAttribute(lines, 3));
+  const surfaceLines = new THREE.LineSegments(
+    lineGeo,
+    new THREE.LineBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.14,
+      depthWrite: false,
+    }),
+  );
+  surfaceLines.renderOrder = 2;
+  surface.add(surfaceLines);
+
+  const dotGeo = new THREE.BufferGeometry();
+  dotGeo.setAttribute("position", new THREE.Float32BufferAttribute(dots, 3));
+  const dotCanvas = document.createElement("canvas");
+  dotCanvas.width = 32;
+  dotCanvas.height = 32;
+  const dotCtx = dotCanvas.getContext("2d");
+  if (dotCtx) {
+    dotCtx.fillStyle = "#fff";
+    dotCtx.beginPath();
+    dotCtx.arc(16, 16, 5, 0, Math.PI * 2);
+    dotCtx.fill();
+  }
+  const dotMap = new THREE.CanvasTexture(dotCanvas);
+  dotMap.colorSpace = THREE.SRGBColorSpace;
+  const surfaceDots = new THREE.Points(
+    dotGeo,
+    new THREE.PointsMaterial({
+      color: 0xffffff,
+      map: dotMap,
+      size: 7,
+      sizeAttenuation: false,
+      transparent: true,
+      alphaTest: 0.4,
+      opacity: 1,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+  surfaceDots.renderOrder = 3;
+  surface.add(surfaceDots);
+}
+
 /** Cross on the playfield: the four quadrants are the four sample beds. */
 function addQuadrantAxes() {
   if (!surface) return;
-  const y = 0.06;
-  const half = PLAYFIELD_HALF;
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute(
-    "position",
-    new THREE.Float32BufferAttribute(
-      [-half, y, 0, half, y, 0, 0, y, -half, 0, y, half],
-      3,
-    ),
-  );
-  const lines = new THREE.LineSegments(
-    geo,
-    new THREE.LineBasicMaterial({ color: 0xf4efe6, transparent: true, opacity: 0.9 }),
-  );
-  lines.renderOrder = 3;
-  surface.add(lines);
   addQuadrantLabels();
 }
 
@@ -3128,16 +3200,13 @@ function paintQuadLabel(canvas, number, sample) {
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
   ctx.lineJoin = "round";
-  ctx.font = `600 ${size}px "Segoe UI", system-ui, sans-serif`;
+  ctx.font = `500 ${size}px "Segoe UI", system-ui, sans-serif`;
   while (size > 28 && ctx.measureText(text).width > maxW) {
     size -= 2;
-    ctx.font = `600 ${size}px "Segoe UI", system-ui, sans-serif`;
+    ctx.font = `500 ${size}px "Segoe UI", system-ui, sans-serif`;
   }
   const drawn = ellipsizeLabel(ctx, text, maxW);
-  ctx.lineWidth = Math.max(8, size * 0.14);
-  ctx.strokeStyle = "rgba(4, 14, 22, 0.92)";
-  ctx.strokeText(drawn, 8, h / 2);
-  ctx.fillStyle = "#f4efe6";
+  ctx.fillStyle = "rgba(255, 255, 255, 0.62)";
   ctx.fillText(drawn, 8, h / 2);
 }
 
@@ -3280,9 +3349,9 @@ function initScene(nextCanvas) {
   renderer.shadowMap.type = THREE.BasicShadowMap;
   syncSceneBackground();
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.38));
-  scene.add(new THREE.HemisphereLight(0xc5d0d8, 0x3a2e28, 0.42));
-  const key = new THREE.DirectionalLight(0xfff4ea, 1.3);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.42));
+  scene.add(new THREE.HemisphereLight(0xb7c0c8, 0x000000, 0.28));
+  const key = new THREE.DirectionalLight(0xfff6ee, 1.15);
   // 30° above the ground so cast shadows stretch. Same compass heading as before.
   const keyElevation = (30 * Math.PI) / 180;
   const keyHeading = Math.atan2(6, 8);
@@ -3312,7 +3381,7 @@ function initScene(nextCanvas) {
   fill.position.set(-7, 6, -5);
   scene.add(fill);
 
-  const groundMat = new THREE.MeshStandardMaterial({ color: 0x267494, roughness: 0.85, metalness: 0.05 });
+  const groundMat = new THREE.MeshStandardMaterial({ color: SCENE_BG, roughness: 1, metalness: 0 });
   attachLandingTarget(groundMat, true);
   groundMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(GROUND_PLANE_SIZE, GROUND_PLANE_SIZE),
@@ -3322,27 +3391,42 @@ function initScene(nextCanvas) {
   groundMesh.position.y = -0.02;
   groundMesh.receiveShadow = true;
   surface.add(groundMesh);
+  addFieldGrid();
   addQuadrantAxes();
 
   blockGeo = new THREE.BoxGeometry(1, 1, 1);
   {
     const size = emitterBoxSize();
-    emitterGeo = new THREE.BoxGeometry(size.x, size.y, size.z);
+    const box = new THREE.BoxGeometry(size.x, size.y, size.z);
+    emitterGeo = new THREE.EdgesGeometry(box);
+    box.dispose();
   }
   splashGeo = new THREE.RingGeometry(atomSize * 0.55, atomSize * 0.8, 28);
 
-  emitter = new THREE.Mesh(
+  emitter = new THREE.LineSegments(
     emitterGeo,
-    new THREE.MeshStandardMaterial({
-      color: 0xf0e2d6,
+    new THREE.LineBasicMaterial({
+      color: 0xffffff,
       transparent: true,
-      opacity: 0.45,
-      roughness: 0.55,
-      metalness: 0.05,
+      opacity: 0.42,
       depthWrite: false,
     }),
   );
   emitter.renderOrder = 2;
+  {
+    const s = 0.28;
+    const crossGeo = new THREE.BufferGeometry();
+    crossGeo.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute([-s, 0, 0, s, 0, 0, 0, 0, -s, 0, 0, s], 3),
+    );
+    const cross = new THREE.LineSegments(
+      crossGeo,
+      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }),
+    );
+    cross.renderOrder = 3;
+    emitter.add(cross);
+  }
   // World-space emitter so surface yaw spins the grid underneath it.
   scene.add(emitter);
 

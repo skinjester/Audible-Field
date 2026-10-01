@@ -1158,9 +1158,9 @@ button.falling-touch-emit,
 @media (pointer: coarse) {
   .falling-emit-dock {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
-    gap: 10px;
+    gap: 14px;
     position: absolute;
     right: max(16px, env(safe-area-inset-right));
     bottom: max(16px, env(safe-area-inset-bottom));
@@ -1170,8 +1170,10 @@ button.falling-touch-emit,
 
   [data-panel="falling-blocks"] .falling-touch-emit {
     display: inline-flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 3px;
     position: relative;
     right: auto;
     bottom: auto;
@@ -1181,11 +1183,12 @@ button.falling-touch-emit,
     min-width: 0;
     padding: 0;
     border-radius: 50%;
-    background: var(--panel);
-    color: var(--ink);
-    border: 1px solid var(--line);
+    background: rgba(0, 0, 0, 0.8);
+    color: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.55);
     font-size: 15px;
-    font-weight: 600;
+    font-weight: 500;
+    letter-spacing: 0.01em;
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
@@ -1195,7 +1198,7 @@ button.falling-touch-emit,
   }
 
   .falling-material-bar {
-    max-width: calc(100% - 180px - env(safe-area-inset-right, 0px));
+    max-width: calc(100% - 200px - env(safe-area-inset-right, 0px));
     bottom: max(16px, env(safe-area-inset-bottom));
   }
 
@@ -1204,30 +1207,49 @@ button.falling-touch-emit,
   }
 }
 
+.falling-emit-scale {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 84px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.falling-emit-stem {
+  width: 1px;
+  flex: 1 1 auto;
+  margin: 6px 0;
+  background: currentColor;
+}
+
 .falling-emit-clump,
 .falling-emit-single {
-  color: rgba(255, 255, 255, 0.72);
+  color: inherit;
 }
 
 .falling-emit-clump {
   display: grid;
-  grid-template-columns: 7px 7px;
-  gap: 3px;
+  grid-template-columns: 6px 6px;
+  gap: 2px;
 }
 
 .falling-emit-clump i {
   display: block;
-  width: 7px;
-  height: 7px;
-  border-radius: 1.5px;
-  background: currentColor;
+  width: 6px;
+  height: 6px;
+  border: 1px solid currentColor;
+  border-radius: 1px;
+  background: transparent;
+  box-sizing: border-box;
 }
 
 .falling-emit-single {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: currentColor;
+  width: 7px;
+  height: 7px;
+  border: 1px solid currentColor;
+  border-radius: 1px;
+  background: transparent;
+  box-sizing: border-box;
 }
 
 .falling-emit-clump.is-lit,
@@ -1235,13 +1257,16 @@ button.falling-touch-emit,
   color: #fff;
 }
 
-.falling-emit-arrows {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+.falling-emit-clump.is-lit i,
+.falling-emit-single.is-lit {
+  background: currentColor;
+}
+
+.falling-emit-chevron {
+  display: block;
+  width: 16px;
+  height: 8px;
   color: rgba(255, 255, 255, 0.55);
-  pointer-events: none;
 }
 
 .falling-emit-label {
@@ -1249,13 +1274,9 @@ button.falling-touch-emit,
   z-index: 1;
 }
 
-.falling-touch-emit[data-drag="up"] .falling-emit-arrows .up,
-.falling-touch-emit[data-drag="down"] .falling-emit-arrows .down {
-  color: #fff;
-}
-
 .falling-touch-emit.is-pressed {
-  filter: none;
+  border-color: #fff;
+  color: #fff;
 }
 
 .falling-pill {
@@ -1264,9 +1285,9 @@ button.falling-touch-emit,
   gap: 10px;
   box-sizing: border-box;
   appearance: none;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  color: var(--muted);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(0, 0, 0, 0.8);
+  color: rgba(255, 255, 255, 0.72);
   border-radius: 999px;
   padding: 12px 20px;
   font: inherit;
@@ -1283,7 +1304,8 @@ button.falling-touch-emit,
 }
 
 .falling-pill.is-pressed {
-  color: var(--live);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.7);
 }
 
 .falling-about {
@@ -1311,13 +1333,13 @@ button.falling-touch-emit,
   width: 36px;
   height: 36px;
   padding: 0;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 50%;
-  background: var(--panel);
-  color: var(--muted);
+  background: rgba(0, 0, 0, 0.8);
+  color: rgba(255, 255, 255, 0.82);
   font: inherit;
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1;
   pointer-events: auto;
   cursor: pointer;
@@ -1332,8 +1354,8 @@ button.falling-touch-emit,
 .falling-icon-btn:hover,
 .falling-icon-btn:focus-visible,
 .falling-about:hover {
-  color: var(--live);
-  border-color: rgba(110, 231, 183, 0.35);
+  color: #fff;
+  border-color: #fff;
   outline: none;
 }
 
@@ -1346,8 +1368,8 @@ button.falling-touch-emit,
 }
 
 .falling-settings[aria-expanded="true"] {
-  color: var(--live);
-  border-color: rgba(110, 231, 183, 0.45);
+  color: #fff;
+  border-color: #fff;
 }
 
 .falling-frame {
@@ -1358,18 +1380,18 @@ button.falling-touch-emit,
   margin: 0;
   justify-self: center;
   min-width: max-content;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: none;
-  color: rgba(255, 255, 255, 0.92);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.8);
+  color: rgba(255, 255, 255, 0.88);
+  font-family: inherit;
   font-size: 13px;
+  font-weight: 500;
   line-height: 1;
   letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
   pointer-events: none;
 }
 
@@ -1399,9 +1421,9 @@ button.falling-touch-emit,
   margin: auto;
   padding: 0;
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 16px;
+  background: #0c0c0c;
   color: var(--ink);
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
 }
@@ -1467,10 +1489,10 @@ button.falling-touch-emit,
   height: 36px;
   padding: 0;
   flex: 0 0 auto;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
+  background: rgba(0, 0, 0, 0.8);
+  color: rgba(255, 255, 255, 0.82);
   cursor: pointer;
 }
 
@@ -1481,8 +1503,8 @@ button.falling-touch-emit,
 }
 
 .falling-about-close:hover {
-  color: var(--live);
-  border-color: rgba(110, 231, 183, 0.35);
+  color: #fff;
+  border-color: #fff;
 }
 
 .falling-about-how h3 {
@@ -1636,8 +1658,13 @@ button.falling-touch-emit,
 }
 
 .falling-material-bar .pad-glyph {
-  color: #000;
+  color: rgba(255, 255, 255, 0.35);
   font-size: 28px;
+}
+
+.falling-material-bar .pad-glyph.is-lit {
+  color: #fff;
+  text-shadow: none;
 }
 
 .falling-material-label {
@@ -1867,8 +1894,8 @@ button.falling-touch-emit,
 }
 
 .falling-clear:hover {
-  color: var(--live);
-  border-color: rgba(110, 231, 183, 0.35);
+  color: #fff;
+  border-color: #fff;
 }
 
 .falling-audio {
@@ -1876,45 +1903,98 @@ button.falling-touch-emit,
 }
 
 .falling-audio[aria-pressed="true"] {
-  background: var(--pill-selected);
-  color: var(--live);
-  border-color: rgba(110, 231, 183, 0.45);
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.7);
 }
 
 .falling-audio:hover {
-  color: var(--live);
-  border-color: rgba(110, 231, 183, 0.35);
+  color: #fff;
+  border-color: #fff;
 }
 
 .falling-material-swatch {
   box-sizing: border-box;
   appearance: none;
   flex: 0 0 auto;
-  width: 44px;
-  height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  min-width: 52px;
+  height: auto;
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  background: var(--swatch, #888);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
   box-shadow: none;
   cursor: pointer;
   pointer-events: auto;
 }
 
+.falling-material-glyph {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.8);
+  box-sizing: border-box;
+}
+
+.falling-material-glyph svg {
+  width: 26px;
+  height: 26px;
+  display: block;
+}
+
+.falling-material-name {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  color: rgba(255, 255, 255, 0.42);
+}
+
 .falling-material-swatch:hover,
 .falling-material-swatch:focus-visible {
-  border-color: rgba(255, 255, 255, 0.55);
+  color: #fff;
   outline: none;
 }
 
+.falling-material-swatch:hover .falling-material-glyph,
+.falling-material-swatch:focus-visible .falling-material-glyph {
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
 .falling-material-swatch[aria-pressed="true"] {
+  color: var(--swatch, #fff);
+}
+
+.falling-material-swatch[aria-pressed="true"] .falling-material-glyph {
   border-color: #fff;
-  box-shadow: 0 0 0 2px #fff;
+  box-shadow: 0 0 0 1px #fff;
+}
+
+.falling-material-swatch[aria-pressed="true"] .falling-material-name {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.falling-material-swatch[aria-pressed="true"] .falling-material-name::after {
+  content: "";
+  display: block;
+  width: 14px;
+  height: 1px;
+  margin: 5px auto 0;
+  background: #fff;
 }
 
 @media (pointer: coarse) {
   [data-panel="falling-blocks"] .falling-material-bar {
-    right: calc(124px + env(safe-area-inset-right, 0px));
+    right: calc(148px + env(safe-area-inset-right, 0px));
     width: auto;
     max-width: none;
   }
