@@ -467,6 +467,7 @@ export class EchoScapeAudioEngine {
     this._watchContext(this.ctx);
     const poke = () => {
       for (const corner of CORNERS) {
+        if (this.stems[corner]?.bedVoice) continue;
         const wired = this.stems[corner]?.el;
         if (wired) {
           this._playEl(wired, true);
@@ -513,6 +514,7 @@ export class EchoScapeAudioEngine {
   /** Restart bed elements that stopped while the context kept running. */
   _pokePausedBeds() {
     for (const corner of CORNERS) {
+      if (this.stems[corner]?.bedVoice) continue;
       const wired = this.stems[corner]?.el;
       if (wired) {
         if (wired.paused) this._playEl(wired, true);
@@ -536,7 +538,13 @@ export class EchoScapeAudioEngine {
     let strikeTotal = 0;
     for (const corner of CORNERS) {
       const el = this.stems[corner]?.el || this._pendingEls[corner] || null;
-      const bed = !el ? "missing" : el.paused ? "paused" : "playing";
+      const bed = this.stems[corner]?.bedVoice
+        ? "playing"
+        : !el
+          ? "missing"
+          : el.paused
+            ? "paused"
+            : "playing";
       beds[corner] = bed;
       if (bed === "playing") bedsPlaying += 1;
       const count = this.stems[corner]?.strikes?.length || 0;
@@ -650,7 +658,7 @@ export class EchoScapeAudioEngine {
   async _playAll() {
     const plays = CORNERS.map(async (corner) => {
       const stem = this.stems[corner];
-      if (!stem?.el) return;
+      if (!stem?.el || stem.bedVoice) return;
       stem.el.muted = false;
       stem.el.volume = 1;
       if (stem.el.paused) {
@@ -674,6 +682,7 @@ export class EchoScapeAudioEngine {
       if (pending) this._releaseBedElement(pending);
       const stem = this.stems[corner];
       if (!stem) continue;
+      this._stopBufferBed(stem);
       this._releaseStrikes(stem);
       try {
         stem.el.pause();
@@ -1434,6 +1443,7 @@ export class EchoScapeAudioEngine {
     // Silence previous stem immediately so the old bed does not keep playing
     // while the replacement buffers.
     if (prev) {
+      this._stopBufferBed(prev);
       try {
         prev.gain.gain.value = 0;
       } catch {
@@ -1854,10 +1864,99 @@ export class EchoScapeAudioEngine {
       .then((buffer) => {
         if (this._strikeToken[corner] !== next) return;
         this._strikeBuffers[corner] = buffer;
+        this._adoptBufferBed(corner, buffer);
       })
       .catch((err) => {
         console.warn("[EchoScape audio] strike buffer", corner, err?.message || err);
       });
+  }
+
+  /**
+   * HTML media `loop` leaves a silence at the wrap point, and each element keeps a decoder running.
+   * Once the bed is decoded, play that copy from a looping buffer instead and
+   * pause the element so the gap, and a second decoder, stay out of the mix.
+   * @param {string} corner
+   * @param {AudioBuffer} buffer
+   * @param {number} [offset]
+   */
+  _adoptBufferBed(corner, buffer, offset) {
+    if (!this.ctx || !buffer || !(buffer.duration > 0)) return;
+    const stem = this.stems[corner];
+    if (!stem?.gain) return;
+    if (stem.bedVoice && stem.bedBuffer === buffer) return;
+    this._stopBufferBed(stem);
+    const dur = buffer.duration;
+    const fromEl = Number(stem.el?.currentTime);
+    const raw = Number.isFinite(offset) ? offset : Number.isFinite(fromEl) ? fromEl : 0;
+    const pos = ((raw % dur) + dur) % dur;
+    const rate = stem.el?.playbackRate > 0 ? stem.el.playbackRate : 1;
+    if (stem.el && !stem.el.paused) {
+      try {
+        stem.el.pause();
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      stem.source?.disconnect();
+    } catch {
+      /* already disconnected */
+    }
+    const voice = this.ctx.createBufferSource();
+    voice.buffer = buffer;
+    voice.loop = true;
+    voice.playbackRate.value = rate;
+    voice.connect(stem.gain);
+    const when = this.ctx.currentTime;
+    voice.start(when, pos);
+    stem.bedVoice = voice;
+    stem.bedBuffer = buffer;
+    stem.bedStartedAt = when;
+    stem.bedOffset = pos;
+    voice.onended = () => {
+      if (stem.bedVoice !== voice) return;
+      stem.bedVoice = null;
+      if (!this.running || this.ctx?.state === "closed") return;
+      this._adoptBufferBed(corner, buffer, 0);
+    };
+  }
+
+  /** @param {{ bedVoice?: AudioBufferSourceNode | null }} stem */
+  _stopBufferBed(stem) {
+    const voice = stem?.bedVoice;
+    if (!voice) return;
+    stem.bedVoice = null;
+    try {
+      voice.onended = null;
+    } catch {
+      /* ignore */
+    }
+    try {
+      voice.stop();
+    } catch {
+      /* already stopped */
+    }
+    try {
+      voice.disconnect();
+    } catch {
+      /* already disconnected */
+    }
+  }
+
+  /**
+   * Seconds into the looping bed, for landing repeats that share its phase.
+   * @param {{ el?: HTMLAudioElement, bedVoice?: AudioBufferSourceNode | null, bedBuffer?: AudioBuffer | null, bedStartedAt?: number, bedOffset?: number }} stem
+   */
+  _bedPosition(stem) {
+    const buffer = stem?.bedBuffer;
+    const voice = stem?.bedVoice;
+    if (buffer && voice && buffer.duration > 0 && this.ctx) {
+      const rate = voice.playbackRate.value || 1;
+      const elapsed = (this.ctx.currentTime - (stem.bedStartedAt || 0)) * rate;
+      const pos = (stem.bedOffset || 0) + elapsed;
+      return ((pos % buffer.duration) + buffer.duration) % buffer.duration;
+    }
+    return Number(stem?.el?.currentTime) || 0;
   }
 
   /**
@@ -1868,10 +1967,17 @@ export class EchoScapeAudioEngine {
   setStemPitch(rates) {
     if (!this.running) return;
     for (const corner of CORNERS) {
-      const el = this.stems[corner]?.el;
-      if (!el) continue;
+      const stem = this.stems[corner];
+      if (!stem) continue;
       const raw = rates ? Number(rates[corner]) : 1;
       const next = Number.isFinite(raw) && raw > 0 ? Math.min(4, Math.max(0.25, raw)) : 1;
+      const voice = stem.bedVoice;
+      if (voice) {
+        if (Math.abs(voice.playbackRate.value - next) > 0.002) voice.playbackRate.value = next;
+        continue;
+      }
+      const el = stem.el;
+      if (!el) continue;
       if (el.preservesPitch !== false) el.preservesPitch = false;
       if (Math.abs(el.playbackRate - next) > 0.002) el.playbackRate = next;
     }
@@ -1954,7 +2060,7 @@ export class EchoScapeAudioEngine {
     const buffer = this._strikeBuffers?.[corner] || null;
     const folded = Math.max(1, audible.length / chosen.length);
     const weight = Math.min(1.5, Math.pow(folded, 0.35));
-    const bedTime = Number(stem.el?.currentTime) || 0;
+    const bedTime = this._bedPosition(stem);
     for (let i = 0; i < chosen.length; i += 1) {
       const dur = Math.min(5, Math.max(0.1, strikeLife(chosen[i]) || 0.1));
       const rate = strikeRate(chosen[i]);
