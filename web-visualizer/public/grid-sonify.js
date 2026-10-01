@@ -157,11 +157,16 @@ export function fieldFrame(snap, dt) {
     const riseTip = Math.max(0, Number(quad.rise) || 0);
     const rising = riseTip > 0;
     const riseOpen = rising ? clamp01(Math.pow(riseTip / RISE_FULL, 0.55)) : 0;
+    const empty = coverage <= 0 && !rising;
+    if (empty) riseLatch[id] = false;
     let feedbackTarget = 0;
     let feedbackTau = 0.35;
     if (rising) {
       feedbackTarget = FEEDBACK_MAX;
       feedbackTau = DECAY_ATTACK;
+    } else if (empty) {
+      feedbackTarget = 0;
+      feedbackTau = EMPTY_TAIL;
     } else if (riseLatch[id]) {
       feedbackTarget = 0;
       feedbackTau = DECAY_RELEASE;
@@ -175,6 +180,9 @@ export function fieldFrame(snap, dt) {
     if (rising) {
       decayTarget = 1;
       decayTau = DECAY_ATTACK;
+    } else if (empty) {
+      decayTarget = 0;
+      decayTau = EMPTY_TAIL;
     } else if (riseLatch[id]) {
       decayTarget = reverbTarget;
       decayTau = DECAY_RELEASE;
@@ -185,7 +193,8 @@ export function fieldFrame(snap, dt) {
     decays[id] = follow(decays[id], decayTarget, dt, decayTau);
     halls[id] = 0;
     weights[id] = weightTarget <= 0 ? 0 : follow(weights[id], weightTarget, dt, 0.2);
-    diffuses[id] = follow(diffuses[id], riseOpen, dt, rising ? 0.12 : 0.25);
+    diffuses[id] = follow(diffuses[id], riseOpen, dt, empty ? EMPTY_TAIL : rising ? 0.12 : 0.25);
+    wets[id] = follow(wets[id], empty ? 0 : 1, dt, empty ? EMPTY_TAIL : 0.08);
     cutoffs[id] = cutoffHz(gains[id]);
     const rateTarget = Number(quad.rate);
     const positionRate = Number.isFinite(rateTarget) && rateTarget > 0 ? rateTarget : 1;
@@ -220,6 +229,7 @@ export function fieldFrame(snap, dt) {
     weights,
     diffuses,
     feedbacks,
+    wets,
     pans: snap?.pans || { tl: 0, tr: 0, bl: 0, br: 0 },
     splash,
     controller: DRY_BEDS,

@@ -1953,16 +1953,22 @@ export class EchoScapeAudioEngine {
   /**
    * Greyhole send for rising Diffuse grains. Delay time and size are not touched.
    * Feedback is the long diffuse tail: it reaches max as soon as grains lift, then rings down.
+   * `wets` scales the return. An empty quadrant slews it to silence.
    * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} levels
    * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} [feedbacks]
+   * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} [wets]
    */
-  setDiffuseGreyhole(levels, feedbacks) {
+  setDiffuseGreyhole(levels, feedbacks, wets) {
     if (!this.running || !this._stemReverbs) return;
     for (const corner of CORNERS) {
       const rec = this._stemReverbs[corner];
       if (!rec?.send) continue;
       const level = Math.min(1, Math.max(0, Number(levels?.[corner]) || 0));
       rec.send.gain.value = level;
+      if (rec.ret && wets) {
+        const wet = Math.min(1, Math.max(0, Number(wets[corner]) || 0));
+        rec.ret.gain.value = 0.45 * wet;
+      }
       if (!rec.node?.setParamValue) continue;
       const feedback = Math.min(1, Math.max(0, Number(feedbacks?.[corner]) || 0));
       try {

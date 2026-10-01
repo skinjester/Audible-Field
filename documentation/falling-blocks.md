@@ -106,7 +106,7 @@ Per quadrant, for atoms that sonify:
 | --- | --- |
 | Ground cells occupied | Stem gain. Wider coverage is louder. The same amount opens that stem's low-pass, from about 7 kHz on a single column toward 20 kHz on a wide pour. |
 | Tallest resting column | Weight on that pile's stem. Taller darkens a low-pass from 18 kHz toward 2.5 kHz, adds a low shelf up to +6 dB, and blends in a level-matched soft clip. Full weight is 10 atoms. Rising grains do not add to it. |
-| Diffuse grains rising | Greyhole send, taken before the weight filters so the tail stays bright. Feedback jumps to the long tail as soon as they lift, then releases slowly. Pitch stays where the pile sits. |
+| Diffuse grains rising | Greyhole send, taken before the weight filters so the tail stays bright. Feedback jumps to the long tail as soon as they lift, then releases slowly while the quadrant still has material. An empty quadrant fades that tail quickly. Pitch stays where the pile sits. |
 | Distance to the quadrant center | Playback rate. The center is an octave up. The quadrant corners stay at the sample's own pitch. Settled height and rising Diffuse grains do not change pitch. |
 | Pile position after yaw, plus where the plane sits in the view | Stereo pan of that stem. |
 | Landing | A splash ring, and one repeat of that quadrant's sample, in phase with the bed. The repeat's low-pass starts at the bed's cutoff and sweeps shut across the ring's life, at the pitch of the landing. A heavier landing is louder. |

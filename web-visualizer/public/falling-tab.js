@@ -1,4 +1,4 @@
-import { audioEngine } from "./audio-engine.js?v=67";
+import { audioEngine } from "./audio-engine.js?v=68";
 import {
   clearBoard,
   hideFallingBlocks,
@@ -6,7 +6,7 @@ import {
   readGridSnapshot,
   showFallingBlocks,
 } from "./falling-blocks.js?v=320";
-import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=32";
+import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=33";
 import { controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
@@ -120,7 +120,7 @@ export function tick(frame) {
   audioEngine.setStemGains(shadow.gains, shadow.pans, shadow.cutoffs);
   audioEngine.setStemPitch(shadow.rates);
   audioEngine.setStemReverb(shadow.reverbs, shadow.decays, shadow.longTails);
-  audioEngine.setDiffuseGreyhole(shadow.diffuses, shadow.feedbacks);
+  audioEngine.setDiffuseGreyhole(shadow.diffuses, shadow.feedbacks, shadow.wets);
   audioEngine.setPileBody(shadow.halls, shadow.weights);
   if (shadow.splash) audioEngine.playSplash(shadow.splash);
   audioEngine.setOutputLevel(1);
