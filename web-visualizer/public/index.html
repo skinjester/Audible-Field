@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=198" />
+    <link rel="stylesheet" href="/styles.css?v=201" />
     <script type="importmap">
       {
         "imports": {
@@ -357,7 +357,19 @@
         <section class="viz-stage">
           <div class="viz-canvas-wrap">
             <canvas data-falling-canvas aria-label="Falling Blocks playfield"></canvas>
-            <button type="button" class="falling-pill falling-touch-emit" data-falling-touch-emit aria-pressed="false" aria-label="Emit atoms">Emit</button>
+            <div class="falling-emit-dock">
+              <span class="falling-emit-clump" aria-hidden="true">
+                <i></i><i></i><i></i><i></i>
+              </span>
+              <button type="button" class="falling-pill falling-touch-emit" data-falling-touch-emit aria-pressed="false" aria-label="Emit atoms. Drag up for a clump, down for a single stream." style="--swatch: #c4624e">
+                <svg class="falling-emit-arrows" viewBox="0 0 84 84" aria-hidden="true">
+                  <path class="up" d="M30 20 L42 10 L54 20" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path class="down" d="M30 64 L42 74 L54 64" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span class="falling-emit-label">Emit</span>
+              </button>
+              <span class="falling-emit-single" aria-hidden="true"></span>
+            </div>
             <p class="viz-error" data-falling-error hidden></p>
               <dialog class="falling-about-dialog" data-falling-about-dialog aria-labelledby="falling-about-title">
                 <form method="dialog" class="falling-about-panel">
@@ -436,11 +448,11 @@
               <div class="falling-topbar">
                 <button type="button" class="falling-icon-btn falling-about" data-falling-about aria-label="About">?</button>
                 <p class="falling-frame" aria-live="polite">
-                  <span data-falling-fps>--</span> fps
-                  <span aria-hidden="true">·</span>
-                  <span data-falling-atoms>--</span> atoms
-                  <span aria-hidden="true">·</span>
-                  <span data-falling-tris>--</span> polys
+                  <span data-falling-fps>--</span>fps
+                  <span aria-hidden="true"> · </span>
+                  <span data-falling-atoms>--</span>atoms
+                  <span aria-hidden="true"> · </span>
+                  <span data-falling-tris>--</span>polys
                 </p>
                 <button type="button" class="falling-icon-btn falling-settings" data-falling-settings aria-label="Settings" aria-expanded="false" aria-controls="falling-settings-panel">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -578,6 +590,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=386"></script>
+    <script type="module" src="/app.js?v=390"></script>
   </body>
 </html>

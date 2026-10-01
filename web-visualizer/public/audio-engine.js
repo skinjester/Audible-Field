@@ -52,6 +52,32 @@ function equalPowerFade(mix) {
   return { dry: Math.cos(angle), wet: Math.sin(angle) };
 }
 
+/** Open pile. Heavy pile reaches the closed low-pass. */
+const WEIGHT_LP_OPEN = 18000;
+const WEIGHT_LP_HEAVY = 2500;
+/** Low shelf at full weight. */
+const WEIGHT_SHELF_DB = 6;
+
+/** Log low-pass. Weight 0 is open. Weight 1 is the heavy pile. */
+function weightCutoff(amount) {
+  const w = clamp01(amount);
+  return WEIGHT_LP_OPEN * Math.pow(WEIGHT_LP_HEAVY / WEIGHT_LP_OPEN, w);
+}
+
+/**
+ * Soft clip whose dry/wet blend and makeup keep a steady level.
+ * Same compensation as the camera drive, at a milder throw.
+ */
+function weightDrive(amount) {
+  const drive = clamp01(amount);
+  const pre = 1 + drive * 2.2;
+  const ref = 0.3;
+  const shaped = Math.tanh(pre * ref);
+  const post = shaped > 1e-4 ? ref / shaped : 1;
+  const grit = equalPowerFade(drive * 0.45);
+  return { pre, post, dry: grit.dry, wet: grit.wet };
+}
+
 /** Odd tanh curve over ±1. Small signals stay near unity; peaks fold. */
 function tanhCurve(n) {
   const curve = new Float32Array(n);
@@ -81,64 +107,48 @@ function isCoarseTouch() {
   return coarse && touch;
 }
 
-/**
- * Concurrent landing repeats per quadrant. Each one lasts the ground-ring lifetime.
- * A phone speaker does not need the desktop pool, and 24 × 4 voices is a heavy
- * Web Audio graph for iOS Safari.
- */
-function strikeVoiceCap() {
-  return isCoarseTouch() ? 8 : 24;
-}
-
-/**
- * How many repeats this burst should start.
- * A few landings each get a voice while the pool has room. A heavier pour
- * that no longer fits keeps a pitch spread, and the caller cuts the oldest
- * repeats so the new landings still attack instead of going silent.
- * @param {number} count
- * @param {number} room
- */
-function strikePlan(count, room) {
-  const n = Math.max(0, count | 0);
-  if (!n) return 0;
-  const free = Math.max(0, room | 0);
-  if (n <= free) return n;
-  const spread = Math.min(n, Math.max(1, Math.round(Math.log2(n) + 2)));
-  return Math.min(strikeVoiceCap(), Math.max(free, spread));
-}
-
 /** Safari uses "interrupted" after a lock, a call, or a backgrounded tab. */
 function contextNeedsResume(ctx) {
   return !!ctx && (ctx.state === "suspended" || ctx.state === "interrupted");
 }
 
-/**
- * Seconds before this repeat attacks.
- * A few landings in the same moment are spaced far enough to count.
- * A heavy pour stays a short roll.
- * @param {number} count
- * @param {number} index
- */
-function strikeDelay(count, index) {
-  if (count <= 1 || index <= 0) return 0;
-  const gap = count <= 6 ? 0.062 : Math.min(0.035, 0.16 / (count - 1));
-  return index * gap;
+/** Middle pitch of the cells that just landed. */
+function strikeMiddleRate(lives) {
+  const rates = [];
+  for (let i = 0; i < lives.length; i += 1) rates.push(strikeRate(lives[i]));
+  rates.sort((a, b) => a - b);
+  if (!rates.length) return 1;
+  return rates[(rates.length / 2) | 0];
 }
 
-/** Up to `max` strikes spread across lifetime, then pitch. */
-function sampleLifetimes(lives, max) {
-  const sorted = lives
-    .filter((hit) => strikeLife(hit) > 0)
-    .sort((a, b) => strikeLife(a) - strikeLife(b) || strikeRate(a) - strikeRate(b));
-  if (max <= 0 || !sorted.length) return [];
-  if (sorted.length <= max) return sorted;
-  if (max === 1) return [sorted[(sorted.length / 2) | 0]];
-  const out = [];
-  for (let i = 0; i < max; i += 1) {
-    const idx = Math.round((i * (sorted.length - 1)) / (max - 1));
-    out.push(sorted[idx]);
-  }
-  return out;
+/** Longest ring in the burst, clamped to a splash voice. */
+function strikeBurstLife(lives) {
+  let life = 0;
+  for (let i = 0; i < lives.length; i += 1) life = Math.max(life, strikeLife(lives[i]));
+  return Math.min(5, Math.max(0.1, life || 0.1));
+}
+
+/**
+ * Splash low-pass opens at the cutoff the bed is already using.
+ * That is the darker of the coverage low-pass and the pile-weight low-pass.
+ * An open pile still shuts from 9 kHz. The floor stays above the close so the ramp has somewhere to fall.
+ */
+function strikeOpenHz(stem) {
+  const tone = Number(stem?.tone?.frequency?.value);
+  const weight = Number(stem?.weightLp?.frequency?.value);
+  const toneHz = Number.isFinite(tone) && tone > 0 ? tone : 9000;
+  const weightHz = Number.isFinite(weight) && weight > 0 ? weight : toneHz;
+  return Math.min(9000, Math.max(225, Math.min(toneHz, weightHz)));
+}
+
+/**
+ * Heavier landings are louder, up to 1.5. The stem's own level scales the hit,
+ * with a floor so the first cells of a quiet pile still speak while gain slews in.
+ */
+function strikePeak(stemLevel, rate, count) {
+  const weight = Math.min(1.5, Math.pow(Math.max(1, count), 0.35));
+  const amount = Math.max(0.35, Math.min(1, Number(stemLevel) || 0));
+  return amount * (0.42 / Math.sqrt(Math.max(0.25, rate))) * weight;
 }
 
 function defaultAxisScales() {
@@ -581,7 +591,7 @@ export class EchoScapeAudioEngine {
       bedsPlaying,
       strikes,
       strikeTotal,
-      strikeCap: strikeVoiceCap(),
+      strikeCap: 1,
       wams: this.loadedWamCount(),
     };
   }
@@ -1505,16 +1515,33 @@ export class EchoScapeAudioEngine {
     tone.type = "lowpass";
     tone.frequency.value = 20000;
     tone.Q.value = 0.7;
+    const weightLp = this.ctx.createBiquadFilter();
+    weightLp.type = "lowpass";
+    weightLp.frequency.value = WEIGHT_LP_OPEN;
+    weightLp.Q.value = 0.7;
     const body = this.ctx.createBiquadFilter();
     body.type = "lowshelf";
-    body.frequency.value = 200;
+    body.frequency.value = 250;
     body.Q.value = 0.7;
-    body.gain.value = 14;
+    body.gain.value = 0;
     const air = this.ctx.createBiquadFilter();
     air.type = "highshelf";
     air.frequency.value = 650;
     air.Q.value = 0.7;
-    air.gain.value = -20;
+    air.gain.value = 0;
+    const satDry = this.ctx.createGain();
+    satDry.gain.value = 1;
+    const satPre = this.ctx.createGain();
+    satPre.gain.value = 1;
+    const satShaper = this.ctx.createWaveShaper();
+    satShaper.curve = tanhCurve(2048);
+    satShaper.oversample = "2x";
+    const satPost = this.ctx.createGain();
+    satPost.gain.value = 1;
+    const satWet = this.ctx.createGain();
+    satWet.gain.value = 0;
+    const satSum = this.ctx.createGain();
+    satSum.gain.value = 1;
     const weights = equalPowerMix(mixerState.x, mixerState.y);
     const initialGain =
       typeof opts.initialGain === "number" ? opts.initialGain : weights[corner] ?? 0;
@@ -1523,12 +1550,20 @@ export class EchoScapeAudioEngine {
     source.connect(gain);
     gain.connect(mono);
     mono.connect(pan);
-    pan.connect(body);
+    pan.connect(weightLp);
+    weightLp.connect(body);
     body.connect(air);
-    air.connect(tone);
+    air.connect(satDry);
+    air.connect(satPre);
+    satPre.connect(satShaper);
+    satShaper.connect(satPost);
+    satPost.connect(satWet);
+    satDry.connect(satSum);
+    satWet.connect(satSum);
+    satSum.connect(tone);
     tone.connect(this._sum);
     const reverbSend = this._stemReverbs?.[corner]?.send;
-    if (reverbSend) tone.connect(reverbSend);
+    if (reverbSend) pan.connect(reverbSend);
     const hallSend = this._hallSends?.[corner];
     if (hallSend) pan.connect(hallSend);
 
@@ -1555,12 +1590,47 @@ export class EchoScapeAudioEngine {
         /* ignore */
       }
       try {
+        prev.weightLp?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      try {
         prev.body?.disconnect();
       } catch {
         /* ignore */
       }
       try {
         prev.air?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      try {
+        prev.satDry?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      try {
+        prev.satPre?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      try {
+        prev.satShaper?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      try {
+        prev.satPost?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      try {
+        prev.satWet?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      try {
+        prev.satSum?.disconnect();
       } catch {
         /* ignore */
       }
@@ -1583,7 +1653,25 @@ export class EchoScapeAudioEngine {
       }
     }
 
-    this.stems[corner] = { el, source, gain, mono, pan, body, air, tone, meta, strikes: [] };
+    this.stems[corner] = {
+      el,
+      source,
+      gain,
+      mono,
+      pan,
+      weightLp,
+      body,
+      air,
+      satDry,
+      satPre,
+      satShaper,
+      satPost,
+      satWet,
+      satSum,
+      tone,
+      meta,
+      strikes: [],
+    };
     this._primeStrikeBuffer(corner, url);
 
     el.volume = 1;
@@ -1746,7 +1834,7 @@ export class EchoScapeAudioEngine {
    * Microverb's room samples are not in the project, and its generated tail
    * was too quiet to read as height, so this is a native convolver with a
    * softened noise room turned up enough to hear.
-   * The send is taken before the mid bump, so rising grains do not resonate.
+   * The send leaves at the panner, before the weight filters.
    */
   async _loadHall() {
     if (this._hall || !this.ctx || !this._sum) return;
@@ -1777,28 +1865,33 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * Resting stack. The short hall stays closed.
-   * `resonances` opens the dry bed: a short pile is warm and closed, a tall pile is full-range.
-   * Rising grains do not move these shelves.
+   * Resting pile. The short hall stays closed.
+   * `weights` darkens and thickens the dry bed. 0 is light. 1 is heavy.
+   * Loudness stays on the stem gain. The high shelf stays flat.
    * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} halls
-   * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} resonances
+   * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} weights
    */
-  setPileBody(halls, resonances) {
+  setPileBody(halls, weights) {
     if (!this.running) return;
     for (const corner of CORNERS) {
       const send = this._hallSends?.[corner];
       if (send) send.gain.value = 0;
       const stem = this.stems[corner];
-      if (!stem?.body) continue;
-      const amount = Math.min(1, Math.max(0, Number(resonances?.[corner]) || 0));
-      const closed = 1 - amount;
-      stem.body.gain.value = closed * 14;
-      if (stem.air) stem.air.gain.value = closed * -20;
+      if (!stem?.weightLp) continue;
+      const amount = clamp01(Number(weights?.[corner]) || 0);
+      stem.weightLp.frequency.value = weightCutoff(amount);
+      if (stem.body) stem.body.gain.value = amount * WEIGHT_SHELF_DB;
+      if (stem.air) stem.air.gain.value = 0;
+      const drive = weightDrive(amount);
+      if (stem.satPre) stem.satPre.gain.value = drive.pre;
+      if (stem.satPost) stem.satPost.gain.value = drive.post;
+      if (stem.satDry) stem.satDry.gain.value = drive.dry;
+      if (stem.satWet) stem.satWet.gain.value = drive.wet;
     }
   }
 
   /**
-   * One Greyhole per bed. Height opens that channel's send; the tail stays on that sample.
+   * One Greyhole per bed. The rising tail opens that channel's send, taken before the weight filters.
    */
   async _loadStemReverbs() {
     if (this._stemReverbs || !this.ctx) return;
@@ -1816,7 +1909,7 @@ export class EchoScapeAudioEngine {
         // Same wet level as the main-branch Greyhole (diagnostics wet bus).
         ret.gain.value = 0.45;
         const stem = this.stems[corner];
-        if (stem?.tone) stem.tone.connect(send);
+        if (stem?.pan) stem.pan.connect(send);
         send.connect(node);
         node.connect(ret);
         ret.connect(this._sum);
@@ -2139,10 +2232,10 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * Repeat each landed quadrant's own sample. The repeat's low-pass sweeps
-   * shut across the ground-ring lifetime, at the pitch of the cell that landed.
-   * A few landings each get a voice. A heavier pour that fills the pool cuts
-   * the oldest repeats so the new landings still attack.
+   * One repeat of that quadrant's sample, in phase with the looping bed.
+   * The low-pass starts at the bed's cutoff and sweeps shut across the ground ring,
+   * at the middle pitch of the cells that landed. A heavier landing is louder.
+   * Another landing while the ring is still up restarts that same voice.
    * @param {Record<string, ({ life: number, rate?: number } | number)[]> | null} hits
    */
   playSplash(hits) {
@@ -2193,80 +2286,138 @@ export class EchoScapeAudioEngine {
     while (stem.strikes.length) this._releaseStrike(stem, stem.strikes[0]);
   }
 
+  /**
+   * Match the splash shelves to the bed so a short warm pile does not splash bright.
+   * @param {{ body?: BiquadFilterNode, air?: BiquadFilterNode }} stem
+   * @param {BiquadFilterNode} body
+   * @param {BiquadFilterNode} air
+   */
+  _copySplashShelves(stem, body, air) {
+    const apply = (from, to, fallback) => {
+      to.type = from?.type || fallback.type;
+      to.frequency.value = Number(from?.frequency?.value) || fallback.frequency;
+      to.Q.value = Number(from?.Q?.value) || fallback.Q;
+      to.gain.value = Number.isFinite(Number(from?.gain?.value)) ? Number(from.gain.value) : fallback.gain;
+    };
+    apply(stem?.body, body, { type: "lowshelf", frequency: 200, Q: 0.7, gain: 0 });
+    apply(stem?.air, air, { type: "highshelf", frequency: 650, Q: 0.7, gain: 0 });
+  }
+
+  /**
+   * Restart the level, the shut, and the pitch on a voice that is already ringing.
+   * The peak holds until the low-pass has nearly closed, then fades in the last 60 ms.
+   */
+  _shapeSplash(strike, stem, when, dur, peak, openHz, rate, panValue) {
+    const release = Math.min(0.06, Math.max(0.02, dur * 0.15));
+    const hold = dur - release;
+    const level = Math.max(0.001, peak);
+    const gain = strike.gain.gain;
+    gain.cancelScheduledValues(when);
+    const from = strike.live ? Math.max(0.001, gain.value || 0.001) : 0.001;
+    gain.setValueAtTime(from, when);
+    gain.exponentialRampToValueAtTime(level, when + 0.012);
+    if (hold > 0.02) gain.setValueAtTime(level, when + hold);
+    gain.exponentialRampToValueAtTime(0.001, when + dur);
+
+    const cutoff = strike.filter.frequency;
+    cutoff.cancelScheduledValues(when);
+    cutoff.setValueAtTime(openHz, when);
+    cutoff.exponentialRampToValueAtTime(180, when + dur);
+
+    if (strike.pan) strike.pan.pan.setValueAtTime(panValue, when);
+    if (strike.voice) strike.voice.playbackRate.setValueAtTime(rate, when);
+    this._copySplashShelves(stem, strike.body, strike.air);
+    strike.live = true;
+  }
+
+  _armSplashRelease(stem, strike, dur) {
+    if (strike.timer) {
+      window.clearTimeout(strike.timer);
+      strike.timer = 0;
+    }
+    strike.timer = window.setTimeout(() => {
+      this._releaseStrike(stem, strike);
+    }, (dur + 0.08) * 1000);
+  }
+
   _strikeStem(corner, lives) {
     const stem = this.stems[corner];
     if (!stem?.source) return;
     if (!stem.strikes) stem.strikes = [];
     const audible = lives.filter((hit) => strikeLife(hit) > 0);
-    const active = stem.strikes.length;
-    const cap = strikeVoiceCap();
-    const want = strikePlan(audible.length, cap - active);
-    if (want <= 0) return;
-    const overflow = active + want - cap;
-    if (overflow > 0) {
-      const oldest = stem.strikes.slice(0, overflow);
-      for (const strike of oldest) this._releaseStrike(stem, strike);
-    }
-    const chosen = sampleLifetimes(audible, want);
-    if (!chosen.length) return;
+    if (!audible.length) return;
     const ctx = this.ctx;
-    const t = ctx.currentTime;
+    const dur = strikeBurstLife(audible);
+    const rate = strikeMiddleRate(audible);
+    const stemLevel = Number(stem.gain?.gain?.value) || 0;
+    const peak = strikePeak(stemLevel, rate, audible.length);
+    const openHz = strikeOpenHz(stem);
     const panValue = stem.pan ? stem.pan.pan.value : 0;
-    const buffer = this._strikeBuffers?.[corner] || null;
-    const folded = Math.max(1, audible.length / chosen.length);
-    const weight = Math.min(1.5, Math.pow(folded, 0.35));
-    const bedTime = this._bedPosition(stem);
-    for (let i = 0; i < chosen.length; i += 1) {
-      const dur = Math.min(5, Math.max(0.1, strikeLife(chosen[i]) || 0.1));
-      const rate = strikeRate(chosen[i]);
-      const when = t + strikeDelay(chosen.length, i);
-      const gain = ctx.createGain();
-      const delay = ctx.createDelay(0.2);
-      delay.delayTime.value = 0.05;
-      const filter = ctx.createBiquadFilter();
-      filter.type = "lowpass";
-      filter.Q.value = 0.85;
-      filter.frequency.setValueAtTime(9000, when);
-      filter.frequency.exponentialRampToValueAtTime(180, when + dur);
-      const pan = ctx.createStereoPanner();
-      pan.pan.value = panValue;
-      const release = Math.min(0.15, dur * 0.3);
-      const peak = (0.42 / Math.sqrt(rate)) * weight;
-      gain.gain.setValueAtTime(0.001, when);
-      gain.gain.exponentialRampToValueAtTime(peak, when + 0.012);
-      if (dur > release + 0.04) gain.gain.setValueAtTime(peak, when + dur - release);
-      gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
-      const nodes = [gain, delay, filter, pan];
-      /** @type {AudioBufferSourceNode | null} */
-      let voice = null;
-      /** @type {AudioNode | null} */
-      let tap = null;
-      if (buffer) {
-        voice = ctx.createBufferSource();
-        voice.buffer = buffer;
-        voice.loop = true;
-        voice.playbackRate.value = rate;
-        const span = buffer.duration > 0 ? buffer.duration : 0;
-        const skew = (i + 1) / (chosen.length + 1);
-        const offset = span > 0 ? (bedTime + skew * span) % span : 0;
-        voice.connect(gain);
-        voice.start(when, offset);
-        voice.stop(when + dur + 0.08);
-        nodes.push(voice);
-      } else {
-        tap = stem.source;
-        tap.connect(gain);
-      }
-      gain.connect(delay);
-      delay.connect(filter);
-      filter.connect(pan);
-      pan.connect(this._splashOut);
-      const strike = { nodes, voice, tap, gain, timer: 0, released: false };
-      stem.strikes.push(strike);
-      strike.timer = window.setTimeout(() => {
-        this._releaseStrike(stem, strike);
-      }, (when - t + dur + 0.08) * 1000);
+
+    const ringing = stem.strikes.filter((strike) => !strike.released);
+    while (ringing.length > 1) this._releaseStrike(stem, ringing.shift());
+    const live = ringing[0];
+    if (live) {
+      const when = ctx.currentTime;
+      this._shapeSplash(live, stem, when, dur, peak, openHz, rate, panValue);
+      this._armSplashRelease(stem, live, dur);
+      return;
     }
+
+    const gain = ctx.createGain();
+    gain.gain.value = 0.001;
+    const body = ctx.createBiquadFilter();
+    const air = ctx.createBiquadFilter();
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.Q.value = 0.85;
+    filter.frequency.value = openHz;
+    const pan = ctx.createStereoPanner();
+    pan.pan.value = panValue;
+    this._copySplashShelves(stem, body, air);
+    const nodes = [gain, body, air, filter, pan];
+    /** @type {AudioBufferSourceNode | null} */
+    let voice = null;
+    /** @type {AudioNode | null} */
+    let tap = null;
+    const buffer = this._strikeBuffers?.[corner] || null;
+    const when = ctx.currentTime;
+    if (buffer) {
+      voice = ctx.createBufferSource();
+      voice.buffer = buffer;
+      voice.loop = true;
+      voice.playbackRate.value = rate;
+      const span = buffer.duration > 0 ? buffer.duration : 0;
+      const bedTime = Number(this._bedPosition(stem)) || 0;
+      const offset = span > 0 ? ((bedTime % span) + span) % span : 0;
+      voice.connect(gain);
+      voice.start(when, offset);
+      nodes.push(voice);
+    } else {
+      tap = stem.source;
+      tap.connect(gain);
+    }
+    gain.connect(body);
+    body.connect(air);
+    air.connect(filter);
+    filter.connect(pan);
+    pan.connect(this._splashOut);
+    const strike = {
+      nodes,
+      voice,
+      tap,
+      gain,
+      body,
+      air,
+      filter,
+      pan,
+      timer: 0,
+      released: false,
+      live: false,
+    };
+    stem.strikes.push(strike);
+    this._shapeSplash(strike, stem, when, dur, peak, openHz, rate, panValue);
+    this._armSplashRelease(stem, strike, dur);
   }
 
   /**

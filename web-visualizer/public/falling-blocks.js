@@ -1830,6 +1830,9 @@ function syncPaletteUi() {
     const on = btn.getAttribute("data-material") === activeMaterialId;
     btn.setAttribute("aria-pressed", on ? "true" : "false");
   }
+  const emit = document.querySelector("[data-falling-touch-emit]");
+  const mat = catalog?.byId.get(activeMaterialId);
+  if (emit instanceof HTMLElement && mat?.color) emit.style.setProperty("--swatch", mat.color);
 }
 
 function syncShoulderGlyphs(prevHeld, nextHeld) {
@@ -1846,139 +1849,6 @@ function syncTriggerLabels(ltHeld, rtHeld) {
   rt?.classList.toggle("is-pressed", !!rtHeld);
 }
 
-let blockIconRenderer = null;
-let blockIconScene = null;
-let blockIconCamera = null;
-let blockIconMesh = null;
-let blockIconSphere = null;
-
-/** Same cube, material, and light as a fallen atom, from the playfield camera. */
-function blockIconUrl(color) {
-  if (!blockIconRenderer) {
-    const renderer = new THREE.WebGLRenderer({
-      alpha: true,
-      antialias: true,
-      preserveDrawingBuffer: true,
-    });
-    renderer.setPixelRatio(2);
-    renderer.setSize(64, 64, false);
-    renderer.setClearColor(0x000000, 0);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    const scene = new THREE.Scene();
-    const camera = new THREE.OrthographicCamera(-1.12, 1.12, 1.12, -1.12, 0.1, 20);
-    const dist = 4;
-    const horizontal = Math.cos(CAMERA_PITCH) * dist;
-    camera.position.set(
-      Math.sin(CAMERA_YAW) * horizontal,
-      Math.sin(CAMERA_PITCH) * dist,
-      Math.cos(CAMERA_YAW) * horizontal,
-    );
-    camera.lookAt(0, 0, 0);
-    scene.add(new THREE.AmbientLight(0xffffff, 0.08));
-    scene.add(new THREE.HemisphereLight(0xd5dee6, 0x140e0c, 0.16));
-    const key = new THREE.DirectionalLight(0xfff6ee, 2.05);
-    const keyElevation = (30 * Math.PI) / 180;
-    const keyHeading = Math.atan2(6, 8);
-    key.position.set(
-      Math.cos(keyElevation) * Math.cos(keyHeading),
-      Math.sin(keyElevation),
-      Math.cos(keyElevation) * Math.sin(keyHeading),
-    );
-    scene.add(key);
-    const fill = new THREE.DirectionalLight(0x8ea0b0, 0.12);
-    fill.position.set(-7, 6, -5);
-    scene.add(fill);
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshPhongMaterial({
-        color: 0xffffff,
-        specular: 0x222222,
-        shininess: 18,
-      }),
-    );
-    scene.add(mesh);
-    const sphere = new THREE.Mesh(
-      new THREE.SphereGeometry(0.86, 40, 28),
-      new THREE.MeshPhongMaterial({
-        color: 0x2a2a2a,
-        specular: 0x8a8a8a,
-        shininess: 36,
-      }),
-    );
-    sphere.visible = false;
-    scene.add(sphere);
-    blockIconRenderer = renderer;
-    blockIconScene = scene;
-    blockIconCamera = camera;
-    blockIconMesh = mesh;
-    blockIconSphere = sphere;
-  }
-  blockIconMesh.visible = true;
-  blockIconSphere.visible = false;
-  blockIconMesh.material.color.set(color);
-  blockIconRenderer.render(blockIconScene, blockIconCamera);
-  return blockIconWithOutline(blockIconRenderer);
-}
-
-function emitSphereUrl() {
-  blockIconUrl("#ffffff");
-  blockIconMesh.visible = false;
-  blockIconSphere.visible = true;
-  blockIconRenderer.render(blockIconScene, blockIconCamera);
-  const url = blockIconWithOutline(blockIconRenderer);
-  blockIconMesh.visible = true;
-  blockIconSphere.visible = false;
-  return url;
-}
-
-/** Paint a dark rim around the cube so the color still reads on the ground. */
-function blockIconWithOutline(renderer) {
-  const src = renderer.domElement;
-  const w = src.width;
-  const h = src.height;
-  const gl = renderer.getContext();
-  const pixels = new Uint8Array(w * h * 4);
-  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  const image = ctx.createImageData(w, h);
-  const out = image.data;
-  for (let y = 0; y < h; y += 1) {
-    const srcRow = (h - 1 - y) * w * 4;
-    out.set(pixels.subarray(srcRow, srcRow + w * 4), y * w * 4);
-  }
-  const copy = new Uint8ClampedArray(out);
-  const radius = 3;
-  for (let y = 0; y < h; y += 1) {
-    for (let x = 0; x < w; x += 1) {
-      const i = (y * w + x) * 4;
-      if (copy[i + 3] > 24) continue;
-      let near = false;
-      for (let dy = -radius; dy <= radius && !near; dy += 1) {
-        const ny = y + dy;
-        if (ny < 0 || ny >= h) continue;
-        for (let dx = -radius; dx <= radius; dx += 1) {
-          if (dx * dx + dy * dy > radius * radius) continue;
-          const nx = x + dx;
-          if (nx < 0 || nx >= w) continue;
-          if (copy[(ny * w + nx) * 4 + 3] > 48) {
-            near = true;
-            break;
-          }
-        }
-      }
-      if (!near) continue;
-      out[i] = 26;
-      out[i + 1] = 18;
-      out[i + 2] = 14;
-      out[i + 3] = 255;
-    }
-  }
-  ctx.putImageData(image, 0, 0);
-  return canvas.toDataURL("image/png");
-}
 
 function buildPalette() {
   paletteEl = document.querySelector("[data-falling-palette]");
@@ -1991,10 +1861,7 @@ function buildPalette() {
     btn.className = "falling-material-swatch";
     btn.setAttribute("aria-label", mat.label);
     btn.title = mat.label;
-    const icon = document.createElement("img");
-    icon.alt = "";
-    icon.src = blockIconUrl(mat.color);
-    btn.appendChild(icon);
+    btn.style.setProperty("--swatch", mat.color);
     btn.addEventListener("click", (event) => {
       event.stopPropagation();
       setActiveMaterial(mat.id);
@@ -2007,10 +1874,6 @@ function buildPalette() {
   }
   syncPaletteUi();
   bindClearUi();
-  const emitBtn = document.querySelector("[data-falling-touch-emit]");
-  if (emitBtn instanceof HTMLButtonElement) {
-    emitBtn.style.backgroundImage = `url("${emitSphereUrl()}")`;
-  }
 }
 
 /** Wipe all atoms, splashes, and surface transform. */

@@ -1,20 +1,25 @@
 /**
  * Quadrant sonification.
- * Footprint (ground cells occupied) sets each sample's level.
- * Stack height opens the dry bed. A short pile stays dark and warm. It keeps brightening until the stack is about 6 world units tall.
- * Rising Diffuse grains open that bed's Greyhole send, fully by 2.5 world units, and the feedback jumps to the long diffuse tail as soon as they lift. Delay time and size stay fixed.
- * Greyhole stays closed: moving its delay with the stack was glitching playback.
- * More ground covered opens that sample's low-pass.
+ * Footprint (ground cells occupied) sets each sample's level and opens its low-pass.
+ * A single column stays near 7 kHz. A wide pour opens toward 20 kHz.
+ * Each pile's resting height is weight on that stem: darker, a low shelf, and a soft clip.
+ * Full weight is 10 atoms (2.5 world units). Taller than that stays pinned. Rising grains do not add weight.
+ * Rising Diffuse grains open that bed's Greyhole send, fully by 2.5 world units, and the feedback jumps to the long diffuse tail as soon as they lift. Delay time and size stay fixed. The send is taken before the weight filters.
+ * Greyhole stays off the resting stack: moving its delay with the stack was glitching playback.
  * Closer to the center of its quadrant raises that sample's pitch, up to an octave.
- * Rising Diffuse grains raise it further, another octave by the top of the field.
  * Farther from that center lowers it, down to the sample's own pitch at the corners.
- * A landing repeats that quadrant's sample through a filter sweep lasting the ground-ring splash,
- * at the pitch of the cell that landed. Face WAMs stay off.
+ * Rising Diffuse grains do not change pitch.
+ * A landing repeats that quadrant's sample once, in phase with the bed.
+ * The low-pass starts at the bed's cutoff and sweeps shut across the ground-ring splash,
+ * at the pitch of the landing. A heavier landing is louder. Face WAMs stay off.
  */
 
 const CORNERS = ["tl", "tr", "bl", "br"];
-/** Few occupied cells sit here. A wide pour reaches the open cutoff. */
-const LPF_FEW = 1100;
+/**
+ * Few occupied cells sit here. A wide pour reaches the open cutoff.
+ * One column has to stay above the heavy weight low-pass (2.5 kHz), or a tower cannot get darker than a short stack.
+ */
+const LPF_FEW = 6000;
 const LPF_MANY = 20000;
 
 function clamp01(n) {
@@ -32,22 +37,21 @@ const FOOTPRINT_FULL = 0.045;
 /** Below 1, small patches stay audible while a single column stays quieter than a wide pile. */
 const FOOTPRINT_CURVE = 0.55;
 /**
- * Pile height and rising grains open each stem's Greyhole send.
- * Off for now: Greyhole rewrites delayTime as that send moves, and the crossfade glitches.
+ * Resting height used to open each stem's Greyhole send.
+ * Off: that send is the rising tail only, and moving delayTime with a level glitches.
  */
 const HEIGHT_REVERB = false;
-/** World-unit resting stack that fully opens the dry-bed EQ. Taller than this stays full-range. */
-const STACK_EQ_FULL = 6;
-/** Short pile. Tall pile reaches the open low-pass. */
-const HEIGHT_LP_LOW = 420;
-const HEIGHT_LP_HIGH = 16000;
+/** Resting stack, in world units, that reaches full weight. 10 atoms at 0.25. Taller stays pinned. */
+const WEIGHT_FULL_U = 2.5;
+/** Above 1, the first atoms stay light and a tower past 8 atoms is still getting heavier. */
+const WEIGHT_CURVE = 1.15;
+/** quad.stack is normalized to the field height. */
+const STACK_FIELD_U = 12;
 /**
  * Drawn altitude (world units) that fully opens the Diffuse Greyhole send.
  * The first lift already raises it; 2.5 is full, the same range as the main-branch rise.
  */
 const RISE_FULL = 2.5;
-/** Drawn altitude where rising Diffuse grains have raised the bed by an octave. */
-const RISE_PITCH_TOP = 12;
 /** Greyhole feedback for a rising Diffuse tail. Just under runaway, same as the main branch. */
 const FEEDBACK_MAX = 0.98;
 /** How fast the long tail engages once grains start rising. */
@@ -66,10 +70,10 @@ function cutoffHz(amount) {
   return LPF_FEW * Math.pow(LPF_MANY / LPF_FEW, a);
 }
 
-/** Resting stack opens the top of the bed. */
-function heightCutoff(amount) {
-  const a = clamp01(amount);
-  return HEIGHT_LP_LOW * Math.pow(HEIGHT_LP_HIGH / HEIGHT_LP_LOW, a);
+/** Resting column height → 0..1 weight. Empty ground is 0. */
+function pileWeight(stackWorld) {
+  if (!(stackWorld > 0)) return 0;
+  return clamp01(Math.pow(clamp01(stackWorld / WEIGHT_FULL_U), WEIGHT_CURVE));
 }
 
 const gains = { tl: 0, tr: 0, bl: 0, br: 0 };
@@ -80,10 +84,10 @@ const longTails = { tl: false, tr: false, bl: false, br: false };
 /** Holds the long tail after rising grains have cleared. */
 const riseLatch = { tl: false, tr: false, bl: false, br: false };
 const pitches = { tl: 1, tr: 1, bl: 1, br: 1 };
-/** 0..1 short hall from the resting stack. */
+/** 0..1 short hall from the resting stack. The hall stays closed. */
 const halls = { tl: 0, tr: 0, bl: 0, br: 0 };
-/** 0..1 mid bump from the resting stack. Rising grains do not move this. */
-const resonances = { tl: 0, tr: 0, bl: 0, br: 0 };
+/** 0..1 weight of the resting pile. Rising grains do not move this. */
+const weights = { tl: 0, tr: 0, bl: 0, br: 0 };
 /** 0..1 Greyhole send from rising Diffuse grains. The resting stack does not open it. */
 const diffuses = { tl: 0, tr: 0, bl: 0, br: 0 };
 /** Greyhole feedback for that rise. Hits the long tail immediately, then rings after the grains land. */
@@ -123,7 +127,7 @@ export function resetFieldSonify() {
     riseLatch[id] = false;
     pitches[id] = 1;
     halls[id] = 0;
-    resonances[id] = 0;
+    weights[id] = 0;
     diffuses[id] = 0;
     feedbacks[id] = 0;
   }
@@ -143,9 +147,8 @@ export function fieldFrame(snap, dt) {
     const height = clamp01(quad.height);
     const gainTarget = footprintGain(coverage);
     const stackNorm = clamp01(Number.isFinite(Number(quad.stack)) ? quad.stack : height);
-    const stackWorld = stackNorm * 12;
-    const stackOpen = coverage <= 0 ? 0 : clamp01(Math.pow(stackNorm / (2.5 / 12), 0.45));
-    const stackEq = coverage <= 0 ? 0 : clamp01(stackWorld / STACK_EQ_FULL);
+    const stackWorld = stackNorm * STACK_FIELD_U;
+    const weightTarget = coverage <= 0 ? 0 : pileWeight(stackWorld);
     const riseTip = Math.max(0, Number(quad.rise) || 0);
     const rising = riseTip > 0;
     const riseOpen = rising ? clamp01(Math.pow(riseTip / RISE_FULL, 0.55)) : 0;
@@ -160,7 +163,7 @@ export function fieldFrame(snap, dt) {
       if (feedbacks[id] < 0.04) riseLatch[id] = false;
     }
     feedbacks[id] = follow(feedbacks[id], feedbackTarget, dt, feedbackTau);
-    const reverbTarget = Math.max(stackOpen, riseOpen);
+    const reverbTarget = riseOpen;
     if (rising) riseLatch[id] = true;
     let decayTarget = reverbTarget;
     let decayTau = 0.25;
@@ -176,13 +179,12 @@ export function fieldFrame(snap, dt) {
     heights[id] = reverbTarget <= 0 ? 0 : follow(heights[id], reverbTarget, dt, rising ? 0.12 : 0.25);
     decays[id] = follow(decays[id], decayTarget, dt, decayTau);
     halls[id] = 0;
-    resonances[id] = stackEq <= 0 ? 0 : follow(resonances[id], stackEq, dt, 0.2);
+    weights[id] = weightTarget <= 0 ? 0 : follow(weights[id], weightTarget, dt, 0.2);
     diffuses[id] = follow(diffuses[id], riseOpen, dt, rising ? 0.12 : 0.25);
-    cutoffs[id] = Math.min(cutoffHz(gains[id]), heightCutoff(resonances[id]));
+    cutoffs[id] = cutoffHz(gains[id]);
     const rateTarget = Number(quad.rate);
     const positionRate = Number.isFinite(rateTarget) && rateTarget > 0 ? rateTarget : 1;
-    const risePitch = Math.pow(2, clamp01(riseTip / RISE_PITCH_TOP));
-    pitches[id] = follow(pitches[id], positionRate * risePitch, dt, rising ? 0.08 : 0.2);
+    pitches[id] = follow(pitches[id], positionRate, dt, 0.2);
   }
 
   let splash = null;
@@ -210,7 +212,7 @@ export function fieldFrame(snap, dt) {
     decays: HEIGHT_REVERB ? decays : { tl: 0, tr: 0, bl: 0, br: 0 },
     longTails: HEIGHT_REVERB ? longTails : { tl: false, tr: false, bl: false, br: false },
     halls,
-    resonances,
+    weights,
     diffuses,
     feedbacks,
     pans: snap?.pans || { tl: 0, tr: 0, bl: 0, br: 0 },
