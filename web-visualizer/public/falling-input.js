@@ -53,8 +53,10 @@ export class FallingInput {
     /** @type {HTMLButtonElement | null} */
     this._emitButton = null;
     this._emitHeld = false;
-    /** On-screen Emit control. Separate from the mouse button so a finger drag cannot pour. */
+    /** On-screen Emit control. A vertical drag sets clump size. */
     this._touchEmit = false;
+    this._emitAnalog = 0.5;
+    this._emitOriginY = 0;
     this._shiftHeld = false;
     this._altHeld = false;
     this._mouseFull = false;
@@ -99,6 +101,7 @@ export class FallingInput {
     this._onWindowPointerMove = this._onWindowPointerMove.bind(this);
     this._onPointerGone = this._onPointerGone.bind(this);
     this._onEmitPointerDown = this._onEmitPointerDown.bind(this);
+    this._onEmitPointerMove = this._onEmitPointerMove.bind(this);
     this._onEmitPointerUp = this._onEmitPointerUp.bind(this);
     this._onEmitContextMenu = this._onEmitContextMenu.bind(this);
   }
@@ -155,6 +158,7 @@ export class FallingInput {
   resetTransient() {
     this._emitHeld = false;
     this._touchEmit = false;
+    this._emitAnalog = 0.5;
     this._emitButton?.classList.remove("is-pressed");
     this._emitButton?.setAttribute("aria-pressed", "false");
     this._screenTouch.reset();
@@ -273,7 +277,7 @@ export class FallingInput {
       curveInvert = false;
     }
     if (this._touchEmit) {
-      analog = 1;
+      analog = this._emitAnalog;
       curveInvert = false;
     }
 
@@ -283,7 +287,8 @@ export class FallingInput {
     /** @type {BrushMode} */
     let brushMode = "pressure";
     if (mouseLight) brushMode = "single";
-    else if (mouseFull || this._touchEmit) brushMode = "max";
+    else if (mouseFull) brushMode = "max";
+    else if (this._touchEmit) brushMode = "pressure";
     else if (keyEmit) brushMode = k.emitBrush;
     else if ((digitalPad || touch.emit) && !analogActive) brushMode = g.emitDigitalBrush;
 
@@ -596,6 +601,7 @@ export class FallingInput {
     if (!(btn instanceof HTMLButtonElement)) return;
     this._emitButton = btn;
     btn.addEventListener("pointerdown", this._onEmitPointerDown);
+    btn.addEventListener("pointermove", this._onEmitPointerMove);
     btn.addEventListener("pointerup", this._onEmitPointerUp);
     btn.addEventListener("pointercancel", this._onEmitPointerUp);
     btn.addEventListener("contextmenu", this._onEmitContextMenu);
@@ -605,11 +611,13 @@ export class FallingInput {
     const btn = this._emitButton;
     if (!btn) return;
     btn.removeEventListener("pointerdown", this._onEmitPointerDown);
+    btn.removeEventListener("pointermove", this._onEmitPointerMove);
     btn.removeEventListener("pointerup", this._onEmitPointerUp);
     btn.removeEventListener("pointercancel", this._onEmitPointerUp);
     btn.removeEventListener("contextmenu", this._onEmitContextMenu);
-    btn.classList.remove("is-pressed");
-    btn.setAttribute("aria-pressed", "false");
+    this._emitButton?.classList.remove("is-pressed");
+    this._emitButton?.setAttribute("aria-pressed", "false");
+    this._paintEmitDrag(true);
     this._emitButton = null;
   }
 
@@ -619,11 +627,47 @@ export class FallingInput {
   _onEmitPointerDown(event) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
     this._touchEmit = true;
+    this._emitOriginY = event.clientY;
+    this._emitAnalog = 0.5;
     this._emitButton?.classList.add("is-pressed");
     this._emitButton?.setAttribute("aria-pressed", "true");
+    this._paintEmitDrag(false);
     event.preventDefault();
     event.stopPropagation();
     this._emitButton?.setPointerCapture?.(event.pointerId);
+  }
+
+  /**
+   * Drag up toward a clump, down toward a single stream.
+   * @param {PointerEvent} event
+   */
+  _onEmitPointerMove(event) {
+    if (!this._touchEmit) return;
+    const span = 72;
+    this._emitAnalog = clamp(0.5 - (event.clientY - this._emitOriginY) / span, 0, 1);
+    this._paintEmitDrag(false);
+  }
+
+  /**
+   * @param {boolean} [reset]
+   */
+  _paintEmitDrag(reset) {
+    const btn = this._emitButton;
+    if (!btn) return;
+    const dock = btn.parentElement;
+    if (reset || !this._touchEmit) {
+      btn.style.transform = "";
+      btn.removeAttribute("data-drag");
+      dock?.querySelector(".falling-emit-clump")?.classList.remove("is-lit");
+      dock?.querySelector(".falling-emit-single")?.classList.remove("is-lit");
+      return;
+    }
+    const shift = (0.5 - this._emitAnalog) * 28;
+    btn.style.transform = `translateY(${shift}px)`;
+    const dir = this._emitAnalog > 0.62 ? "up" : this._emitAnalog < 0.38 ? "down" : "mid";
+    btn.dataset.drag = dir;
+    dock?.querySelector(".falling-emit-clump")?.classList.toggle("is-lit", dir === "up");
+    dock?.querySelector(".falling-emit-single")?.classList.toggle("is-lit", dir === "down");
   }
 
   /**
@@ -631,8 +675,10 @@ export class FallingInput {
    */
   _onEmitPointerUp() {
     this._touchEmit = false;
+    this._emitAnalog = 0.5;
     this._emitButton?.classList.remove("is-pressed");
     this._emitButton?.setAttribute("aria-pressed", "false");
+    this._paintEmitDrag(true);
   }
 
   /**

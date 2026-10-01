@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { STEM_CORNERS, controller, mix, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=39";
+import { fallingInput } from "./falling-input.js?v=40";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**

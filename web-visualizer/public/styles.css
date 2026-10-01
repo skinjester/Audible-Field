@@ -1150,19 +1150,32 @@ dd {
   cursor: url("/cursor-yaw.svg") 16 16, crosshair;
 }
 
-button.falling-touch-emit {
+button.falling-touch-emit,
+.falling-emit-dock {
   display: none;
 }
 
 @media (pointer: coarse) {
-  [data-panel="falling-blocks"] .falling-touch-emit {
-    display: inline-flex;
+  .falling-emit-dock {
+    display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
+    gap: 10px;
     position: absolute;
     right: max(16px, env(safe-area-inset-right));
     bottom: max(16px, env(safe-area-inset-bottom));
     z-index: 4;
+    pointer-events: none;
+  }
+
+  [data-panel="falling-blocks"] .falling-touch-emit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    right: auto;
+    bottom: auto;
+    z-index: 1;
     width: 84px;
     height: 84px;
     min-width: 0;
@@ -1178,6 +1191,7 @@ button.falling-touch-emit {
     -webkit-user-select: none;
     -webkit-touch-callout: none;
     cursor: pointer;
+    pointer-events: auto;
   }
 
   .falling-material-bar {
@@ -1190,8 +1204,58 @@ button.falling-touch-emit {
   }
 }
 
+.falling-emit-clump,
+.falling-emit-single {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.falling-emit-clump {
+  display: grid;
+  grid-template-columns: 7px 7px;
+  gap: 3px;
+}
+
+.falling-emit-clump i {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 1.5px;
+  background: currentColor;
+}
+
+.falling-emit-single {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.falling-emit-clump.is-lit,
+.falling-emit-single.is-lit {
+  color: #fff;
+}
+
+.falling-emit-arrows {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  color: rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+}
+
+.falling-emit-label {
+  position: relative;
+  z-index: 1;
+}
+
+.falling-touch-emit[data-drag="up"] .falling-emit-arrows .up,
+.falling-touch-emit[data-drag="down"] .falling-emit-arrows .down {
+  color: #fff;
+}
+
 .falling-touch-emit.is-pressed {
-  filter: brightness(0.88);
+  filter: none;
 }
 
 .falling-pill {

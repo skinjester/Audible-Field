@@ -4,7 +4,7 @@
  * A single column stays near 7 kHz. A wide pour opens toward 20 kHz.
  * Each pile's resting height is weight on that stem: darker, a low shelf, and a soft clip.
  * Full weight is 10 atoms (2.5 world units). Taller than that stays pinned. Rising grains do not add weight.
- * Rising Diffuse grains open that bed's Greyhole send, fully by 2.5 world units, and the feedback jumps to the long diffuse tail as soon as they lift. Delay time and size stay fixed. The send is taken before the weight filters.
+ * Rising Diffuse grains open that bed's Greyhole send, fully by 2.5 world units, and the feedback jumps to the long diffuse tail as soon as they lift. Delay time and size stay fixed. The send is taken before the weight filters. An empty quadrant drops that tail quickly.
  * Greyhole stays off the resting stack: moving its delay with the stack was glitching playback.
  * Closer to the center of its quadrant raises that sample's pitch, up to an octave.
  * Farther from that center lowers it, down to the sample's own pitch at the corners.
@@ -56,8 +56,10 @@ const RISE_FULL = 2.5;
 const FEEDBACK_MAX = 0.98;
 /** How fast the long tail engages once grains start rising. */
 const DECAY_ATTACK = 0.12;
-/** How long the long tail keeps ringing after the rise is gone. */
+/** How long the long tail keeps ringing after the rise is gone, while the quadrant still has material. */
 const DECAY_RELEASE = 14;
+/** Empty quadrant. Feedback and the wet return fall on this time constant. */
+const EMPTY_TAIL = 0.25;
 
 function footprintGain(coverage) {
   if (!(coverage > 0)) return 0;
@@ -92,6 +94,8 @@ const weights = { tl: 0, tr: 0, bl: 0, br: 0 };
 const diffuses = { tl: 0, tr: 0, bl: 0, br: 0 };
 /** Greyhole feedback for that rise. Hits the long tail immediately, then rings after the grains land. */
 const feedbacks = { tl: 0, tr: 0, bl: 0, br: 0 };
+/** 0..1 Greyhole wet return. An empty quadrant slews this shut. */
+const wets = { tl: 0, tr: 0, bl: 0, br: 0 };
 let gen = -1;
 
 function hitLife(hit) {
@@ -130,6 +134,7 @@ export function resetFieldSonify() {
     weights[id] = 0;
     diffuses[id] = 0;
     feedbacks[id] = 0;
+    wets[id] = 0;
   }
   gen = -1;
 }
