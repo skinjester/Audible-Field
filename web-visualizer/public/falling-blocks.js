@@ -89,6 +89,8 @@ let paletteEl = null;
 let fpsEl = null;
 let atomsEl = null;
 let trisEl = null;
+let gpuEl = null;
+let gpuLabel = "";
 let fpsFrames = 0;
 let fpsLastAt = 0;
 let hudFpsText = "";
@@ -2962,7 +2964,6 @@ function runRules() {
       x: cell.x,
       z: cell.z,
       life: SPLASH_LIFE,
-      rate: pitchForWorld(wx, wz),
     });
     spawnSplash(cell.x, cell.z, wx, wz);
   }
@@ -3050,6 +3051,55 @@ function formatCount(n) {
   return String(n);
 }
 
+/** Chip name from the unmasked WebGL renderer string. */
+function shortenGpuName(raw) {
+  let s = String(raw || "");
+  const lower = s.toLowerCase();
+  if (/swiftshader|llvmpipe|softpipe|microsoft basic render|gdi generic|cpu rasterizer/.test(lower)) {
+    return "CPU fallback";
+  }
+  const angle = s.match(/ANGLE\s*\(([\s\S]+)\)\s*$/i);
+  if (angle) s = angle[1];
+  s = s
+    .replace(/Google Inc\.\s*(\([^)]*\))?/gi, "")
+    .replace(/Direct3D[0-9.]*/gi, "")
+    .replace(/D3D[0-9]+/gi, "")
+    .replace(/OpenGL[\w.]*/gi, "")
+    .replace(/Metal/gi, "")
+    .replace(/vs_\d+_\d+/gi, "")
+    .replace(/ps_\d+_\d+/gi, "")
+    .replace(/\(0x[0-9a-f]+\)/gi, "")
+    .replace(/\(R\)|\(TM\)/gi, "")
+    .replace(/\bANGLE\b/gi, "")
+    .replace(/Renderer:?/gi, "")
+    .replace(/Unspecified Version/gi, "")
+    .replace(/\b(NVIDIA|AMD|Intel|Microsoft|Apple|Corporation|Inc\.?)\b,?/gi, "")
+    .replace(/,/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return s || "GPU";
+}
+
+function readGpuLabel() {
+  if (!renderer) return "";
+  const gl = renderer.getContext();
+  if (!gl) return "";
+  const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+  const raw = dbg
+    ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)
+    : gl.getParameter(gl.RENDERER);
+  const name = shortenGpuName(raw);
+  if (!name || name === "CPU fallback") return name || "";
+  const api = renderer.capabilities?.isWebGL2 ? "WebGL2" : "WebGL";
+  return `${name} · ${api}`;
+}
+
+function syncGpuLabel() {
+  if (!gpuEl || !renderer || gpuLabel) return;
+  gpuLabel = readGpuLabel();
+  if (gpuLabel) gpuEl.textContent = gpuLabel;
+}
+
 function setHudText(el, prev, text) {
   if (prev === text) return prev;
   el.textContent = text;
@@ -3072,6 +3122,7 @@ function updateHud(now) {
   const tris = renderer?.info?.render?.triangles;
   const trisText = Number.isFinite(tris) ? formatCount(tris) : "--";
   hudTrisText = setHudText(trisEl, hudTrisText, trisText);
+  syncGpuLabel();
 }
 
 function startRenderLoop() {
@@ -3361,6 +3412,7 @@ function initScene(nextCanvas) {
   fpsEl = document.querySelector("[data-falling-fps]");
   atomsEl = document.querySelector("[data-falling-atoms]");
   trisEl = document.querySelector("[data-falling-tris]");
+  gpuEl = document.querySelector("[data-falling-gpu]");
   bindLifeLog();
   fpsFrames = 0;
   fpsLastAt = 0;
@@ -3902,8 +3954,10 @@ function pilesInQuadrant(entries) {
     let sx = 0;
     let sz = 0;
     let n = 0;
+    const keys = [];
     while (stack.length) {
       const cur = stack.pop();
+      keys.push(cur.key);
       sx += cur.wx;
       sz += cur.wz;
       n += 1;
@@ -3921,11 +3975,64 @@ function pilesInQuadrant(entries) {
     }
     const cx = sx / n;
     const cz = sz / n;
-    piles.push({ cx, cz, cells: n, rate: pitchForWorld(cx, cz) });
+    piles.push({ cx, cz, cells: n, rate: pitchForWorld(cx, cz), keys });
   }
   piles.sort((a, b) => b.cells - a.cells || a.rate - b.rate);
   if (piles.length > PILE_NOTE_CAP) piles.length = PILE_NOTE_CAP;
   return piles;
+}
+
+/**
+ * Each landing uses the pitch of the connected pile that contains it.
+ * The cell's own place on the map is not a separate note.
+ * @param {{ tl: { x: number, z: number, life: number }[], tr: { x: number, z: number, life: number }[], bl: { x: number, z: number, life: number }[], br: { x: number, z: number, life: number }[] }} pending
+ * @param {Record<string, { keys: number[], cx: number, cz: number, rate: number }[]>} rawPiles
+ * @param {Record<string, { id: number, rate: number }[]>} tracked
+ */
+function splashAtPilePitch(pending, rawPiles, tracked) {
+  const splash = { tl: [], tr: [], bl: [], br: [] };
+  const corners = ["tl", "tr", "bl", "br"];
+  for (let c = 0; c < corners.length; c += 1) {
+    const id = corners[c];
+    const raw = rawPiles[id] || [];
+    const notes = tracked[id] || [];
+    const byKey = new Map();
+    for (let i = 0; i < raw.length; i += 1) {
+      const pile = raw[i];
+      const note = notes[i];
+      const rate = note?.rate > 0 ? note.rate : pile.rate;
+      const pileId = note?.id;
+      const keys = pile.keys || [];
+      for (let k = 0; k < keys.length; k += 1) byKey.set(keys[k], { id: pileId, rate });
+    }
+    const hits = pending[id] || [];
+    for (let i = 0; i < hits.length; i += 1) {
+      const hit = hits[i];
+      const key = hit.x + hit.z * GRID_MAX;
+      let pile = byKey.get(key);
+      if (!pile && raw.length) {
+        const wx = worldXForCell(hit.x, ATOM_SIZE);
+        const wz = worldZForCell(hit.z, ATOM_SIZE);
+        let best = 0;
+        let bestD = Infinity;
+        for (let p = 0; p < raw.length; p += 1) {
+          const d = Math.hypot(raw[p].cx - wx, raw[p].cz - wz);
+          if (d < bestD) {
+            bestD = d;
+            best = p;
+          }
+        }
+        const note = notes[best];
+        pile = { id: note?.id, rate: note?.rate > 0 ? note.rate : raw[best].rate };
+      }
+      splash[id].push({
+        life: hit.life > 0 ? hit.life : 5,
+        rate: pile?.rate > 0 ? pile.rate : 1,
+        pileId: pile?.id,
+      });
+    }
+  }
+  return splash;
 }
 
 /**
@@ -3989,15 +4096,12 @@ function captureAudioSnapshot(dt) {
 
   const yaw = surface ? surface.rotation.y : 0;
   const viewPan = planeViewportPan();
-  const splash = { tl: [], tr: [], bl: [], br: [] };
+  const splashPending = { tl: [], tr: [], bl: [], br: [] };
   const splashMid = GRID_MAX >> 1;
   for (let i = 0; i < splashHits.length; i += 1) {
     const hit = splashHits[i];
     const id = hit.x < splashMid ? (hit.z < splashMid ? "tl" : "bl") : hit.z < splashMid ? "tr" : "br";
-    splash[id].push({
-      life: hit.life > 0 ? hit.life : 5,
-      rate: hit.rate > 0 ? hit.rate : 1,
-    });
+    splashPending[id].push(hit);
   }
   const zoomSpan = CAMERA_DIST_MAX - CAMERA_DIST_MIN;
   const zoom = zoomSpan > 0 ? (cameraDist - CAMERA_DIST_MIN) / zoomSpan : 0;
@@ -4114,12 +4218,19 @@ function captureAudioSnapshot(dt) {
     spread = Math.min(1, rms / (PLAYFIELD_HALF * Math.SQRT2));
   }
 
-  const piles = {
-    tl: trackPiles("tl", pilesInQuadrant(pileCols.tl)),
-    tr: trackPiles("tr", pilesInQuadrant(pileCols.tr)),
-    bl: trackPiles("bl", pilesInQuadrant(pileCols.bl)),
-    br: trackPiles("br", pilesInQuadrant(pileCols.br)),
+  const rawPiles = {
+    tl: pilesInQuadrant(pileCols.tl),
+    tr: pilesInQuadrant(pileCols.tr),
+    bl: pilesInQuadrant(pileCols.bl),
+    br: pilesInQuadrant(pileCols.br),
   };
+  const piles = {
+    tl: trackPiles("tl", rawPiles.tl),
+    tr: trackPiles("tr", rawPiles.tr),
+    bl: trackPiles("bl", rawPiles.bl),
+    br: trackPiles("br", rawPiles.br),
+  };
+  const splash = splashAtPilePitch(splashPending, rawPiles, piles);
   const pileRate = (list) => (list.length ? list[0].rate : 1);
 
   audioSnap = {
@@ -4220,6 +4331,7 @@ export async function showFallingBlocks(nextCanvas, isCurrent = () => true) {
       fpsEl = document.querySelector("[data-falling-fps]");
       atomsEl = document.querySelector("[data-falling-atoms]");
       trisEl = document.querySelector("[data-falling-tris]");
+      gpuEl = document.querySelector("[data-falling-gpu]");
       bindLifeLog();
       fpsFrames = 0;
       fpsLastAt = 0;

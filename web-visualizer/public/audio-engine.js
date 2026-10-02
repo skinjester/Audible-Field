@@ -136,15 +136,6 @@ function contextNeedsResume(ctx) {
   return !!ctx && (ctx.state === "suspended" || ctx.state === "interrupted");
 }
 
-/** Middle pitch of the cells that just landed. */
-function strikeMiddleRate(lives) {
-  const rates = [];
-  for (let i = 0; i < lives.length; i += 1) rates.push(strikeRate(lives[i]));
-  rates.sort((a, b) => a - b);
-  if (!rates.length) return 1;
-  return rates[(rates.length / 2) | 0];
-}
-
 /** Longest ring in the burst, clamped to a splash voice. */
 function strikeBurstLife(lives) {
   let life = 0;
@@ -152,27 +143,34 @@ function strikeBurstLife(lives) {
   return Math.min(5, Math.max(0.1, life || 0.1));
 }
 
+/** Fully open splash low-pass. The sweep ends here, above the bed's current cutoff. */
+const SPLASH_OPEN_HZ = 20000;
+
 /**
- * Splash low-pass opens at the cutoff the bed is already using.
- * That is the darker of the coverage low-pass and the pile-weight low-pass.
- * An open pile still shuts from 9 kHz. The floor stays above the close so the ramp has somewhere to fall.
+ * Where the splash low-pass starts and where it ends.
+ * The bed already runs through its coverage low-pass and its pile-weight low-pass.
+ * The splash starts at whichever of those is darker, then opens brighter.
+ * @param {{ tone?: BiquadFilterNode, weightLp?: BiquadFilterNode }} stem
  */
-function strikeOpenHz(stem) {
+function strikeSplashCutoffs(stem) {
   const tone = Number(stem?.tone?.frequency?.value);
   const weight = Number(stem?.weightLp?.frequency?.value);
-  const toneHz = Number.isFinite(tone) && tone > 0 ? tone : 9000;
+  const toneHz = Number.isFinite(tone) && tone > 0 ? tone : SPLASH_OPEN_HZ;
   const weightHz = Number.isFinite(weight) && weight > 0 ? weight : toneHz;
-  return Math.min(9000, Math.max(225, Math.min(toneHz, weightHz)));
+  const start = Math.max(40, Math.min(SPLASH_OPEN_HZ, Math.min(toneHz, weightHz)));
+  return { start, end: SPLASH_OPEN_HZ };
 }
 
 /**
- * Heavier landings are louder, up to 1.5. The stem's own level scales the hit,
- * with a floor so the first cells of a quiet pile still speak while gain slews in.
+ * Heavier landings are louder, up to 1.5 times the stem.
+ * One in-phase copy has to sit with the bed or the filter close disappears under it.
+ * 0.42 was the level of each stacked copy, and a single voice at that level is only a swell.
+ * The floor keeps the first cells of a quiet pile speaking while gain slews in.
  */
 function strikePeak(stemLevel, rate, count) {
   const weight = Math.min(1.5, Math.pow(Math.max(1, count), 0.35));
   const amount = Math.max(0.35, Math.min(1, Number(stemLevel) || 0));
-  return amount * (0.42 / Math.sqrt(Math.max(0.25, rate))) * weight;
+  return amount * (1 / Math.sqrt(Math.max(0.25, rate))) * weight;
 }
 
 function defaultAxisScales() {
@@ -2253,24 +2251,6 @@ export class EchoScapeAudioEngine {
     }
   }
 
-  /**
-   * Seconds into the looping bed, for landing repeats that share its phase.
-   * @param {{ el?: HTMLAudioElement, bedVoice?: AudioBufferSourceNode | null, bedBuffer?: AudioBuffer | null, bedStartedAt?: number, bedOffset?: number }} stem
-   */
-  _bedPosition(stem) {
-    const note = stem?.notes?.find((slot) => slot.voice);
-    if (note) return this._notePosition(note);
-    const buffer = stem?.bedBuffer;
-    const voice = stem?.bedVoice;
-    if (buffer && voice && buffer.duration > 0 && this.ctx) {
-      const rate = voice.playbackRate.value || 1;
-      const elapsed = (this.ctx.currentTime - (stem.bedStartedAt || 0)) * rate;
-      const pos = (stem.bedOffset || 0) + elapsed;
-      return ((pos % buffer.duration) + buffer.duration) % buffer.duration;
-    }
-    return Number(stem?.el?.currentTime) || 0;
-  }
-
   _clampRate(raw) {
     const next = Number(raw);
     if (!Number.isFinite(next) || next <= 0) return 1;
@@ -2285,6 +2265,35 @@ export class EchoScapeAudioEngine {
     const elapsed = (this.ctx.currentTime - (slot.startedAt || 0)) * rate;
     const pos = (slot.offset || 0) + elapsed;
     return ((pos % buffer.duration) + buffer.duration) % buffer.duration;
+  }
+
+  /**
+   * Seconds into the looping bed, so a landing can start at that same point.
+   * @param {{ el?: HTMLAudioElement, notes?: { voice?: AudioBufferSourceNode | null }[], bedVoice?: AudioBufferSourceNode | null, bedBuffer?: AudioBuffer | null, bedStartedAt?: number, bedOffset?: number }} stem
+   */
+  _bedPosition(stem, pileId) {
+    if (pileId != null) {
+      const note = stem?.notes?.find((slot) => slot.id === pileId && slot.voice);
+      if (note) return this._notePosition(note);
+    }
+    const note = stem?.notes?.find((slot) => slot.voice);
+    if (note) return this._notePosition(note);
+    const buffer = stem?.bedBuffer;
+    const voice = stem?.bedVoice;
+    if (buffer && voice && buffer.duration > 0 && this.ctx) {
+      const rate = voice.playbackRate.value || 1;
+      const elapsed = (this.ctx.currentTime - (stem.bedStartedAt || 0)) * rate;
+      const pos = (stem.bedOffset || 0) + elapsed;
+      return ((pos % buffer.duration) + buffer.duration) % buffer.duration;
+    }
+    return Number(stem?.el?.currentTime) || 0;
+  }
+
+  /** Offset inside a looping buffer. Never equal to the duration, which start() rejects. */
+  _loopOffset(position, duration) {
+    if (!(duration > 0)) return 0;
+    const wrapped = (((Number(position) || 0) % duration) + duration) % duration;
+    return wrapped >= duration ? 0 : wrapped;
   }
 
   /** @param {{ voice?: AudioBufferSourceNode | null, gain?: GainNode | null }} slot */
@@ -2367,11 +2376,6 @@ export class EchoScapeAudioEngine {
       } catch {
         /* ignore */
       }
-    }
-    try {
-      stem.source?.disconnect();
-    } catch {
-      /* already disconnected */
     }
     const ctx = this.ctx;
     const now = ctx.currentTime;
@@ -2467,17 +2471,30 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * One repeat of that quadrant's sample, in phase with the looping bed.
-   * The low-pass starts at the bed's cutoff and sweeps shut across the ground ring,
-   * at the middle pitch of the cells that landed. A heavier landing is louder.
-   * Another landing while the ring is still up restarts that same voice.
+   * One repeat of that quadrant's sample, from wherever the loop already is.
+   * The low-pass starts at the bed's current cutoff and opens brighter across the ground ring,
+   * at the pitch of the pile that landed. A heavier landing is louder.
+   * Another landing while the ring is still up starts the file over.
    * @param {Record<string, ({ life: number, rate?: number } | number)[]> | null} hits
    */
   playSplash(hits) {
     if (!this.running || !this.ctx || !this._splashOut || !hits) return;
     for (const corner of CORNERS) {
       const lives = hits[corner];
-      if (lives?.length) this._strikeStem(corner, lives);
+      if (!lives?.length) continue;
+      const groups = new Map();
+      for (let i = 0; i < lives.length; i += 1) {
+        const hit = lives[i];
+        const pileId = hit?.pileId;
+        const key = pileId == null ? "rate" : pileId;
+        let group = groups.get(key);
+        if (!group) {
+          group = { pileId, rate: strikeRate(hit), lives: [] };
+          groups.set(key, group);
+        }
+        group.lives.push(hit);
+      }
+      for (const group of groups.values()) this._strikeStem(corner, group);
     }
   }
 
@@ -2539,10 +2556,51 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * Restart the level, the shut, and the pitch on a voice that is already ringing.
-   * The peak holds until the low-pass has nearly closed, then fades in the last 60 ms.
+   * A buffer source cannot seek, so each landing replaces the voice and starts
+   * at the loop's current position.
+   * @param {{ voice?: AudioBufferSourceNode | null, gain?: GainNode, nodes?: AudioNode[] }} strike
+   * @param {AudioBuffer} buffer
+   * @param {number} when
+   * @param {number} rate
+   * @param {number} offset
    */
-  _shapeSplash(strike, stem, when, dur, peak, openHz, rate, panValue) {
+  _playSplashFromStart(strike, buffer, when, rate, offset) {
+    if (!this.ctx || !buffer || !strike?.gain) return;
+    const previous = strike.voice;
+    if (previous) {
+      try {
+        previous.onended = null;
+      } catch {
+        /* ignore */
+      }
+      try {
+        previous.stop();
+      } catch {
+        /* already stopped */
+      }
+      try {
+        previous.disconnect();
+      } catch {
+        /* already gone */
+      }
+      const index = strike.nodes?.indexOf(previous) ?? -1;
+      if (index >= 0) strike.nodes.splice(index, 1);
+    }
+    const voice = this.ctx.createBufferSource();
+    voice.buffer = buffer;
+    voice.loop = true;
+    voice.playbackRate.value = rate;
+    voice.connect(strike.gain);
+    voice.start(when, this._loopOffset(offset, buffer.duration));
+    strike.voice = voice;
+    if (strike.nodes) strike.nodes.push(voice);
+  }
+
+  /**
+   * Restart the level, the opening, and the pitch on a voice that is already ringing.
+   * The peak holds until the low-pass has nearly opened, then fades in the last 60 ms.
+   */
+  _shapeSplash(strike, stem, when, dur, peak, rate, panValue, startHz, endHz) {
     const release = Math.min(0.06, Math.max(0.02, dur * 0.15));
     const hold = dur - release;
     const level = Math.max(0.001, peak);
@@ -2556,8 +2614,8 @@ export class EchoScapeAudioEngine {
 
     const cutoff = strike.filter.frequency;
     cutoff.cancelScheduledValues(when);
-    cutoff.setValueAtTime(openHz, when);
-    cutoff.exponentialRampToValueAtTime(180, when + dur);
+    cutoff.setValueAtTime(startHz, when);
+    if (endHz > startHz) cutoff.exponentialRampToValueAtTime(endHz, when + dur);
 
     if (strike.pan) strike.pan.pan.setValueAtTime(panValue, when);
     if (strike.voice) strike.voice.playbackRate.setValueAtTime(rate, when);
@@ -2575,26 +2633,41 @@ export class EchoScapeAudioEngine {
     }, (dur + 0.08) * 1000);
   }
 
-  _strikeStem(corner, lives) {
+  _strikeStem(corner, group) {
     const stem = this.stems[corner];
     if (!stem?.source) return;
     if (!stem.strikes) stem.strikes = [];
+    const lives = group?.lives || [];
     const audible = lives.filter((hit) => strikeLife(hit) > 0);
     if (!audible.length) return;
     const ctx = this.ctx;
     const dur = strikeBurstLife(audible);
-    const rate = strikeMiddleRate(audible);
+    const pileId = group.pileId;
+    const note = pileId == null ? null : stem.notes?.find((slot) => slot.id === pileId);
+    const playing = Number(note?.voice?.playbackRate?.value);
+    const rate = this._clampRate(Number.isFinite(playing) && playing > 0 ? playing : note?.rate || group.rate);
     const stemLevel = Number(stem.gain?.gain?.value) || 0;
     const peak = strikePeak(stemLevel, rate, audible.length);
-    const openHz = strikeOpenHz(stem);
+    const { start: startHz, end: endHz } = strikeSplashCutoffs(stem);
     const panValue = stem.pan ? stem.pan.pan.value : 0;
 
-    const ringing = stem.strikes.filter((strike) => !strike.released);
-    while (ringing.length > 1) this._releaseStrike(stem, ringing.shift());
-    const live = ringing[0];
+    const buffer = this._strikeBuffers?.[corner] || stem.bedBuffer || null;
+    let live = null;
+    for (let i = 0; i < stem.strikes.length; i += 1) {
+      const strike = stem.strikes[i];
+      if (strike.released) continue;
+      if (pileId == null ? strike.pileId == null : strike.pileId === pileId) live = strike;
+    }
+    // A landing that arrived before the file decoded taps the element.
+    // Once a buffer exists, that tap is silent if the element was paused for the pile notes.
+    if (live && !live.voice && buffer) {
+      this._releaseStrike(stem, live);
+      live = null;
+    }
     if (live) {
       const when = ctx.currentTime;
-      this._shapeSplash(live, stem, when, dur, peak, openHz, rate, panValue);
+      if (buffer) this._playSplashFromStart(live, buffer, when, rate, this._bedPosition(stem, pileId));
+      this._shapeSplash(live, stem, when, dur, peak, rate, panValue, startHz, endHz);
       this._armSplashRelease(stem, live, dur);
       return;
     }
@@ -2606,7 +2679,7 @@ export class EchoScapeAudioEngine {
     const filter = ctx.createBiquadFilter();
     filter.type = "lowpass";
     filter.Q.value = 0.85;
-    filter.frequency.value = openHz;
+    filter.frequency.value = startHz;
     const pan = ctx.createStereoPanner();
     pan.pan.value = panValue;
     this._copySplashShelves(stem, body, air);
@@ -2615,22 +2688,20 @@ export class EchoScapeAudioEngine {
     let voice = null;
     /** @type {AudioNode | null} */
     let tap = null;
-    const buffer = this._strikeBuffers?.[corner] || null;
     const when = ctx.currentTime;
     if (buffer) {
       voice = ctx.createBufferSource();
       voice.buffer = buffer;
       voice.loop = true;
       voice.playbackRate.value = rate;
-      const span = buffer.duration > 0 ? buffer.duration : 0;
-      const bedTime = Number(this._bedPosition(stem)) || 0;
-      const offset = span > 0 ? ((bedTime % span) + span) % span : 0;
       voice.connect(gain);
-      voice.start(when, offset);
+      voice.start(when, this._loopOffset(this._bedPosition(stem, pileId), buffer.duration));
       nodes.push(voice);
-    } else {
+    } else if (stem.el && !stem.el.paused && stem.source) {
       tap = stem.source;
       tap.connect(gain);
+    } else {
+      return;
     }
     gain.connect(body);
     body.connect(air);
@@ -2646,12 +2717,13 @@ export class EchoScapeAudioEngine {
       air,
       filter,
       pan,
+      pileId,
       timer: 0,
       released: false,
       live: false,
     };
     stem.strikes.push(strike);
-    this._shapeSplash(strike, stem, when, dur, peak, openHz, rate, panValue);
+    this._shapeSplash(strike, stem, when, dur, peak, rate, panValue, startHz, endHz);
     this._armSplashRelease(stem, strike, dur);
   }
 

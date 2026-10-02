@@ -10,9 +10,9 @@
  * The note is the pitch at the pile's center: an octave up at the quadrant center, the sample's own pitch at the corners.
  * A gap that splits a mass adds a note. Piles that touch again become one note.
  * Rising Diffuse grains do not change pitch.
- * A landing repeats that quadrant's sample once, in phase with the bed.
- * The low-pass starts at the bed's cutoff and sweeps shut across the ground-ring splash,
- * at the pitch of the landing. A heavier landing is louder. Face WAMs stay off.
+ * A landing repeats that quadrant's sample once, from wherever the loop already is.
+ * The low-pass starts at the bed's current cutoff and opens brighter across the ground-ring splash,
+ * at the pitch of the pile that landed. A heavier landing is louder. Face WAMs stay off.
  */
 
 const CORNERS = ["tl", "tr", "bl", "br"];

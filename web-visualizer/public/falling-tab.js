@@ -1,12 +1,12 @@
-import { audioEngine } from "./audio-engine.js?v=70";
+import { audioEngine } from "./audio-engine.js?v=77";
 import {
   clearBoard,
   hideFallingBlocks,
   onFallingAudioToggle,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=343";
-import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=34";
+} from "./falling-blocks.js?v=344";
+import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=39";
 import { controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
@@ -134,8 +134,16 @@ export function tick(frame) {
   audioEngine.setStemReverb(shadow.reverbs, shadow.decays, shadow.longTails);
   audioEngine.setDiffuseGreyhole(shadow.diffuses, shadow.feedbacks, shadow.wets);
   audioEngine.setPileBody(shadow.halls, shadow.weights);
-  if (shadow.splash) audioEngine.playSplash(shadow.splash);
-  audioEngine.setOutputLevel(fieldAudible(shadow) || audioEngine.hasLiveStrikes() ? 1 : 0);
+  if (shadow.splash) {
+    try {
+      audioEngine.playSplash(shadow.splash);
+    } catch (err) {
+      console.warn("[EchoScape audio] splash failed:", err?.message || err);
+    }
+  }
+  audioEngine.setOutputLevel(
+    fieldAudible(shadow) || audioEngine.hasLiveStrikes() || snap.mass > 0 ? 1 : 0
+  );
   audioEngine.setCameraPresence(snap.view?.near, snap.view?.far);
   const label = deps.browserStatusLabel();
   if (deps.statusDiffers(label)) deps.setStatus("audio", label);

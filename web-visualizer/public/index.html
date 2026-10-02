@@ -456,14 +456,17 @@
               <div class="falling-topbar">
                 <div class="falling-topbar-start">
                   <button type="button" class="falling-icon-btn falling-about" data-falling-about aria-label="About">?</button>
-                  <button type="button" class="falling-fps" data-falling-fps-toggle aria-expanded="false" aria-label="Frame stats">
-                    <svg class="falling-fps-mark" viewBox="0 0 256 256" aria-hidden="true">
-                      <path fill="currentColor" d="M224,208H203.94A88.05,88.05,0,0,0,144,64.37V32a16,16,0,0,0-16-16H80A16,16,0,0,0,64,32V136a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V80.46A72,72,0,0,1,181.25,208H32a8,8,0,0,0,0,16H224a8,8,0,0,0,0-16Zm-96-72H80V32h48V136ZM72,184a8,8,0,0,1,0-16h64a8,8,0,0,1,0,16Z"/>
+                  <button type="button" class="falling-icon-btn falling-fps" data-falling-fps-toggle aria-expanded="false" aria-controls="falling-frame" aria-label="Frame and GPU stats">
+                    <svg class="falling-fps-chevron" viewBox="0 0 24 24" aria-hidden="true">
+                      <path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/>
                     </svg>
-                    <span class="falling-frame" aria-live="polite">
+                  </button>
+                  <div class="falling-frame" id="falling-frame">
+                    <span class="falling-frame-stats" aria-live="polite">
                       <span data-falling-fps>--</span> fps · <span data-falling-atoms>--</span> atoms · <span data-falling-tris>--</span> polys
                     </span>
-                  </button>
+                    <span class="falling-frame-gpu" data-falling-gpu></span>
+                  </div>
                 </div>
                 <button type="button" class="falling-icon-btn falling-settings" data-falling-settings aria-label="Settings" aria-expanded="false" aria-controls="falling-settings-panel">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -603,6 +606,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=417"></script>
+    <script type="module" src="/app.js?v=424"></script>
   </body>
 </html>
