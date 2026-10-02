@@ -39,6 +39,7 @@ const EMIT_REST_PX = 6;
  *   aimStickX: number,
  *   aimStickY: number,
  *   clearEdge: boolean,
+ *   clearHeld: boolean,
  *   audioEdge: boolean,
  *   cycleDelta: number,
  *   cyclePrevHeld: boolean,
@@ -391,6 +392,7 @@ export class FallingInput {
       aimStickX,
       aimStickY,
       clearEdge,
+      clearHeld: clearDown,
       audioEdge,
       cycleDelta,
       cyclePrevHeld: cyclePrev,
@@ -722,8 +724,10 @@ export class FallingInput {
     const fill = btn.querySelector(".falling-emit-fill");
     if (fill) fill.style.transition = "";
     btn.removeAttribute("data-drag");
-    btn.parentElement?.querySelector(".falling-emit-clump")?.classList.remove("is-lit");
-    btn.parentElement?.querySelector(".falling-emit-single")?.classList.remove("is-lit");
+    const dock = btn.parentElement;
+    dock?.querySelector(".falling-emit-clump")?.classList.remove("is-lit");
+    dock?.querySelector(".falling-emit-single")?.classList.remove("is-lit");
+    dock?.querySelector(".falling-emit-stem")?.style.removeProperty("--emit-notch");
     this._emitButton = null;
   }
 
@@ -844,6 +848,10 @@ export class FallingInput {
     btn.dataset.drag = dir;
     dock?.querySelector(".falling-emit-clump")?.classList.toggle("is-lit", dir === "up");
     dock?.querySelector(".falling-emit-single")?.classList.toggle("is-lit", dir === "down");
+    dock?.querySelector(".falling-emit-stem")?.style.setProperty(
+      "--emit-notch",
+      `${(1 - this._emitAnalog) * 100}%`,
+    );
   }
 
   _onEmitPointerUp(event) {

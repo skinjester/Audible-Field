@@ -1,9 +1,9 @@
 import * as THREE from "three";
-import { audioEngine } from "./audio-engine.js?v=78";
+import { audioEngine } from "./audio-engine.js?v=80";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=53";
+import { fallingInput } from "./falling-input.js?v=55";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -1920,6 +1920,10 @@ function syncTriggerLabels(ltHeld, rtHeld) {
   rt?.classList.toggle("is-pressed", !!rtHeld);
 }
 
+function syncClearLabel(held) {
+  document.querySelector("[data-falling-clear]")?.classList.toggle("is-pressed", !!held);
+}
+
 
 /** Line icons. Color is applied only on the selected glyph, via currentColor. */
 const MATERIAL_GLYPHS = {
@@ -2097,29 +2101,6 @@ function bindClearUi() {
   });
 }
 
-function syncSplashModeUi() {
-  const mode = audioEngine.splashMode || "grain";
-  for (const btn of document.querySelectorAll("[data-falling-splash]")) {
-    if (!(btn instanceof HTMLButtonElement)) continue;
-    btn.setAttribute("aria-pressed", btn.dataset.fallingSplash === mode ? "true" : "false");
-  }
-}
-
-/** Grain, tick, or phrase. The choice lives on the audio engine. */
-function bindSplashUi() {
-  const buttons = document.querySelectorAll("[data-falling-splash]");
-  for (const btn of buttons) {
-    if (!(btn instanceof HTMLButtonElement) || btn.dataset.bound === "1") continue;
-    btn.dataset.bound = "1";
-    btn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      audioEngine.setSplashMode(btn.dataset.fallingSplash);
-      syncSplashModeUi();
-    });
-  }
-  syncSplashModeUi();
-}
-
 /** @type {(() => void) | null} */
 let audioToggleHandler = null;
 
@@ -2201,6 +2182,7 @@ function applyInput(dt) {
 
   syncShoulderGlyphs(frame.cyclePrevHeld, frame.cycleNextHeld);
   syncTriggerLabels(frame.ltHeld, frame.rtHeld);
+  syncClearLabel(frame.clearHeld);
   if (frame.cycleDelta) cycleMaterial(frame.cycleDelta);
   if (frame.clearEdge) clearBoard();
   if (frame.audioEdge) audioToggleHandler?.();
@@ -4409,7 +4391,6 @@ export async function showFallingBlocks(nextCanvas, isCurrent = () => true) {
     bindFpsUi();
     bindSettingsUi();
     bindClearUi();
-    bindSplashUi();
     fallingInput.attach(canvas);
     installSimHook();
     running = true;

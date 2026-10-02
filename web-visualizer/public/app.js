@@ -1,21 +1,20 @@
 import { notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=78";
+import { audioEngine } from "./audio-engine.js?v=80";
 import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=23";
-import * as fallingTab from "./falling-tab.js?v=67";
-import * as visualizeTab from "./visualize-tab.js?v=12";
+import * as diagnostics from "./diagnostics.js?v=24";
+import * as fallingTab from "./falling-tab.js?v=70";
+import * as visualizeTab from "./visualize-tab.js?v=14";
 
 const statusEl = document.querySelector(".status");
 const audioHealthEl = document.querySelector("[data-audio-health]");
 const statusParts = {
   audio: document.querySelector("[data-status-audio]"),
-  wams: document.querySelector("[data-status-wams]"),
-  samples: document.querySelector("[data-status-samples]"),
   mouse: document.querySelector("[data-status-mouse]"),
   pad: document.querySelector("[data-status-pad]"),
 };
+const catalogCountEls = document.querySelectorAll("[data-catalog-counts]");
 let statusText = "";
 let statusKey = "";
 let audioHealthKey = "";
@@ -150,19 +149,9 @@ function statusFacts() {
   const pad = dualSenseAvailable();
   return {
     audio,
-    wamsText: countPhrase(wamCount, "WAM", "WAMs"),
-    wamsOn: wamCount > 0,
-    samplesText: countPhrase(sampleCount, "sample", "samples"),
-    samplesOn: sampleCount > 0,
     mouse,
     pad,
-    label: [
-      audio,
-      countPhrase(wamCount, "WAM", "WAMs"),
-      countPhrase(sampleCount, "sample", "samples"),
-      "mouse",
-      "DualSense",
-    ].join(" · "),
+    label: [audio, "mouse", "DualSense"].join(" · "),
   };
 }
 
@@ -172,8 +161,6 @@ function statusSignature() {
     audioStatusState(),
     facts.label,
     facts.audio === "Browser audio",
-    facts.wamsOn,
-    facts.samplesOn,
     facts.mouse,
     facts.pad,
   ].join("|");
@@ -182,10 +169,19 @@ function statusSignature() {
 function paintStatusLine() {
   const facts = statusFacts();
   paintStatusPart(statusParts.audio, facts.audio, facts.audio === "Browser audio");
-  paintStatusPart(statusParts.wams, facts.wamsText, facts.wamsOn);
-  paintStatusPart(statusParts.samples, facts.samplesText, facts.samplesOn);
   paintStatusPart(statusParts.mouse, "mouse", facts.mouse);
   paintStatusPart(statusParts.pad, "DualSense", facts.pad);
+}
+
+function catalogCountsLabel() {
+  return `${countPhrase(wamCount, "WAM", "WAMs")} · ${countPhrase(sampleCount, "sample", "samples")}`;
+}
+
+function paintCatalogCounts() {
+  const text = catalogCountsLabel();
+  for (const el of catalogCountEls) {
+    if (el.textContent !== text) el.textContent = text;
+  }
 }
 
 function browserStatusLabel() {
@@ -216,6 +212,7 @@ async function loadCatalogCounts() {
   } catch (err) {
     console.warn("Could not count catalogs:", err);
   }
+  paintCatalogCounts();
   refreshStatusLine();
 }
 

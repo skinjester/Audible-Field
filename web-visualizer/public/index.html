@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=221" />
+    <link rel="stylesheet" href="/styles.css?v=236" />
     <script type="importmap">
       {
         "imports": {
@@ -21,15 +21,10 @@
           <p class="status" data-state="offline">
             <span data-status-audio class="is-off">Audio off</span>
             <span class="status-sep" aria-hidden="true">•</span>
-            <span data-status-wams>… WAMs</span>
-            <span class="status-sep" aria-hidden="true">•</span>
-            <span data-status-samples>… samples</span>
-            <span class="status-sep" aria-hidden="true">•</span>
             <span data-status-mouse>mouse</span>
             <span class="status-sep" aria-hidden="true">•</span>
             <span data-status-pad class="is-off">DualSense</span>
           </p>
-          <p class="audio-health" data-audio-health>—</p>
           <h1>Audible Field</h1>
         </div>
       </header>
@@ -111,7 +106,10 @@
                 </div>
                 <div class="readout-wide">
                   <dt>Audio</dt>
-                  <dd data-audio-detail>—</dd>
+                  <dd>
+                    <span data-audio-detail>—</span>
+                    <span class="catalog-counts" data-catalog-counts>… WAMs · … samples</span>
+                  </dd>
                 </div>
               </dl>
             </aside>
@@ -344,6 +342,7 @@
         <section class="viz-stage">
           <div class="viz-canvas-wrap">
             <canvas data-viz-canvas aria-label="EchoScape terrain visualization"></canvas>
+            <p class="viz-pad-gate" data-viz-pad-gate role="status">DualSense controller required for this demo</p>
             <p class="viz-error" data-viz-error hidden></p>
             <div class="viz-hud" aria-live="polite">
               <div><span data-viz-fps>--</span> fps · <span data-viz-verts>--</span> verts</div>
@@ -362,7 +361,7 @@
                 <span class="falling-emit-clump">
                   <i></i><i></i><i></i><i></i>
                 </span>
-                <span class="falling-emit-stem"></span>
+                <span class="falling-emit-stem"><i class="falling-emit-notch"></i></span>
                 <span class="falling-emit-single"></span>
               </span>
               <button type="button" class="falling-pill falling-touch-emit" data-falling-touch-emit aria-pressed="false" aria-label="Hold to emit atoms. Drag up for a clump, down for a single stream.">
@@ -466,6 +465,8 @@
                       <span data-falling-fps>--</span> fps · <span data-falling-atoms>--</span> atoms · <span data-falling-tris>--</span> polys
                     </span>
                     <span class="falling-frame-gpu" data-falling-gpu></span>
+                    <span class="falling-frame-audio" data-audio-health>—</span>
+                    <span class="falling-frame-catalog" data-catalog-counts>… WAMs · … samples</span>
                   </div>
                 </div>
                 <button type="button" class="falling-icon-btn falling-settings" data-falling-settings aria-label="Settings" aria-expanded="false" aria-controls="falling-settings-panel">
@@ -484,13 +485,9 @@
                     </button>
                     <button type="button" class="falling-audio falling-face falling-pill" data-falling-audio aria-pressed="true" title="Sonify the field">
                       <span class="pad-glyph" aria-hidden="true">&#x0116;</span>
+                      <span class="dot" aria-hidden="true"></span>
                       Audio
                     </button>
-                    <div class="falling-splash" role="group" aria-label="Landing sound">
-                      <button type="button" class="falling-pill falling-splash-mode" data-falling-splash="grain" aria-pressed="true" title="Short grain of the sample">Grain</button>
-                      <button type="button" class="falling-pill falling-splash-mode" data-falling-splash="tick" aria-pressed="false" title="Pitched noise tick">Tick</button>
-                      <button type="button" class="falling-pill falling-splash-mode" data-falling-splash="phrase" aria-pressed="false" title="Restart the sample with the bed">Phrase</button>
-                    </div>
                     <span class="falling-pill" data-falling-trigger="lt" role="img" aria-label="Left trigger emits a stream">
                       <span class="pad-glyph" aria-hidden="true">&#x0108;</span>
                       Emit Stream
@@ -611,6 +608,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=426"></script>
+    <script type="module" src="/app.js?v=430"></script>
   </body>
 </html>

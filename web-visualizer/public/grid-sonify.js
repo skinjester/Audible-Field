@@ -10,8 +10,8 @@
  * The note is the pitch at the pile's center: an octave up at the quadrant center, the sample's own pitch at the corners.
  * A gap that splits a mass adds a note. Piles that touch again become one note.
  * Rising Diffuse grains do not change pitch.
- * A landing is one event for that pile, at the pile's pitch. The engine plays a short grain
- * of the sample, a pitched tick, or a phrase restart. Face WAMs stay off.
+ * A landing is one event for that pile, at the pile's pitch. Each ring gets a glint.
+ * The phrase opens with the first ring and ends soon after the last one fades. Face WAMs stay off.
  */
 
 const CORNERS = ["tl", "tr", "bl", "br"];

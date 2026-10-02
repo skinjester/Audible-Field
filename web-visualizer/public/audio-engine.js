@@ -149,7 +149,8 @@ const SPLASH_OPEN_HZ = 20000;
 /**
  * Where the splash low-pass starts and where it ends.
  * The bed already runs through its coverage low-pass and its pile-weight low-pass.
- * The splash starts at whichever of those is darker, then opens brighter.
+ * The phrase starts darker than that bed, then opens to full brightness, so the
+ * restart is a brightening rather than another copy of the loop.
  * @param {{ tone?: BiquadFilterNode, weightLp?: BiquadFilterNode }} stem
  */
 function strikeSplashCutoffs(stem) {
@@ -157,20 +158,29 @@ function strikeSplashCutoffs(stem) {
   const weight = Number(stem?.weightLp?.frequency?.value);
   const toneHz = Number.isFinite(tone) && tone > 0 ? tone : SPLASH_OPEN_HZ;
   const weightHz = Number.isFinite(weight) && weight > 0 ? weight : toneHz;
-  const start = Math.max(40, Math.min(SPLASH_OPEN_HZ, Math.min(toneHz, weightHz)));
+  const bed = Math.max(40, Math.min(SPLASH_OPEN_HZ, Math.min(toneHz, weightHz)));
+  const start = Math.max(180, Math.min(bed * 0.4, bed - 400));
   return { start, end: SPLASH_OPEN_HZ };
 }
 
+/** Phrase keeps ringing this long after the splash ring is gone. */
+const PHRASE_TAIL = 0.12;
+/** Bright octave above the phrase. It dies with the ring. */
+const SPARKLE_HP_HZ = 4000;
+/** Share of the phrase peak. The high-pass throws away the body of the sample. */
+const SPARKLE_LEVEL = 0.42;
+
 /**
- * Heavier landings are louder, up to 1.5 times the stem.
- * One in-phase copy has to sit with the bed or the filter close disappears under it.
- * 0.42 was the level of each stacked copy, and a single voice at that level is only a swell.
- * The floor keeps the first cells of a quiet pile speaking while gain slews in.
+ * Phrase restart level, under the stem.
+ * A full extra copy of the bed was too loud. This keeps the opening sweep audible.
+ * Heavier landings are a little louder. The floor keeps the first cells of a quiet pile speaking.
  */
+const PHRASE_LEVEL = 0.55;
+
 function strikePeak(stemLevel, rate, count) {
   const weight = Math.min(1.5, Math.pow(Math.max(1, count), 0.35));
   const amount = Math.max(0.35, Math.min(1, Number(stemLevel) || 0));
-  return amount * (1 / Math.sqrt(Math.max(0.25, rate))) * weight;
+  return PHRASE_LEVEL * amount * (1 / Math.sqrt(Math.max(0.25, rate))) * weight;
 }
 
 /** Grain and tick ignore another landing on the same pile inside this window. */
@@ -179,24 +189,48 @@ const SPLASH_REFRACTORY = 0.11;
 const GRAIN_SEC = 0.07;
 /** Heard length of a noise tick. */
 const TICK_SEC = 0.08;
-/** Grain high-pass. Keeps the speck from doubling the bed's bass. */
-const IMPACT_HP_HZ = 300;
-/** Tick bandpass at the pile's pitch. Corners sit here; the center is an octave up. */
+/** Grain bandpass. Above the bed's body, wide enough to keep the sample's timbre. */
+const GRAIN_BP_HZ = 1600;
+const GRAIN_BP_Q = 3;
+/** Peak hold. The rest of GRAIN_SEC is the decay. */
+const GRAIN_HOLD_SEC = 0.025;
+/** Small lift. The bandpass is what separates the splash from the bed. */
+const GRAIN_LIFT = 1.25;
+/** Tick bandpass at the pile's pitch. Wide enough to read as a tick, not a whistle. */
 const TICK_BASE_HZ = 240;
-const TICK_Q = 8;
+const TICK_Q = 2;
 
 /**
- * Impact level stays under the stem. The floor keeps a quiet pile's first atom audible.
- * A heavy cluster is only a little louder. The phrase path still uses strikePeak.
+ * Stem level and landing weight shared by the grain and the tick.
+ * The floor keeps a quiet pile's first atom audible.
+ * A heavy cluster is only a little louder.
  */
-function impactPeak(stemLevel, rate, count) {
+function impactAmount(stemLevel, count) {
   const weight = Math.min(1.15, Math.pow(Math.max(1, count), 0.22));
   const amount = Math.max(0.4, Math.min(1, Number(stemLevel) || 0));
-  return amount * 0.55 * (1 / Math.sqrt(Math.max(0.25, rate))) * weight;
+  return amount * 0.9 * weight;
+}
+
+/**
+ * Grain sits near the stem. A faster slice is louder, so the rate term pulls it back.
+ * The phrase path still uses strikePeak.
+ */
+function impactPeak(stemLevel, rate, count) {
+  return impactAmount(stemLevel, count) * (1 / Math.sqrt(Math.max(0.25, rate)));
 }
 
 function tickHz(rate) {
   return Math.min(4000, Math.max(80, TICK_BASE_HZ * Math.max(0.25, rate)));
+}
+
+/**
+ * Bring band-limited noise back up to the level of the unfiltered burst.
+ * A higher pile is a wider band in hertz, so the makeup shrinks with pitch.
+ */
+function tickMakeup(q, sampleRate, f0) {
+  const f = Math.max(1, f0);
+  const fs = Math.max(1, sampleRate);
+  return Math.sqrt((q * fs) / (Math.PI * f));
 }
 
 /**
@@ -361,8 +395,8 @@ export class EchoScapeAudioEngine {
     this._wetIn = null;
     this._shoulderOut = null;
     this._splashOut = null;
-    /** Landing voice: a sample grain, a pitched tick, or the phrase restart. */
-    this.splashMode = "grain";
+    /** Landing voice. Phrase restarts the sample in phase with the bed. */
+    this.splashMode = "phrase";
     /** Last impact start per corner and pile, in context time. */
     this._impactAt = null;
     /** @type {AudioBuffer | null} */
@@ -670,12 +704,11 @@ export class EchoScapeAudioEngine {
       bedsPlaying,
       strikes,
       strikeTotal,
-      strikeCap: 1,
       wams: this.loadedWamCount(),
     };
   }
 
-  /** One line: rate, context, beds, strike voices, cap, loaded WAMs. */
+  /** One line: rate, context, beds, strike voices, loaded WAMs. */
   audioHealthLabel() {
     const health = this.audioHealth();
     const khz = health.sampleRate ? `${Math.round(health.sampleRate / 1000)} kHz` : "—";
@@ -686,7 +719,7 @@ export class EchoScapeAudioEngine {
       : quiet.every((corner) => health.beds[corner] === "missing")
         ? `beds ${health.bedsPlaying}/4`
         : `beds ${health.bedsPlaying}/4 ${quiet.map((corner) => `${corner} ${health.beds[corner]}`).join(" ")}`;
-    return `${khz} · ${health.state} · ${beds} · strikes ${strikes} · cap ${health.strikeCap} · WAMs ${health.wams}`;
+    return `${khz} · ${health.state} · ${beds} · strikes ${strikes} · WAMs ${health.wams}`;
   }
 
   async ensurePlaying() {
@@ -2568,6 +2601,13 @@ export class EchoScapeAudioEngine {
         /* already stopped */
       }
     }
+    if (strike.sparkVoice) {
+      try {
+        strike.sparkVoice.stop();
+      } catch {
+        /* already stopped */
+      }
+    }
     if (strike.tap && strike.gain) {
       try {
         strike.tap.disconnect(strike.gain);
@@ -2606,53 +2646,17 @@ export class EchoScapeAudioEngine {
     apply(stem?.air, air, { type: "highshelf", frequency: 650, Q: 0.7, gain: 0 });
   }
 
-  /**
-   * A buffer source cannot seek, so each landing replaces the voice and starts
-   * at the loop's current position.
-   * @param {{ voice?: AudioBufferSourceNode | null, gain?: GainNode, nodes?: AudioNode[] }} strike
-   * @param {AudioBuffer} buffer
-   * @param {number} when
-   * @param {number} rate
-   * @param {number} offset
-   */
-  _playSplashFromStart(strike, buffer, when, rate, offset) {
-    if (!this.ctx || !buffer || !strike?.gain) return;
-    const previous = strike.voice;
-    if (previous) {
-      try {
-        previous.onended = null;
-      } catch {
-        /* ignore */
-      }
-      try {
-        previous.stop();
-      } catch {
-        /* already stopped */
-      }
-      try {
-        previous.disconnect();
-      } catch {
-        /* already gone */
-      }
-      const index = strike.nodes?.indexOf(previous) ?? -1;
-      if (index >= 0) strike.nodes.splice(index, 1);
-    }
-    const voice = this.ctx.createBufferSource();
-    voice.buffer = buffer;
-    voice.loop = true;
-    voice.playbackRate.value = rate;
-    voice.connect(strike.gain);
-    voice.start(when, this._loopOffset(offset, buffer.duration));
-    strike.voice = voice;
-    if (strike.nodes) strike.nodes.push(voice);
+  /** Fade at the end of a phrase. The body of the event is the rest of `dur`. */
+  _phraseRelease(dur) {
+    return Math.min(0.16, Math.max(0.08, dur * 0.18));
   }
 
   /**
-   * Restart the level, the opening, and the pitch on a voice that is already ringing.
-   * The peak holds until the low-pass has nearly opened, then fades in the last 60 ms.
+   * Start the level, the opening, and the pitch.
+   * The peak holds while the low-pass opens, then fades.
    */
   _shapeSplash(strike, stem, when, dur, peak, rate, panValue, startHz, endHz) {
-    const release = Math.min(0.06, Math.max(0.02, dur * 0.15));
+    const release = this._phraseRelease(dur);
     const hold = dur - release;
     const level = Math.max(0.001, peak);
     const gain = strike.gain.gain;
@@ -2671,7 +2675,85 @@ export class EchoScapeAudioEngine {
     if (strike.pan) strike.pan.pan.setValueAtTime(panValue, when);
     if (strike.voice) strike.voice.playbackRate.setValueAtTime(rate, when);
     this._copySplashShelves(stem, strike.body, strike.air);
+    strike.until = when + dur;
     strike.live = true;
+  }
+
+  /**
+   * A later ring outlasts the phrase that is already opening.
+   * The low-pass keeps its original sweep. Only the level is held out to this ring.
+   */
+  _extendSplash(strike, when, until, peak, rate, panValue) {
+    const dur = Math.max(0.05, until - when);
+    const release = Math.min(this._phraseRelease(dur), dur * 0.45);
+    const holdAt = until - release;
+    const level = Math.max(0.001, peak);
+    const gain = strike.gain.gain;
+    gain.cancelScheduledValues(when);
+    const from = Math.max(0.001, gain.value || level);
+    gain.setValueAtTime(from, when);
+    if (from < level) gain.exponentialRampToValueAtTime(level, when + Math.min(0.02, dur * 0.25));
+    if (holdAt > when + 0.02) gain.setValueAtTime(level, holdAt);
+    gain.exponentialRampToValueAtTime(0.001, until);
+    if (strike.pan) strike.pan.pan.setValueAtTime(panValue, when);
+    if (strike.voice) strike.voice.playbackRate.setValueAtTime(rate, when);
+    strike.until = until;
+    strike.live = true;
+  }
+
+  /**
+   * A short octave-up copy of the landing, high-passed, off to the side of the
+   * phrase low-pass so the top is bright while the body is still opening.
+   * One glint per landing. It fades with the ring.
+   * @param {{ sparkGain?: GainNode, sparkVoice?: AudioBufferSourceNode | null, nodes?: AudioNode[] }} strike
+   * @param {AudioBuffer | null} buffer
+   * @param {number} sparkDur
+   */
+  _sparkSplash(strike, buffer, when, rate, offset, peak, sparkDur) {
+    if (!this.ctx || !buffer || !strike?.sparkGain) return;
+    const previous = strike.sparkVoice;
+    if (previous) {
+      try {
+        previous.stop();
+      } catch {
+        /* already stopped */
+      }
+      try {
+        previous.disconnect();
+      } catch {
+        /* already gone */
+      }
+      const index = strike.nodes?.indexOf(previous) ?? -1;
+      if (index >= 0) strike.nodes.splice(index, 1);
+    }
+    const sparkRate = Math.min(4, Math.max(0.5, rate * 2));
+    const voice = this.ctx.createBufferSource();
+    voice.buffer = buffer;
+    voice.loop = false;
+    voice.playbackRate.value = sparkRate;
+    voice.connect(strike.sparkGain);
+    const heard = Math.max(0.05, sparkDur);
+    const playDur = Math.min(buffer.duration, Math.max(0.02, heard * sparkRate));
+    const startAt = this._loopOffset(offset, buffer.duration);
+    const room = Math.max(0.02, buffer.duration - startAt);
+    try {
+      voice.start(when, startAt, Math.min(playDur, room));
+    } catch {
+      try {
+        voice.disconnect();
+      } catch {
+        /* already gone */
+      }
+      return;
+    }
+    strike.sparkVoice = voice;
+    if (strike.nodes) strike.nodes.push(voice);
+    const level = Math.max(0.001, peak * SPARKLE_LEVEL);
+    const gain = strike.sparkGain.gain;
+    gain.cancelScheduledValues(when);
+    gain.setValueAtTime(0.001, when);
+    gain.exponentialRampToValueAtTime(level, when + 0.008);
+    gain.exponentialRampToValueAtTime(0.001, when + heard);
   }
 
   _armSplashRelease(stem, strike, dur) {
@@ -2727,22 +2809,27 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * Fast attack, then a decay across the event. The filter stays put.
+   * Fast attack, an optional hold, then a decay across the rest of the event.
+   * The filter stays put. Tick passes no hold.
    * @param {{ gain: GainNode, live: boolean }} strike
+   * @param {number} [holdSec]
    */
-  _shapeImpact(strike, when, dur, peak) {
+  _shapeImpact(strike, when, dur, peak, holdSec) {
     const level = Math.max(0.001, peak);
     const attack = Math.min(0.005, dur * 0.2);
+    const hold = Math.min(Math.max(0, Number(holdSec) || 0), Math.max(0, dur - attack - 0.01));
     const gain = strike.gain.gain;
     gain.cancelScheduledValues(when);
     gain.setValueAtTime(0.001, when);
     gain.exponentialRampToValueAtTime(level, when + attack);
+    if (hold > 0.001) gain.setValueAtTime(level, when + attack + hold);
     gain.exponentialRampToValueAtTime(0.001, when + dur);
     strike.live = true;
   }
 
   /**
-   * One short event for the pile. Grain plays a cell-sized slice of the sample.
+   * One short event for the pile. Grain plays a cell-sized slice of the sample
+   * through a bandpass above the bed, and holds the peak before it decays.
    * Tick is noise through a bandpass at the pile pitch. A landing inside the
    * refractory window does not start another voice.
    * @param {"grain" | "tick"} mode
@@ -2767,7 +2854,10 @@ export class EchoScapeAudioEngine {
     const playing = Number(note?.voice?.playbackRate?.value);
     const rate = this._clampRate(Number.isFinite(playing) && playing > 0 ? playing : note?.rate || group.rate);
     const stemLevel = Number(stem.gain?.gain?.value) || 0;
-    const peak = impactPeak(stemLevel, rate, audible.length);
+    const hz = tick ? tickHz(rate) : GRAIN_BP_HZ;
+    const peak = tick
+      ? impactAmount(stemLevel, audible.length) * tickMakeup(TICK_Q, ctx.sampleRate, hz)
+      : impactPeak(stemLevel, rate, audible.length) * GRAIN_LIFT;
     const panValue = stem.pan ? stem.pan.pan.value : 0;
 
     let live = null;
@@ -2786,11 +2876,11 @@ export class EchoScapeAudioEngine {
     if (tick) {
       filter.type = "bandpass";
       filter.Q.value = TICK_Q;
-      filter.frequency.value = tickHz(rate);
+      filter.frequency.value = hz;
     } else {
-      filter.type = "highpass";
-      filter.Q.value = 0.7;
-      filter.frequency.value = IMPACT_HP_HZ;
+      filter.type = "bandpass";
+      filter.Q.value = GRAIN_BP_Q;
+      filter.frequency.value = hz;
     }
     const pan = ctx.createStereoPanner();
     pan.pan.value = panValue;
@@ -2842,7 +2932,7 @@ export class EchoScapeAudioEngine {
       live: false,
     };
     stem.strikes.push(strike);
-    this._shapeImpact(strike, when, dur, peak);
+    this._shapeImpact(strike, when, dur, peak, tick ? 0 : GRAIN_HOLD_SEC);
     this._armSplashRelease(stem, strike, dur);
     this._markImpact(corner, pileId, when);
   }
@@ -2860,7 +2950,8 @@ export class EchoScapeAudioEngine {
     const audible = lives.filter((hit) => strikeLife(hit) > 0);
     if (!audible.length) return;
     const ctx = this.ctx;
-    const dur = strikeBurstLife(audible);
+    const ring = strikeBurstLife(audible);
+    const dur = ring + PHRASE_TAIL;
     const pileId = group.pileId;
     const note = pileId == null ? null : stem.notes?.find((slot) => slot.id === pileId);
     const playing = Number(note?.voice?.playbackRate?.value);
@@ -2885,9 +2976,15 @@ export class EchoScapeAudioEngine {
     }
     if (live) {
       const when = ctx.currentTime;
-      if (buffer) this._playSplashFromStart(live, buffer, when, rate, this._bedPosition(stem, pileId));
-      this._shapeSplash(live, stem, when, dur, peak, rate, panValue, startHz, endHz);
-      this._armSplashRelease(stem, live, dur);
+      const wantUntil = when + dur;
+      if (wantUntil > (live.until || 0) + 0.015) {
+        this._extendSplash(live, stem, when, wantUntil, peak, rate, panValue);
+        this._armSplashRelease(stem, live, wantUntil - when);
+      } else {
+        if (live.pan) live.pan.pan.setValueAtTime(panValue, when);
+        if (live.voice) live.voice.playbackRate.setValueAtTime(rate, when);
+      }
+      if (buffer) this._sparkSplash(live, buffer, when, rate, this._bedPosition(stem, pileId), peak, ring);
       return;
     }
 
@@ -2899,22 +2996,29 @@ export class EchoScapeAudioEngine {
     filter.type = "lowpass";
     filter.Q.value = 0.85;
     filter.frequency.value = startHz;
+    const sparkGain = ctx.createGain();
+    sparkGain.gain.value = 0.001;
+    const sparkHp = ctx.createBiquadFilter();
+    sparkHp.type = "highpass";
+    sparkHp.Q.value = 0.7;
+    sparkHp.frequency.value = SPARKLE_HP_HZ;
     const pan = ctx.createStereoPanner();
     pan.pan.value = panValue;
     this._copySplashShelves(stem, body, air);
-    const nodes = [gain, body, air, filter, pan];
+    const nodes = [gain, body, air, filter, sparkGain, sparkHp, pan];
     /** @type {AudioBufferSourceNode | null} */
     let voice = null;
     /** @type {AudioNode | null} */
     let tap = null;
     const when = ctx.currentTime;
+    const splashOffset = buffer ? this._bedPosition(stem, pileId) : 0;
     if (buffer) {
       voice = ctx.createBufferSource();
       voice.buffer = buffer;
       voice.loop = true;
       voice.playbackRate.value = rate;
       voice.connect(gain);
-      voice.start(when, this._loopOffset(this._bedPosition(stem, pileId), buffer.duration));
+      voice.start(when, this._loopOffset(splashOffset, buffer.duration));
       nodes.push(voice);
     } else if (stem.el && !stem.el.paused && stem.source) {
       tap = stem.source;
@@ -2926,6 +3030,8 @@ export class EchoScapeAudioEngine {
     body.connect(air);
     air.connect(filter);
     filter.connect(pan);
+    sparkGain.connect(sparkHp);
+    sparkHp.connect(pan);
     pan.connect(this._splashOut);
     const strike = {
       nodes,
@@ -2936,6 +3042,9 @@ export class EchoScapeAudioEngine {
       air,
       filter,
       pan,
+      sparkGain,
+      sparkVoice: null,
+      sparkAt: null,
       pileId,
       timer: 0,
       released: false,
@@ -2943,6 +3052,7 @@ export class EchoScapeAudioEngine {
     };
     stem.strikes.push(strike);
     this._shapeSplash(strike, stem, when, dur, peak, rate, panValue, startHz, endHz);
+    if (buffer) this._sparkSplash(strike, buffer, when, rate, splashOffset, peak, ring);
     this._armSplashRelease(stem, strike, dur);
   }
 
