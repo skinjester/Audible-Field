@@ -62,6 +62,7 @@ export class FallingInput {
     this._emitHeldDown = false;
     this._emitHoldTimer = 0;
     this._emitFillGen = 0;
+    this._emitPointerId = -1;
     this._emitDragging = false;
     this._emitSizeLatched = false;
     this._emitAnalog = 0.5;
@@ -626,26 +627,30 @@ export class FallingInput {
     this._emitButton = btn;
     btn.style.setProperty("--emit-hold", `${EMIT_HOLD_MS}ms`);
     btn.addEventListener("pointerdown", this._onEmitPointerDown);
-    btn.addEventListener("pointermove", this._onEmitPointerMove);
-    btn.addEventListener("pointerup", this._onEmitPointerUp);
-    btn.addEventListener("pointercancel", this._onEmitPointerUp);
     btn.addEventListener("contextmenu", this._onEmitContextMenu);
+  }
+
+  _trackEmitPointer(on) {
+    const method = on ? "addEventListener" : "removeEventListener";
+    window[method]("pointermove", this._onEmitPointerMove);
+    window[method]("pointerup", this._onEmitPointerUp);
+    window[method]("pointercancel", this._onEmitPointerUp);
   }
 
   _unbindEmitButton() {
     const btn = this._emitButton;
     if (!btn) return;
     btn.removeEventListener("pointerdown", this._onEmitPointerDown);
-    btn.removeEventListener("pointermove", this._onEmitPointerMove);
-    btn.removeEventListener("pointerup", this._onEmitPointerUp);
-    btn.removeEventListener("pointercancel", this._onEmitPointerUp);
     btn.removeEventListener("contextmenu", this._onEmitContextMenu);
+    this._trackEmitPointer(false);
     this._clearEmitHold();
     this._emitFillGen += 1;
+    this._emitPointerId = -1;
     btn.classList.remove("is-pressed", "is-held", "is-charging", "is-filling");
     btn.setAttribute("aria-pressed", "false");
     this._emitAnalog = 0.5;
-    btn.style.transform = "";
+    const face = btn.querySelector(".falling-emit-face");
+    if (face) face.style.transform = "";
     btn.removeAttribute("data-drag");
     btn.parentElement?.querySelector(".falling-emit-clump")?.classList.remove("is-lit");
     btn.parentElement?.querySelector(".falling-emit-single")?.classList.remove("is-lit");
@@ -686,10 +691,12 @@ export class FallingInput {
   }
 
   _endEmitGesture() {
+    this._trackEmitPointer(false);
     this._clearEmitHold();
     this._touchEmit = false;
     this._emitHeldDown = false;
     this._emitDragging = false;
+    this._emitPointerId = -1;
     this._emitButton?.classList.remove("is-pressed", "is-held");
     this._emitButton?.setAttribute("aria-pressed", "false");
     this._hideEmitFill();
@@ -701,9 +708,11 @@ export class FallingInput {
    */
   _onEmitPointerDown(event) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (this._emitHeldDown) return;
     this._touchEmit = false;
     this._emitHeldDown = true;
     this._emitDragging = false;
+    this._emitPointerId = event.pointerId;
     this._emitDownY = event.clientY;
     const span = 72;
     this._emitOriginY = event.clientY - (0.5 - this._emitAnalog) * span;
@@ -713,6 +722,7 @@ export class FallingInput {
     this._paintEmitDrag();
     event.preventDefault();
     event.stopPropagation();
+    this._trackEmitPointer(true);
     this._emitButton?.setPointerCapture?.(event.pointerId);
   }
 
@@ -721,7 +731,7 @@ export class FallingInput {
    * @param {PointerEvent} event
    */
   _onEmitPointerMove(event) {
-    if (!this._emitHeldDown) return;
+    if (!this._emitHeldDown || event.pointerId !== this._emitPointerId) return;
     if (!this._emitDragging && Math.abs(event.clientY - this._emitDownY) <= 10) return;
     if (!this._emitDragging) {
       this._emitDragging = true;
@@ -744,14 +754,16 @@ export class FallingInput {
     if (!btn) return;
     const dock = btn.parentElement;
     const shift = (0.5 - this._emitAnalog) * 28;
-    btn.style.transform = `translateY(${shift}px)`;
+    const face = btn.querySelector(".falling-emit-face");
+    if (face) face.style.transform = `translateY(${shift}px)`;
     const dir = this._emitAnalog > 0.62 ? "up" : this._emitAnalog < 0.38 ? "down" : "mid";
     btn.dataset.drag = dir;
     dock?.querySelector(".falling-emit-clump")?.classList.toggle("is-lit", dir === "up");
     dock?.querySelector(".falling-emit-single")?.classList.toggle("is-lit", dir === "down");
   }
 
-  _onEmitPointerUp() {
+  _onEmitPointerUp(event) {
+    if (event?.pointerId != null && event.pointerId !== this._emitPointerId) return;
     this._endEmitGesture();
   }
 

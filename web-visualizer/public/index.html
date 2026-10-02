@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=208" />
+    <link rel="stylesheet" href="/styles.css?v=210" />
     <script type="importmap">
       {
         "imports": {
@@ -359,14 +359,16 @@
             <canvas data-falling-canvas aria-label="Falling Blocks playfield"></canvas>
             <div class="falling-emit-dock">
               <button type="button" class="falling-pill falling-touch-emit" data-falling-touch-emit aria-pressed="false" aria-label="Hold to emit atoms. Drag up for a clump, down for a single stream.">
-                <span class="falling-emit-fill" aria-hidden="true"></span>
-                <svg class="falling-emit-chevron" viewBox="0 0 16 8" aria-hidden="true">
-                  <path d="M1.5 6.5 L8 1.5 L14.5 6.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-                <span class="falling-emit-label">EMIT</span>
-                <svg class="falling-emit-chevron" viewBox="0 0 16 8" aria-hidden="true">
-                  <path d="M1.5 1.5 L8 6.5 L14.5 1.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
+                <span class="falling-emit-face">
+                  <span class="falling-emit-fill" aria-hidden="true"></span>
+                  <svg class="falling-emit-chevron" viewBox="0 0 16 8" aria-hidden="true">
+                    <path d="M1.5 6.5 L8 1.5 L14.5 6.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <span class="falling-emit-label">EMIT</span>
+                  <svg class="falling-emit-chevron" viewBox="0 0 16 8" aria-hidden="true">
+                    <path d="M1.5 1.5 L8 6.5 L14.5 1.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </span>
               </button>
               <span class="falling-emit-scale" aria-hidden="true">
                 <span class="falling-emit-clump">
@@ -600,6 +602,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=406"></script>
+    <script type="module" src="/app.js?v=408"></script>
   </body>
 </html>

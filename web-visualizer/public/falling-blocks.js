@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=46";
+import { fallingInput } from "./falling-input.js?v=47";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -1802,6 +1802,10 @@ function materialMeshMat(matIndex, receiveTarget = true, fade = false) {
   return mat;
 }
 
+function isPlayStationPad(pad) {
+  return /dualsense|dualshock|wireless controller|playstation/i.test(pad?.id || "");
+}
+
 function connectedPad() {
   const pads = navigator.getGamepads?.();
   if (!pads) return null;
@@ -1809,10 +1813,25 @@ function connectedPad() {
   for (let i = 0; i < pads.length; i += 1) {
     const pad = pads[i];
     if (!pad) continue;
-    if (/dualsense|dualshock|wireless controller|playstation/i.test(pad.id || "")) return pad;
+    if (isPlayStationPad(pad)) return pad;
     if (!fallback) fallback = pad;
   }
   return fallback;
+}
+
+/** PlayStation face, shoulder, and trigger glyphs only while that pad is connected. */
+function syncControllerGlyphs() {
+  const pads = navigator.getGamepads?.();
+  let present = false;
+  if (pads) {
+    for (let i = 0; i < pads.length; i += 1) {
+      if (isPlayStationPad(pads[i])) {
+        present = true;
+        break;
+      }
+    }
+  }
+  document.body.classList.toggle("has-dualsense", present);
 }
 
 function setActiveMaterial(id) {
@@ -2993,6 +3012,7 @@ function renderFrame(now) {
 
   const dt = lastNow ? Math.min(0.05, (now - lastNow) / 1000) : 0;
   lastNow = now;
+  syncControllerGlyphs();
 
   try {
     step(dt);
