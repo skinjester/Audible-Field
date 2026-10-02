@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=205" />
+    <link rel="stylesheet" href="/styles.css?v=208" />
     <script type="importmap">
       {
         "imports": {
@@ -358,11 +358,12 @@
           <div class="viz-canvas-wrap">
             <canvas data-falling-canvas aria-label="Falling Blocks playfield"></canvas>
             <div class="falling-emit-dock">
-              <button type="button" class="falling-pill falling-touch-emit" data-falling-touch-emit aria-pressed="false" aria-label="Emit atoms. Drag up for a clump, down for a single stream.">
+              <button type="button" class="falling-pill falling-touch-emit" data-falling-touch-emit aria-pressed="false" aria-label="Hold to emit atoms. Drag up for a clump, down for a single stream.">
+                <span class="falling-emit-fill" aria-hidden="true"></span>
                 <svg class="falling-emit-chevron" viewBox="0 0 16 8" aria-hidden="true">
                   <path d="M1.5 6.5 L8 1.5 L14.5 6.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
-                <span class="falling-emit-label">Emit</span>
+                <span class="falling-emit-label">EMIT</span>
                 <svg class="falling-emit-chevron" viewBox="0 0 16 8" aria-hidden="true">
                   <path d="M1.5 1.5 L8 6.5 L14.5 1.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
@@ -491,7 +492,10 @@
               <div class="falling-material-bar">
                 <div class="falling-material-row">
                   <span class="pad-glyph" data-falling-shoulder="prev" role="img" aria-label="L2">&#x011A;</span>
-                  <div class="falling-palette" data-falling-palette role="group" aria-label="Materials"></div>
+                  <div class="falling-material-stack">
+                    <p class="falling-material-current" data-falling-material-name></p>
+                    <div class="falling-palette" data-falling-palette role="group" aria-label="Materials"></div>
+                  </div>
                   <span class="pad-glyph" data-falling-shoulder="next" role="img" aria-label="R2">&#x011B;</span>
                 </div>
               </div>
@@ -596,6 +600,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=401"></script>
+    <script type="module" src="/app.js?v=406"></script>
   </body>
 </html>

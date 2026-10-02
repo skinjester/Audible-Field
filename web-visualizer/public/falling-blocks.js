@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=43";
+import { fallingInput } from "./falling-input.js?v=46";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -1830,11 +1830,18 @@ function cycleMaterial(delta) {
 }
 
 function syncPaletteUi() {
+  const mat = catalog?.byId.get(activeMaterialId);
+  const emitBtn = document.querySelector("[data-falling-touch-emit]");
+  if (emitBtn && mat?.color) emitBtn.style.setProperty("--emit-fill", mat.color);
   if (!paletteEl) return;
+  let label = "";
   for (const btn of paletteEl.querySelectorAll("[data-material]")) {
     const on = btn.getAttribute("data-material") === activeMaterialId;
     btn.setAttribute("aria-pressed", on ? "true" : "false");
+    if (on) label = btn.getAttribute("aria-label") || "";
   }
+  const nameEl = document.querySelector("[data-falling-material-name]");
+  if (nameEl) nameEl.textContent = label;
 }
 
 function syncShoulderGlyphs(prevHeld, nextHeld) {
@@ -1883,10 +1890,7 @@ function buildPalette() {
     const glyph = document.createElement("span");
     glyph.className = "falling-material-glyph";
     glyph.innerHTML = materialGlyph(mat.id);
-    const name = document.createElement("span");
-    name.className = "falling-material-name";
-    name.textContent = mat.label;
-    btn.append(glyph, name);
+    btn.append(glyph);
     btn.addEventListener("click", (event) => {
       event.stopPropagation();
       setActiveMaterial(mat.id);

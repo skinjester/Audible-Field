@@ -29,11 +29,11 @@
  *   Shift+Tab       → previous material
  *
  * Touchscreen:
- *   one finger       → aim the emitter (does not emit)
+ *   one-finger drag  → move the emitter (a tap, or the first of two fingers, does not)
  *   two-finger drag  → slide the playfield
  *   two-finger twist → yaw about the ground midpoint of the two fingers
  *   pinch            → zoom from the screen span
- *   Emit button      → largest emitter while held
+ *   Emit button      → hold to emit; drag up or down to size the emitter, including while it pours
  */
 
 /** @typedef {"pressure" | "max" | "single"} BrushMode */

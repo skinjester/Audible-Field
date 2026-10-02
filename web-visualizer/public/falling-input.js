@@ -5,7 +5,10 @@
 
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=15";
-import { TouchInput } from "./touch-input.js?v=2";
+import { TouchInput } from "./touch-input.js?v=3";
+
+/** How long Emit must be held before atoms pour. Matches --emit-hold. */
+const EMIT_HOLD_MS = 450;
 
 /** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
 
@@ -54,9 +57,11 @@ export class FallingInput {
     /** @type {HTMLButtonElement | null} */
     this._emitButton = null;
     this._emitHeld = false;
-    /** Finger is down on Emit. Pouring only while this is true and the finger has not dragged. */
+    /** Long-press on Emit has committed. A later drag keeps pouring and sizes the plane. */
     this._touchEmit = false;
     this._emitHeldDown = false;
+    this._emitHoldTimer = 0;
+    this._emitFillGen = 0;
     this._emitDragging = false;
     this._emitSizeLatched = false;
     this._emitAnalog = 0.5;
@@ -163,11 +168,12 @@ export class FallingInput {
   resetTransient() {
     this._emitHeld = false;
     this._touchEmit = false;
+    this._clearEmitHold();
     this._emitHeldDown = false;
     this._emitDragging = false;
     this._emitSizeLatched = false;
     this._emitAnalog = 0.5;
-    this._emitButton?.classList.remove("is-pressed");
+    this._emitButton?.classList.remove("is-pressed", "is-held", "is-charging", "is-filling");
     this._emitButton?.setAttribute("aria-pressed", "false");
     this._screenTouch.reset();
     this._shiftHeld = false;
@@ -401,9 +407,7 @@ export class FallingInput {
     this._moveY = 0;
     this._lastClient = null;
     this._touchPrev = null;
-    this._touchEmit = false;
-    this._emitButton?.classList.remove("is-pressed");
-    this._emitButton?.setAttribute("aria-pressed", "false");
+    this._endEmitGesture();
     this._screenTouch.reset();
   }
 
@@ -620,6 +624,7 @@ export class FallingInput {
     const btn = this._canvas?.parentElement?.querySelector("[data-falling-touch-emit]");
     if (!(btn instanceof HTMLButtonElement)) return;
     this._emitButton = btn;
+    btn.style.setProperty("--emit-hold", `${EMIT_HOLD_MS}ms`);
     btn.addEventListener("pointerdown", this._onEmitPointerDown);
     btn.addEventListener("pointermove", this._onEmitPointerMove);
     btn.addEventListener("pointerup", this._onEmitPointerUp);
@@ -635,14 +640,60 @@ export class FallingInput {
     btn.removeEventListener("pointerup", this._onEmitPointerUp);
     btn.removeEventListener("pointercancel", this._onEmitPointerUp);
     btn.removeEventListener("contextmenu", this._onEmitContextMenu);
-    this._emitButton?.classList.remove("is-pressed");
-    this._emitButton?.setAttribute("aria-pressed", "false");
+    this._clearEmitHold();
+    this._emitFillGen += 1;
+    btn.classList.remove("is-pressed", "is-held", "is-charging", "is-filling");
+    btn.setAttribute("aria-pressed", "false");
     this._emitAnalog = 0.5;
-    this._emitButton.style.transform = "";
-    this._emitButton.removeAttribute("data-drag");
-    this._emitButton.parentElement?.querySelector(".falling-emit-clump")?.classList.remove("is-lit");
-    this._emitButton.parentElement?.querySelector(".falling-emit-single")?.classList.remove("is-lit");
+    btn.style.transform = "";
+    btn.removeAttribute("data-drag");
+    btn.parentElement?.querySelector(".falling-emit-clump")?.classList.remove("is-lit");
+    btn.parentElement?.querySelector(".falling-emit-single")?.classList.remove("is-lit");
     this._emitButton = null;
+  }
+
+  _clearEmitHold() {
+    if (!this._emitHoldTimer) return;
+    clearTimeout(this._emitHoldTimer);
+    this._emitHoldTimer = 0;
+  }
+
+  /** Circle grows for the hold, then atoms pour. A drag before that only sizes the plane. */
+  _armEmitHold() {
+    this._clearEmitHold();
+    this._emitHoldTimer = window.setTimeout(() => {
+      this._emitHoldTimer = 0;
+      if (!this._emitHeldDown || this._emitDragging) return;
+      this._touchEmit = true;
+      this._emitButton?.setAttribute("aria-pressed", "true");
+    }, EMIT_HOLD_MS);
+  }
+
+  _showEmitFill() {
+    this._emitFillGen += 1;
+    this._emitButton?.classList.add("is-charging", "is-filling");
+  }
+
+  /** Drop the charge. The circle scales back, then the ink class leaves. */
+  _hideEmitFill() {
+    const btn = this._emitButton;
+    btn?.classList.remove("is-charging");
+    const gen = ++this._emitFillGen;
+    window.setTimeout(() => {
+      if (gen !== this._emitFillGen) return;
+      btn?.classList.remove("is-filling");
+    }, 160);
+  }
+
+  _endEmitGesture() {
+    this._clearEmitHold();
+    this._touchEmit = false;
+    this._emitHeldDown = false;
+    this._emitDragging = false;
+    this._emitButton?.classList.remove("is-pressed", "is-held");
+    this._emitButton?.setAttribute("aria-pressed", "false");
+    this._hideEmitFill();
+    this._paintEmitDrag();
   }
 
   /**
@@ -650,14 +701,15 @@ export class FallingInput {
    */
   _onEmitPointerDown(event) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    this._touchEmit = true;
+    this._touchEmit = false;
     this._emitHeldDown = true;
     this._emitDragging = false;
     this._emitDownY = event.clientY;
     const span = 72;
     this._emitOriginY = event.clientY - (0.5 - this._emitAnalog) * span;
-    this._emitButton?.classList.add("is-pressed");
-    this._emitButton?.setAttribute("aria-pressed", "true");
+    this._emitButton?.classList.add("is-pressed", "is-held");
+    this._showEmitFill();
+    this._armEmitHold();
     this._paintEmitDrag();
     event.preventDefault();
     event.stopPropagation();
@@ -671,9 +723,16 @@ export class FallingInput {
   _onEmitPointerMove(event) {
     if (!this._emitHeldDown) return;
     if (!this._emitDragging && Math.abs(event.clientY - this._emitDownY) <= 10) return;
-    this._emitDragging = true;
-    this._emitSizeLatched = true;
-    this._touchEmit = false;
+    if (!this._emitDragging) {
+      this._emitDragging = true;
+      this._emitSizeLatched = true;
+      // Before the hold commits, a drag only resizes. Once atoms are pouring, keep pouring.
+      if (!this._touchEmit) {
+        this._clearEmitHold();
+        this._emitButton?.setAttribute("aria-pressed", "false");
+        this._hideEmitFill();
+      }
+    }
     const span = 72;
     this._emitAnalog = clamp(0.5 - (event.clientY - this._emitOriginY) / span, 0, 1);
     this._paintEmitDrag();
@@ -693,12 +752,7 @@ export class FallingInput {
   }
 
   _onEmitPointerUp() {
-    this._touchEmit = false;
-    this._emitHeldDown = false;
-    this._emitDragging = false;
-    this._emitButton?.classList.remove("is-pressed");
-    this._emitButton?.setAttribute("aria-pressed", "false");
-    this._paintEmitDrag();
+    this._endEmitGesture();
   }
 
   /**

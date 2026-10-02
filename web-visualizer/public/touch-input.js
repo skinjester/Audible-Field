@@ -1,8 +1,10 @@
 /**
  * Touchscreen gesture sampler. No atoms, materials, or scene graph.
- * One contact aims. Two contacts report the finger chord; the sim turns
- * that chord into a ground yaw and slide. Pinch zoom stays on screen span.
- * FallingInput merges the consumed frame with mouse, keys, and the pad.
+ * A lone finger aims only after it drags. Landing a finger, or the first
+ * of a pair, does not move the emitter. Two contacts report the finger
+ * chord; the sim turns that chord into a ground yaw and slide. Pinch zoom
+ * stays on screen span. FallingInput merges the consumed frame with mouse,
+ * keys, and the pad.
  */
 
 /**
@@ -30,6 +32,9 @@
 /** Screen span below this does not pinch. A short chord can still yaw. */
 const PINCH_MIN_PX = 8;
 
+/** A lone contact must travel this far before it places the emitter. */
+const AIM_DRAG_PX = 10;
+
 export class TouchInput {
   /**
    * @param {TouchBindings} [bindings]
@@ -42,6 +47,12 @@ export class TouchInput {
     this._order = 0;
     /** @type {ScreenPoint | null} */
     this._aimAt = null;
+    /**
+     * Contact that started alone. A second finger clears it, so that chord
+     * and the finger left behind cannot place the emitter.
+     * @type {{ id: number, x: number, y: number, dragging: boolean } | null}
+     */
+    this._solo = null;
     /**
      * Last settled pair. A new pair does not jump.
      * @type {{ idA: number, idB: number, a: ScreenPoint, b: ScreenPoint } | null}
@@ -56,11 +67,22 @@ export class TouchInput {
    * @param {PointerEvent} event
    */
   pointerDown(event) {
+    const soloStart = this.pointers.size === 0;
     this.pointers.set(event.pointerId, {
       x: event.clientX,
       y: event.clientY,
       order: ++this._order,
     });
+    if (soloStart) {
+      this._solo = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        dragging: false,
+      };
+    } else {
+      this._solo = null;
+    }
     this._syncGesture();
   }
 
@@ -86,6 +108,7 @@ export class TouchInput {
   reset() {
     this.pointers.clear();
     this._aimAt = null;
+    this._solo = null;
     this._pair = null;
     this._pending = null;
   }
@@ -110,17 +133,33 @@ export class TouchInput {
     const ordered = [...this.pointers.entries()].sort((a, b) => a[1].order - b[1].order);
     if (ordered.length === 0) {
       this._aimAt = null;
+      this._solo = null;
       this._pair = null;
       return;
     }
     if (ordered.length === 1) {
-      const pointer = ordered[0][1];
-      this._aimAt = { x: pointer.x, y: pointer.y };
+      const [id, pointer] = ordered[0];
+      const solo = this._solo;
+      if (solo && solo.id === id) {
+        if (!solo.dragging) {
+          const traveled = Math.hypot(pointer.x - solo.x, pointer.y - solo.y);
+          if (traveled < AIM_DRAG_PX) {
+            this._aimAt = null;
+            this._pair = null;
+            return;
+          }
+          solo.dragging = true;
+        }
+        this._aimAt = { x: pointer.x, y: pointer.y };
+      } else {
+        this._aimAt = null;
+      }
       this._pair = null;
       return;
     }
 
     this._aimAt = null;
+    this._solo = null;
     const [idA, a] = ordered[0];
     const [idB, b] = ordered[1];
     const same = this._pair && this._pair.idA === idA && this._pair.idB === idB;
