@@ -1438,8 +1438,68 @@ button.falling-touch-emit,
   outline: none;
 }
 
-.falling-about {
-  justify-self: start;
+.falling-topbar-start {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  pointer-events: none;
+}
+
+.falling-fps {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.8);
+  color: rgba(255, 255, 255, 0.82);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.falling-fps:hover,
+.falling-fps:focus-visible,
+.falling-fps[aria-expanded="true"] {
+  color: #fff;
+  border-color: #fff;
+  outline: none;
+}
+
+.falling-fps[aria-expanded="true"] {
+  width: auto;
+  padding: 0 16px;
+}
+
+.falling-fps-mark {
+  display: block;
+  width: 22px;
+  height: 22px;
+}
+
+.falling-fps[aria-expanded="true"] .falling-fps-mark {
+  display: none;
+}
+
+.falling-frame {
+  display: none;
+}
+
+.falling-fps[aria-expanded="true"] .falling-frame {
+  display: inline;
 }
 
 .falling-settings {
@@ -1449,23 +1509,6 @@ button.falling-touch-emit,
 .falling-settings[aria-expanded="true"] {
   color: #fff;
   border-color: #fff;
-}
-
-.falling-frame {
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: rgba(8, 8, 8, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: rgba(230, 230, 230, 0.92);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
-  line-height: 1.45;
-  letter-spacing: 0.02em;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  pointer-events: none;
-  text-align: right;
 }
 
 .falling-settings-panel {
@@ -1734,21 +1777,31 @@ body:not(.has-dualsense) .falling-about-triggers {
 }
 
 .falling-material-row {
-  display: flex;
-  align-items: flex-end;
-  justify-content: flex-start;
-  flex-wrap: nowrap;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: auto auto auto;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 8px;
 }
 
-.falling-material-stack {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
+.falling-material-row > .pad-glyph[data-falling-shoulder="prev"] {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.falling-material-row > .falling-palette {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.falling-material-row > .pad-glyph[data-falling-shoulder="next"] {
+  grid-column: 3;
+  grid-row: 1;
 }
 
 .falling-material-current {
+  grid-column: 2;
+  grid-row: 2;
   margin: 0;
   min-height: 1em;
   font-size: 13px;

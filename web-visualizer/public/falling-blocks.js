@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=50";
+import { fallingInput } from "./falling-input.js?v=51";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -1992,6 +1992,19 @@ export function clearBoard() {
   syncEmitter();
   syncSceneBackground();
   reconcileMeshes();
+}
+
+function bindFpsUi() {
+  const btn = document.querySelector("[data-falling-fps-toggle]");
+  if (!(btn instanceof HTMLButtonElement) || btn.dataset.bound === "1") return;
+  btn.dataset.bound = "1";
+  const setOpen = (open) => {
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setOpen(btn.getAttribute("aria-expanded") !== "true");
+  });
 }
 
 function bindSettingsUi() {
@@ -4106,6 +4119,7 @@ export async function showFallingBlocks(nextCanvas, isCurrent = () => true) {
       fpsLastAt = 0;
     }
     bindAboutUi();
+    bindFpsUi();
     bindSettingsUi();
     bindClearUi();
     fallingInput.attach(canvas);

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=215" />
+    <link rel="stylesheet" href="/styles.css?v=218" />
     <script type="importmap">
       {
         "imports": {
@@ -358,6 +358,13 @@
           <div class="viz-canvas-wrap">
             <canvas data-falling-canvas aria-label="Falling Blocks playfield"></canvas>
             <div class="falling-emit-dock">
+              <span class="falling-emit-scale" aria-hidden="true">
+                <span class="falling-emit-clump">
+                  <i></i><i></i><i></i><i></i>
+                </span>
+                <span class="falling-emit-stem"></span>
+                <span class="falling-emit-single"></span>
+              </span>
               <button type="button" class="falling-pill falling-touch-emit" data-falling-touch-emit aria-pressed="false" aria-label="Hold to emit atoms. Drag up for a clump, down for a single stream.">
                 <span class="falling-emit-face">
                   <span class="falling-emit-fill" aria-hidden="true"></span>
@@ -370,13 +377,6 @@
                   </svg>
                 </span>
               </button>
-              <span class="falling-emit-scale" aria-hidden="true">
-                <span class="falling-emit-clump">
-                  <i></i><i></i><i></i><i></i>
-                </span>
-                <span class="falling-emit-stem"></span>
-                <span class="falling-emit-single"></span>
-              </span>
             </div>
             <p class="viz-error" data-falling-error hidden></p>
               <dialog class="falling-about-dialog" data-falling-about-dialog aria-labelledby="falling-about-title">
@@ -454,7 +454,17 @@
                 </form>
               </dialog>
               <div class="falling-topbar">
-                <button type="button" class="falling-icon-btn falling-about" data-falling-about aria-label="About">?</button>
+                <div class="falling-topbar-start">
+                  <button type="button" class="falling-icon-btn falling-about" data-falling-about aria-label="About">?</button>
+                  <button type="button" class="falling-fps" data-falling-fps-toggle aria-expanded="false" aria-label="Frame stats">
+                    <svg class="falling-fps-mark" viewBox="0 0 256 256" aria-hidden="true">
+                      <path fill="currentColor" d="M224,208H203.94A88.05,88.05,0,0,0,144,64.37V32a16,16,0,0,0-16-16H80A16,16,0,0,0,64,32V136a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V80.46A72,72,0,0,1,181.25,208H32a8,8,0,0,0,0,16H224a8,8,0,0,0,0-16Zm-96-72H80V32h48V136ZM72,184a8,8,0,0,1,0-16h64a8,8,0,0,1,0,16Z"/>
+                    </svg>
+                    <span class="falling-frame" aria-live="polite">
+                      <span data-falling-fps>--</span> fps · <span data-falling-atoms>--</span> atoms · <span data-falling-tris>--</span> polys
+                    </span>
+                  </button>
+                </div>
                 <button type="button" class="falling-icon-btn falling-settings" data-falling-settings aria-label="Settings" aria-expanded="false" aria-controls="falling-settings-panel">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/>
@@ -463,9 +473,6 @@
                 </button>
               </div>
               <div class="falling-settings-panel" id="falling-settings-panel" data-falling-settings-panel hidden>
-                <p class="falling-frame" aria-live="polite">
-                  <span data-falling-fps>--</span> fps · <span data-falling-atoms>--</span> atoms · <span data-falling-tris>--</span> polys
-                </p>
                 <div class="falling-hud">
                   <div class="falling-palette-row">
                     <button type="button" class="falling-clear falling-face falling-pill" data-falling-clear title="Clear board">
@@ -490,11 +497,9 @@
               <div class="falling-material-bar">
                 <div class="falling-material-row">
                   <span class="pad-glyph" data-falling-shoulder="prev" role="img" aria-label="L2">&#x011A;</span>
-                  <div class="falling-material-stack">
-                    <p class="falling-material-current" data-falling-material-name></p>
-                    <div class="falling-palette" data-falling-palette role="group" aria-label="Materials"></div>
-                  </div>
+                  <div class="falling-palette" data-falling-palette role="group" aria-label="Materials"></div>
                   <span class="pad-glyph" data-falling-shoulder="next" role="img" aria-label="R2">&#x011B;</span>
+                  <p class="falling-material-current" data-falling-material-name></p>
                 </div>
               </div>
             <aside class="falling-readout" data-falling-readout>
@@ -598,6 +603,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=413"></script>
+    <script type="module" src="/app.js?v=415"></script>
   </body>
 </html>

@@ -721,12 +721,12 @@ export class FallingInput {
     this._emitHoldTimer = 0;
   }
 
-  /** Circle grows for the hold, then atoms pour. A drag before that only sizes the plane. */
+  /** Circle grows for the hold, then atoms pour, even if the finger is also dragging. */
   _armEmitHold() {
     this._clearEmitHold();
     this._emitHoldTimer = window.setTimeout(() => {
       this._emitHoldTimer = 0;
-      if (!this._emitHeldDown || this._emitDragging) return;
+      if (!this._emitHeldDown) return;
       this._touchEmit = true;
       this._emitButton?.setAttribute("aria-pressed", "true");
     }, EMIT_HOLD_MS);
@@ -794,12 +794,6 @@ export class FallingInput {
     if (!this._emitDragging) {
       this._emitDragging = true;
       this._emitSizeLatched = true;
-      // Before the hold commits, a drag only resizes. Once atoms are pouring, keep pouring.
-      if (!this._touchEmit) {
-        this._clearEmitHold();
-        this._emitButton?.setAttribute("aria-pressed", "false");
-        this._hideEmitFill();
-      }
     }
     const span = 72;
     this._emitAnalog = clamp(0.5 - (event.clientY - this._emitOriginY) / span, 0, 1);
