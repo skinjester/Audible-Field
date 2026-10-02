@@ -29,10 +29,9 @@
  *   Shift+Tab       → previous material
  *
  * Touchscreen:
- *   one-finger drag  → move the emitter (a tap, or the first of two fingers, does not)
- *   two-finger drag  → slide the playfield
- *   two-finger twist → yaw about the ground midpoint of the two fingers
- *   pinch            → zoom from the screen span
+ *   one-finger drag  → pan the field under the emitter (a tap, or the first of two fingers, does not)
+ *   two-finger twist → yaw the field around the emitter at screen center
+ *   pinch            → zoom toward and away from that emitter
  *   Emit button      → hold still to emit; drag sizes the plane, and a resting hold while dragging starts the pour. Once pouring, a drag keeps emitting.
  */
 

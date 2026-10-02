@@ -16,6 +16,7 @@
   --accent: #f0f0f0;
   --accent-blue: #6eb6ff;
   --live: #6ee7b7;
+  --live-line: rgba(110, 231, 183, 0.35);
   --warn: #a8a8a8;
   --off: #505050;
   --tl: #5a5058;
@@ -165,14 +166,14 @@ h1 {
 .tabs button:hover,
 .tabs button:focus-visible {
   color: var(--live);
-  border-color: rgba(110, 231, 183, 0.35);
+  border-color: var(--live-line);
   outline: none;
 }
 
 .tabs button[aria-selected="true"] {
   background: var(--pill-selected);
   color: var(--live);
-  border-color: rgba(110, 231, 183, 0.35);
+  border-color: var(--live-line);
 }
 
 [data-panel][hidden] {
@@ -1364,9 +1365,9 @@ button.falling-touch-emit,
   gap: 10px;
   box-sizing: border-box;
   appearance: none;
-  border: 1px solid rgba(255, 255, 255, 0.28);
+  border: 1px solid var(--line);
   background: rgba(0, 0, 0, 0.8);
-  color: rgba(255, 255, 255, 0.72);
+  color: var(--muted);
   border-radius: 999px;
   padding: 12px 20px;
   font: inherit;
@@ -1382,9 +1383,18 @@ button.falling-touch-emit,
   text-shadow: none;
 }
 
-.falling-pill.is-pressed {
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.7);
+.falling-pill:not(.falling-touch-emit):hover,
+.falling-pill:not(.falling-touch-emit):focus-visible {
+  color: var(--live);
+  border-color: var(--live-line);
+  outline: none;
+}
+
+.falling-pill.is-pressed:not(.falling-touch-emit),
+.falling-pill[aria-pressed="true"]:not(.falling-touch-emit) {
+  background: var(--pill-selected);
+  color: var(--live);
+  border-color: var(--live-line);
 }
 
 .falling-about {
@@ -1433,8 +1443,8 @@ button.falling-touch-emit,
 .falling-icon-btn:hover,
 .falling-icon-btn:focus-visible,
 .falling-about:hover {
-  color: #fff;
-  border-color: #fff;
+  color: var(--live);
+  border-color: var(--live-line);
   outline: none;
 }
 
@@ -1447,8 +1457,8 @@ button.falling-touch-emit,
 }
 
 .falling-fps[aria-expanded="true"] {
-  color: #fff;
-  border-color: #fff;
+  color: var(--live);
+  border-color: var(--live-line);
 }
 
 .falling-fps-chevron {
@@ -1493,8 +1503,8 @@ button.falling-touch-emit,
 }
 
 .falling-settings[aria-expanded="true"] {
-  color: #fff;
-  border-color: #fff;
+  color: var(--live);
+  border-color: var(--live-line);
 }
 
 .falling-settings-panel {
@@ -2034,28 +2044,9 @@ body:not(.has-dualsense) .pad-glyph {
   }
 }
 
-.falling-clear {
-  cursor: pointer;
-}
-
-.falling-clear:hover {
-  color: #fff;
-  border-color: #fff;
-}
-
+.falling-clear,
 .falling-audio {
   cursor: pointer;
-}
-
-.falling-audio[aria-pressed="true"] {
-  background: rgba(0, 0, 0, 0.8);
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.7);
-}
-
-.falling-audio:hover {
-  color: #fff;
-  border-color: #fff;
 }
 
 .falling-splash {
@@ -2068,16 +2059,6 @@ body:not(.has-dualsense) .pad-glyph {
 .falling-splash-mode {
   cursor: pointer;
   padding: 12px 14px;
-}
-
-.falling-splash-mode[aria-pressed="true"] {
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.7);
-}
-
-.falling-splash-mode:hover {
-  color: #fff;
-  border-color: #fff;
 }
 
 .falling-material-swatch {

@@ -3,7 +3,7 @@ import { audioEngine } from "./audio-engine.js?v=78";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=52";
+import { fallingInput } from "./falling-input.js?v=53";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -28,7 +28,7 @@ const SCENE_BG = 0x070708;
 const scratchBg = new THREE.Color(SCENE_BG);
 const SPLASH_LIFE = 0.42;
 const CLICK_SLOP = 6;
-/** One-finger drag aims below the contact, so the fingertip stays above the emitter plane. */
+/** Mouse aim passes 0. Touch no longer places the emitter under the fingertip. */
 const FINGER_ABOVE_PLANE_PX = 40;
 const RULE_HZ = 22;
 
@@ -1360,6 +1360,48 @@ function dragGround(dx, dz) {
   aimWorldZ = world.z;
 }
 
+/** Pour point sits on the screen-center ground point. The field stays put. */
+function pinEmitterAtScreenCenter() {
+  const focus = groundFocus();
+  if (!focus) return;
+  aimWorldX = focus.x;
+  aimWorldZ = focus.z;
+}
+
+/**
+ * One-finger pan. The ground under the finger follows the finger, then the
+ * pour point returns to screen center. The center cell cannot leave the bed.
+ * @param {{ from: { x: number, y: number }, to: { x: number, y: number } }} pan
+ */
+function panBedUnderEmitter(pan) {
+  if (!surface || !canvas || !pan) return;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return;
+  const from = groundAtPixels(pan.from.x - rect.left, pan.from.y - rect.top, rect);
+  const to = groundAtPixels(pan.to.x - rect.left, pan.to.y - rect.top, rect);
+  if (!from || !to) return;
+  const focus = groundFocus();
+  if (!focus) return;
+  let nx = surface.position.x + (to.x - from.x);
+  let nz = surface.position.z + (to.z - from.z);
+  const sy = surface.rotation.y;
+  const c = Math.cos(sy);
+  const s = Math.sin(sy);
+  let lx = c * (focus.x - nx) - s * (focus.z - nz);
+  let lz = s * (focus.x - nx) + c * (focus.z - nz);
+  const limit = PLAYFIELD_HALF - 0.001;
+  if (Math.abs(lx) > limit || Math.abs(lz) > limit) {
+    const clampedX = Math.min(limit, Math.max(-limit, lx));
+    const clampedZ = Math.min(limit, Math.max(-limit, lz));
+    const yawed = surfaceYawXZ(clampedX, clampedZ);
+    nx = focus.x - yawed.x;
+    nz = focus.z - yawed.z;
+  }
+  surface.position.x = nx;
+  surface.position.z = nz;
+  pinEmitterAtScreenCenter();
+}
+
 function slidePointer(dx, dy, pointer) {
   if ((!dx && !dy) || !canvas) return;
   const rect = canvas.getBoundingClientRect();
@@ -1447,7 +1489,7 @@ function yawAbout(applied, pivot) {
 
 /**
  * Two-finger chord, in client pixels. Yaw matches the ground heading of that
- * chord and slides with its midpoint. Zoom stays on the screen span.
+ * chord and turns about the screen-center emitter. Zoom stays on the screen span.
  * @param {{ a0: { x: number, y: number }, b0: { x: number, y: number }, a1: { x: number, y: number }, b1: { x: number, y: number } }} chord
  */
 function twistGround(chord) {
@@ -1460,19 +1502,17 @@ function twistGround(chord) {
   const a1 = ground(chord.a1);
   const b1 = ground(chord.b1);
   if (!a0 || !b0 || !a1 || !b1) return;
-  const mid0x = (a0.x + b0.x) * 0.5;
-  const mid0z = (a0.z + b0.z) * 0.5;
-  const mid1x = (a1.x + b1.x) * 0.5;
-  const mid1z = (a1.z + b1.z) * 0.5;
+  const focus = groundFocus();
+  if (!focus) return;
   const dx0 = b0.x - a0.x;
   const dz0 = b0.z - a0.z;
   const dx1 = b1.x - a1.x;
   const dz1 = b1.z - a1.z;
   if (dx0 * dx0 + dz0 * dz0 > 1e-8 && dx1 * dx1 + dz1 * dz1 > 1e-8) {
     const applied = -wrapAngle(Math.atan2(dz1, dx1) - Math.atan2(dz0, dx0));
-    if (yawAbout(applied, { x: mid0x, z: mid0z })) syncSceneBackground();
+    if (yawAbout(applied, { x: focus.x, z: focus.z })) syncSceneBackground();
   }
-  dragGround(mid1x - mid0x, mid1z - mid0z);
+  pinEmitterAtScreenCenter();
 }
 
 /**
@@ -2120,17 +2160,20 @@ function applyInput(dt) {
   if (dragging || twisting) stickAimPointer = null;
 
   // A bare move places the emitter on the emit-height plane. Right-drag slides the grid.
-  // Two fingers yaw and slide about their ground chord. Stick and D-pad move
-  // the emitter on that same plane and are not snapped back to a resting cursor.
+  // One finger pans the field under the screen-center emitter. Two fingers yaw
+  // about that point. Stick and D-pad move the emitter and are not snapped back
+  // to a resting cursor, and a screen finger does not pull a stick aim to center.
   const stickHoldsAim = stickAim || !!stickAimPointer;
   if (aim && !dragging && !twisting && !stickHoldsAim) {
     placeEmitterAtPointer(aim, frame.fingerAim ? FINGER_ABOVE_PLANE_PX : 0);
   }
   if (dragging && !twisting) slidePointer(frame.pointerDelta.x, frame.pointerDelta.y, frame.pointerAt);
-  if (twisting) twistGround(frame.touchTwist);
+  if (!stickHoldsAim && frame.touchPan) panBedUnderEmitter(frame.touchPan);
+  if (twisting && !stickHoldsAim) twistGround(frame.touchTwist);
   if (stickAim) moveAim(frame.aimStickX, frame.aimStickY, dt);
   if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
   if (frame.zoomFactor !== 1) zoomCamera(frame.zoomFactor);
+  if (!stickHoldsAim && frame.touchZoom !== 1) pinEmitterAtScreenCenter();
 
   setAimFromWorld();
   syncEmitter();

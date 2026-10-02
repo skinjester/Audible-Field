@@ -5,7 +5,7 @@
 
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=15";
-import { TouchInput } from "./touch-input.js?v=3";
+import { TouchInput } from "./touch-input.js?v=4";
 
 /** How long Emit must be held still before atoms pour. Matches --emit-hold. */
 const EMIT_HOLD_MS = 280;
@@ -31,6 +31,9 @@ const EMIT_REST_PX = 6;
  *     a1: { x: number, y: number },
  *     b1: { x: number, y: number },
  *   } | null,
+ *   touchPan: { from: { x: number, y: number }, to: { x: number, y: number } } | null,
+ *   touchActive: boolean,
+ *   touchZoom: number,
  *   yawing: boolean,
  *   zoomFactor: number,
  *   aimStickX: number,
@@ -371,7 +374,7 @@ export class FallingInput {
     return {
       pointerDelta: dx || dy ? { x: dx, y: dy } : null,
       pointerAt: this._pointerAt,
-      aimAt: screen.active ? screen.aimAt : this._aimAt,
+      aimAt: screen.active ? null : this._aimAt,
       emit,
       emitSizing,
       brushMode,
@@ -380,6 +383,9 @@ export class FallingInput {
       ltSingle,
       orbitDelta,
       touchTwist: screen.twist,
+      touchPan: screen.pan,
+      touchActive: screen.active,
+      touchZoom: screen.zoomFactor,
       yawing: this._yawing() || rx !== 0,
       zoomFactor,
       aimStickX,
@@ -393,7 +399,7 @@ export class FallingInput {
       rtHeld: rtActive,
       shiftHeld: this._shiftHeld,
       touchAim: !!touch.aim,
-      fingerAim: !!(screen.active && screen.aimAt),
+      fingerAim: false,
     };
   }
 

@@ -31,10 +31,9 @@ An emitter sits above the plane and follows the pointer, left stick, or D-pad. H
 | Right trigger | Pressure. A light pull is the single half-size stream. A deep pull opens the wide full-size field. |
 | Right-drag | Slide the playfield. |
 | Middle-drag, Shift+right-drag, Alt+right-drag, or right stick X | Yaw the playfield under the emitter. |
-| One finger | Aim the emitter. |
-| Two-finger drag | Slide the playfield. |
-| Two-finger twist | Yaw the playfield about the ground midpoint of the two fingers. The emitter rides with that turn. |
-| Pinch | Zoom from the screen span between the fingers. |
+| One finger | Pan the field under the emitter. The emitter stays at screen center. |
+| Two-finger twist | Yaw the field around the emitter. |
+| Pinch | Zoom toward and away from the emitter. |
 | Wheel or right stick Y | Zoom. |
 | L1 / R1, or Tab / Shift+Tab | Previous / next material. |
 | Circle, or the clear button | Clear the board. |
