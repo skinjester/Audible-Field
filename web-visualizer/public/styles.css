@@ -1480,8 +1480,9 @@ button.falling-touch-emit,
 }
 
 .falling-fps[aria-expanded="true"] {
-  width: auto;
+  width: calc(34ch + 34px);
   padding: 0 16px;
+  justify-content: flex-start;
 }
 
 .falling-fps-mark {
