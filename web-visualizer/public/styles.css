@@ -2058,6 +2058,28 @@ body:not(.has-dualsense) .pad-glyph {
   border-color: #fff;
 }
 
+.falling-splash {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.falling-splash-mode {
+  cursor: pointer;
+  padding: 12px 14px;
+}
+
+.falling-splash-mode[aria-pressed="true"] {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+.falling-splash-mode:hover {
+  color: #fff;
+  border-color: #fff;
+}
+
 .falling-material-swatch {
   box-sizing: border-box;
   appearance: none;

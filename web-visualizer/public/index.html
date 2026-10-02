@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=219" />
+    <link rel="stylesheet" href="/styles.css?v=220" />
     <script type="importmap">
       {
         "imports": {
@@ -486,6 +486,11 @@
                       <span class="pad-glyph" aria-hidden="true">&#x0116;</span>
                       Audio
                     </button>
+                    <div class="falling-splash" role="group" aria-label="Landing sound">
+                      <button type="button" class="falling-pill falling-splash-mode" data-falling-splash="grain" aria-pressed="true" title="Short grain of the sample">Grain</button>
+                      <button type="button" class="falling-pill falling-splash-mode" data-falling-splash="tick" aria-pressed="false" title="Pitched noise tick">Tick</button>
+                      <button type="button" class="falling-pill falling-splash-mode" data-falling-splash="phrase" aria-pressed="false" title="Restart the sample with the bed">Phrase</button>
+                    </div>
                     <span class="falling-pill" data-falling-trigger="lt" role="img" aria-label="Left trigger emits a stream">
                       <span class="pad-glyph" aria-hidden="true">&#x0108;</span>
                       Emit Stream
@@ -606,6 +611,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=424"></script>
+    <script type="module" src="/app.js?v=425"></script>
   </body>
 </html>

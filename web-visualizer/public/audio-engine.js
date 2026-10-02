@@ -173,6 +173,52 @@ function strikePeak(stemLevel, rate, count) {
   return amount * (1 / Math.sqrt(Math.max(0.25, rate))) * weight;
 }
 
+/** Grain and tick ignore another landing on the same pile inside this window. */
+const SPLASH_REFRACTORY = 0.11;
+/** Heard length of a sample grain. The visual ring stays longer. */
+const GRAIN_SEC = 0.07;
+/** Heard length of a noise tick. */
+const TICK_SEC = 0.08;
+/** Grain high-pass. Keeps the speck from doubling the bed's bass. */
+const IMPACT_HP_HZ = 300;
+/** Tick bandpass at the pile's pitch. Corners sit here; the center is an octave up. */
+const TICK_BASE_HZ = 240;
+const TICK_Q = 8;
+
+/**
+ * Impact level stays under the stem. The floor keeps a quiet pile's first atom audible.
+ * A heavy cluster is only a little louder. The phrase path still uses strikePeak.
+ */
+function impactPeak(stemLevel, rate, count) {
+  const weight = Math.min(1.15, Math.pow(Math.max(1, count), 0.22));
+  const amount = Math.max(0.4, Math.min(1, Number(stemLevel) || 0));
+  return amount * 0.55 * (1 / Math.sqrt(Math.max(0.25, rate))) * weight;
+}
+
+function tickHz(rate) {
+  return Math.min(4000, Math.max(80, TICK_BASE_HZ * Math.max(0.25, rate)));
+}
+
+/**
+ * A slice of the sample, not the bed's playhead.
+ * The cell picks the offset so two landings are different specks.
+ * @param {AudioBuffer} buffer
+ * @param {{ x?: number, z?: number }} hit
+ * @param {number} rate
+ */
+function grainSlice(buffer, hit, rate) {
+  const dur = Number(buffer?.duration) || 0;
+  if (!(dur > 0)) return { offset: 0, duration: 0.01 };
+  const wanted = GRAIN_SEC * Math.max(0.25, rate);
+  const slice = Math.min(dur, Math.max(0.01, wanted));
+  const span = Math.max(0, dur - slice);
+  const x = Number(hit?.x) || 0;
+  const z = Number(hit?.z) || 0;
+  const h = Math.abs((x | 0) * 17 + (z | 0) * 31);
+  const offset = span > 1e-4 ? ((h % 997) / 997) * span : 0;
+  return { offset, duration: slice };
+}
+
 function defaultAxisScales() {
   return { x: DEFAULT_STICK_SCALE, y: DEFAULT_STICK_SCALE };
 }
@@ -315,6 +361,12 @@ export class EchoScapeAudioEngine {
     this._wetIn = null;
     this._shoulderOut = null;
     this._splashOut = null;
+    /** Landing voice: a sample grain, a pitched tick, or the phrase restart. */
+    this.splashMode = "grain";
+    /** Last impact start per corner and pile, in context time. */
+    this._impactAt = null;
+    /** @type {AudioBuffer | null} */
+    this._tickNoise = null;
     this._l1Dry = null;
     this._l1Send = null;
     this._l1Reverb = null;
@@ -2471,11 +2523,10 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * One repeat of that quadrant's sample, from wherever the loop already is.
-   * The low-pass starts at the bed's current cutoff and opens brighter across the ground ring,
-   * at the pitch of the pile that landed. A heavier landing is louder.
-   * Another landing while the ring is still up starts the file over.
-   * @param {Record<string, ({ life: number, rate?: number } | number)[]> | null} hits
+   * Landing voice for each pile.
+   * Grain and tick are short one-shots. Another landing on that pile inside
+   * 110ms is skipped. Phrase restarts the sample in phase with the bed.
+   * @param {Record<string, ({ life: number, rate?: number, x?: number, z?: number, pileId?: number } | number)[]> | null} hits
    */
   playSplash(hits) {
     if (!this.running || !this.ctx || !this._splashOut || !hits) return;
@@ -2633,7 +2684,175 @@ export class EchoScapeAudioEngine {
     }, (dur + 0.08) * 1000);
   }
 
+  /**
+   * Grain, tick, or phrase. Switching releases voices that are still ringing.
+   * @param {string} mode
+   */
+  setSplashMode(mode) {
+    const next = mode === "tick" || mode === "phrase" ? mode : "grain";
+    if (this.splashMode === next) return;
+    this.splashMode = next;
+    for (const corner of CORNERS) this._releaseStrikes(this.stems[corner]);
+  }
+
+  _impactKey(pileId) {
+    return pileId == null ? "_" : pileId;
+  }
+
+  /** True while this pile is still inside the impact window. */
+  _impactCooling(corner, pileId) {
+    const last = this._impactAt?.[corner]?.get(this._impactKey(pileId));
+    if (last == null || !this.ctx) return false;
+    return this.ctx.currentTime - last < SPLASH_REFRACTORY;
+  }
+
+  _markImpact(corner, pileId, when) {
+    if (!this._impactAt) this._impactAt = {};
+    if (!this._impactAt[corner]) this._impactAt[corner] = new Map();
+    this._impactAt[corner].set(this._impactKey(pileId), when);
+  }
+
+  /** White noise for the tick. The bandpass, not playback rate, sets the pitch. */
+  _tickNoiseBuffer() {
+    if (!this.ctx) return null;
+    if (this._tickNoise && this._tickNoise.sampleRate === this.ctx.sampleRate) return this._tickNoise;
+    const seconds = 0.25;
+    const rate = this.ctx.sampleRate;
+    const length = Math.floor(rate * seconds);
+    const buffer = this.ctx.createBuffer(1, length, rate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < length; i += 1) data[i] = Math.random() * 2 - 1;
+    this._tickNoise = buffer;
+    return buffer;
+  }
+
+  /**
+   * Fast attack, then a decay across the event. The filter stays put.
+   * @param {{ gain: GainNode, live: boolean }} strike
+   */
+  _shapeImpact(strike, when, dur, peak) {
+    const level = Math.max(0.001, peak);
+    const attack = Math.min(0.005, dur * 0.2);
+    const gain = strike.gain.gain;
+    gain.cancelScheduledValues(when);
+    gain.setValueAtTime(0.001, when);
+    gain.exponentialRampToValueAtTime(level, when + attack);
+    gain.exponentialRampToValueAtTime(0.001, when + dur);
+    strike.live = true;
+  }
+
+  /**
+   * One short event for the pile. Grain plays a cell-sized slice of the sample.
+   * Tick is noise through a bandpass at the pile pitch. A landing inside the
+   * refractory window does not start another voice.
+   * @param {"grain" | "tick"} mode
+   */
+  _strikeImpact(corner, group, mode) {
+    const stem = this.stems[corner];
+    if (!stem?.source || !this.ctx || !this._splashOut) return;
+    if (!stem.strikes) stem.strikes = [];
+    const lives = group?.lives || [];
+    const audible = lives.filter((hit) => strikeLife(hit) > 0);
+    if (!audible.length) return;
+    const pileId = group.pileId;
+    if (this._impactCooling(corner, pileId)) return;
+
+    const tick = mode === "tick";
+    const buffer = tick ? this._tickNoiseBuffer() : this._strikeBuffers?.[corner] || stem.bedBuffer || null;
+    if (!buffer) return;
+
+    const ctx = this.ctx;
+    const dur = tick ? TICK_SEC : GRAIN_SEC;
+    const note = pileId == null ? null : stem.notes?.find((slot) => slot.id === pileId);
+    const playing = Number(note?.voice?.playbackRate?.value);
+    const rate = this._clampRate(Number.isFinite(playing) && playing > 0 ? playing : note?.rate || group.rate);
+    const stemLevel = Number(stem.gain?.gain?.value) || 0;
+    const peak = impactPeak(stemLevel, rate, audible.length);
+    const panValue = stem.pan ? stem.pan.pan.value : 0;
+
+    let live = null;
+    for (let i = 0; i < stem.strikes.length; i += 1) {
+      const strike = stem.strikes[i];
+      if (strike.released) continue;
+      if (pileId == null ? strike.pileId == null : strike.pileId === pileId) live = strike;
+    }
+    if (live) this._releaseStrike(stem, live);
+
+    const gain = ctx.createGain();
+    gain.gain.value = 0.001;
+    const body = ctx.createBiquadFilter();
+    const air = ctx.createBiquadFilter();
+    const filter = ctx.createBiquadFilter();
+    if (tick) {
+      filter.type = "bandpass";
+      filter.Q.value = TICK_Q;
+      filter.frequency.value = tickHz(rate);
+    } else {
+      filter.type = "highpass";
+      filter.Q.value = 0.7;
+      filter.frequency.value = IMPACT_HP_HZ;
+    }
+    const pan = ctx.createStereoPanner();
+    pan.pan.value = panValue;
+    this._copySplashShelves(stem, body, air);
+
+    const voice = ctx.createBufferSource();
+    voice.buffer = buffer;
+    voice.loop = false;
+    voice.playbackRate.value = tick ? 1 : rate;
+    const when = ctx.currentTime;
+    let offset = 0;
+    let playDur = Math.min(buffer.duration, dur);
+    if (!tick) {
+      const slice = grainSlice(buffer, audible[0], rate);
+      offset = slice.offset;
+      playDur = slice.duration;
+    }
+    if (offset + playDur > buffer.duration) playDur = Math.max(0.01, buffer.duration - offset);
+    voice.connect(gain);
+    try {
+      voice.start(when, offset, Math.max(0.01, playDur));
+    } catch {
+      try {
+        voice.disconnect();
+      } catch {
+        /* already gone */
+      }
+      return;
+    }
+
+    gain.connect(body);
+    body.connect(air);
+    air.connect(filter);
+    filter.connect(pan);
+    pan.connect(this._splashOut);
+    const nodes = [gain, body, air, filter, pan, voice];
+    const strike = {
+      nodes,
+      voice,
+      tap: null,
+      gain,
+      body,
+      air,
+      filter,
+      pan,
+      pileId,
+      timer: 0,
+      released: false,
+      live: false,
+    };
+    stem.strikes.push(strike);
+    this._shapeImpact(strike, when, dur, peak);
+    this._armSplashRelease(stem, strike, dur);
+    this._markImpact(corner, pileId, when);
+  }
+
   _strikeStem(corner, group) {
+    const mode = this.splashMode === "tick" || this.splashMode === "phrase" ? this.splashMode : "grain";
+    if (mode !== "phrase") {
+      this._strikeImpact(corner, group, mode);
+      return;
+    }
     const stem = this.stems[corner];
     if (!stem?.source) return;
     if (!stem.strikes) stem.strikes = [];
