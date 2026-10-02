@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=47";
+import { fallingInput } from "./falling-input.js?v=50";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -27,6 +27,8 @@ const SCENE_BG = 0x070708;
 const scratchBg = new THREE.Color(SCENE_BG);
 const SPLASH_LIFE = 0.42;
 const CLICK_SLOP = 6;
+/** One-finger drag aims below the contact, so the fingertip stays above the emitter plane. */
+const FINGER_ABOVE_PLANE_PX = 40;
 const RULE_HZ = 22;
 
 /** Fixed view, 60° down, so a finger twist stays closer to the ground heading. Distance is zoomable. */
@@ -294,7 +296,7 @@ const gridXZ = GRID_XZ;
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
 const emitterNdc = new THREE.Vector3();
-/** Horizontal plane. Pointer aims the ground target, and the emitter sits above it. */
+/** Horizontal plane. A screen point becomes world XZ on the ground or the emitter. */
 const emitterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const hitPoint = new THREE.Vector3();
 const scratchPos = new THREE.Vector3();
@@ -1294,7 +1296,7 @@ function groundFocus() {
   return worldOnPlane(0, 0, 0);
 }
 
-/** Emitter sits directly above the ground target, not on the view ray. */
+/** Emitter and the ground target share this XZ. Pointer aim keeps the emitter on the view ray. */
 function emitterDrawXZ() {
   return { x: aimWorldX, z: aimWorldZ };
 }
@@ -1386,12 +1388,20 @@ function placeEmitterAtWorld(wx, wz) {
   aimWorldZ = world.z;
 }
 
-/** Put the emitter on the ground under the pointer. The grid stays where it is. */
-function placeEmitterAtPointer(pointer) {
+/**
+ * Put the emitter plane under the pointer. The ground target shares that cell,
+ * so the pour stays visible beside the finger instead of under it.
+ * liftPx shifts the aim down the screen, leaving the contact above the plane.
+ */
+function placeEmitterAtPointer(pointer, liftPx = 0) {
   if (!canvas || !pointer || !surface) return;
   const rect = canvas.getBoundingClientRect();
   if (rect.width < 1 || rect.height < 1) return;
-  const hit = groundAtPixels(pointer.x - rect.left, pointer.y - rect.top, rect);
+  const px = pointer.x - rect.left;
+  const py = pointer.y - rect.top + liftPx;
+  const ndcX = (px / rect.width) * 2 - 1;
+  const ndcY = 1 - (py / rect.height) * 2;
+  const hit = worldOnPlane(ndcX, ndcY, emitWorldY());
   if (!hit) return;
   placeEmitterAtWorld(hit.x, hit.z);
 }
@@ -1819,19 +1829,9 @@ function connectedPad() {
   return fallback;
 }
 
-/** PlayStation face, shoulder, and trigger glyphs only while that pad is connected. */
+/** PlayStation glyphs only while that pad is the device being used. */
 function syncControllerGlyphs() {
-  const pads = navigator.getGamepads?.();
-  let present = false;
-  if (pads) {
-    for (let i = 0; i < pads.length; i += 1) {
-      if (isPlayStationPad(pads[i])) {
-        present = true;
-        break;
-      }
-    }
-  }
-  document.body.classList.toggle("has-dualsense", present);
+  document.body.classList.toggle("has-dualsense", fallingInput.showPadGlyphs);
 }
 
 function setActiveMaterial(id) {
@@ -2080,11 +2080,13 @@ function applyInput(dt) {
   }
   if (dragging || twisting) stickAimPointer = null;
 
-  // A bare move places the emitter on the ground. Right-drag slides the grid.
+  // A bare move places the emitter on the emit-height plane. Right-drag slides the grid.
   // Two fingers yaw and slide about their ground chord. Stick and D-pad move
   // the emitter on that same plane and are not snapped back to a resting cursor.
   const stickHoldsAim = stickAim || !!stickAimPointer;
-  if (aim && !dragging && !twisting && !stickHoldsAim) placeEmitterAtPointer(aim);
+  if (aim && !dragging && !twisting && !stickHoldsAim) {
+    placeEmitterAtPointer(aim, frame.fingerAim ? FINGER_ABOVE_PLANE_PX : 0);
+  }
   if (dragging && !twisting) slidePointer(frame.pointerDelta.x, frame.pointerDelta.y, frame.pointerAt);
   if (twisting) twistGround(frame.touchTwist);
   if (stickAim) moveAim(frame.aimStickX, frame.aimStickY, dt);
@@ -3012,10 +3014,10 @@ function renderFrame(now) {
 
   const dt = lastNow ? Math.min(0.05, (now - lastNow) / 1000) : 0;
   lastNow = now;
-  syncControllerGlyphs();
 
   try {
     step(dt);
+    syncControllerGlyphs();
     syncLandingTarget();
     renderer.render(scene, camera);
     updateHud(now);
@@ -4121,6 +4123,7 @@ export async function showFallingBlocks(nextCanvas, isCurrent = () => true) {
 
 export function hideFallingBlocks() {
   running = false;
+  document.body.classList.remove("has-dualsense");
   if (canvas) canvas.style.filter = "";
   fallingInput.detach();
   emitting = false;

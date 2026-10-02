@@ -4,7 +4,7 @@ import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
 import * as diagnostics from "./diagnostics.js?v=15";
-import * as fallingTab from "./falling-tab.js?v=50";
+import * as fallingTab from "./falling-tab.js?v=54";
 import * as visualizeTab from "./visualize-tab.js?v=11";
 
 const statusEl = document.querySelector(".status");
@@ -81,6 +81,27 @@ function noteMouse(event) {
 
 window.addEventListener("pointerdown", noteMouse, true);
 window.addEventListener("pointermove", noteMouse, true);
+
+/** Text fields keep the system caret and loupe. Everything else is a control surface. */
+function isTextEntryTarget(target) {
+  return !!(
+    target instanceof Element &&
+    target.closest("input, textarea, select, [contenteditable='true']")
+  );
+}
+
+document.addEventListener("selectstart", (event) => {
+  if (!isTextEntryTarget(event.target)) event.preventDefault();
+});
+
+document.addEventListener("selectionchange", () => {
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed) return;
+  const node = sel.anchorNode;
+  const el = node instanceof Element ? node : node?.parentElement;
+  if (isTextEntryTarget(el)) return;
+  sel.removeAllRanges();
+});
 
 function dualSenseAvailable() {
   if (dualsenseHid.connected || gamepadInput.connected) return true;

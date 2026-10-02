@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=210" />
+    <link rel="stylesheet" href="/styles.css?v=215" />
     <script type="importmap">
       {
         "imports": {
@@ -455,13 +455,6 @@
               </dialog>
               <div class="falling-topbar">
                 <button type="button" class="falling-icon-btn falling-about" data-falling-about aria-label="About">?</button>
-                <p class="falling-frame" aria-live="polite">
-                  <span data-falling-fps>--</span>fps
-                  <span aria-hidden="true"> · </span>
-                  <span data-falling-atoms>--</span>atoms
-                  <span aria-hidden="true"> · </span>
-                  <span data-falling-tris>--</span>polys
-                </p>
                 <button type="button" class="falling-icon-btn falling-settings" data-falling-settings aria-label="Settings" aria-expanded="false" aria-controls="falling-settings-panel">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/>
@@ -470,6 +463,9 @@
                 </button>
               </div>
               <div class="falling-settings-panel" id="falling-settings-panel" data-falling-settings-panel hidden>
+                <p class="falling-frame" aria-live="polite">
+                  <span data-falling-fps>--</span> fps · <span data-falling-atoms>--</span> atoms · <span data-falling-tris>--</span> polys
+                </p>
                 <div class="falling-hud">
                   <div class="falling-palette-row">
                     <button type="button" class="falling-clear falling-face falling-pill" data-falling-clear title="Clear board">
@@ -602,6 +598,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=408"></script>
+    <script type="module" src="/app.js?v=413"></script>
   </body>
 </html>

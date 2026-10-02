@@ -8,7 +8,7 @@ import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?
 import { TouchInput } from "./touch-input.js?v=3";
 
 /** How long Emit must be held before atoms pour. Matches --emit-hold. */
-const EMIT_HOLD_MS = 450;
+const EMIT_HOLD_MS = 280;
 
 /** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
 
@@ -42,6 +42,7 @@ const EMIT_HOLD_MS = 450;
  *   rtHeld: boolean,
  *   shiftHeld: boolean,
  *   touchAim: boolean,
+ *   fingerAim: boolean,
  * }} FallingInputFrame
  */
 
@@ -99,6 +100,11 @@ export class FallingInput {
     this._prevCycleNext = false;
     /** Presses of Tab / Shift+Tab since the last sample. */
     this._keyCycle = 0;
+    /** "idle" until a device is used, then "pointer" or "pad". */
+    this._device = "idle";
+    this._pointerActivity = false;
+    this._padWasUsing = false;
+    this._showPadGlyphs = false;
     this._onPointerMove = this._onPointerMove.bind(this);
     this._onPointerOut = this._onPointerOut.bind(this);
     this._onPointerDown = this._onPointerDown.bind(this);
@@ -115,6 +121,13 @@ export class FallingInput {
     this._onEmitPointerMove = this._onEmitPointerMove.bind(this);
     this._onEmitPointerUp = this._onEmitPointerUp.bind(this);
     this._onEmitContextMenu = this._onEmitContextMenu.bind(this);
+    this._onPointerDevice = this._onPointerDevice.bind(this);
+    this._onWheelDevice = this._onWheelDevice.bind(this);
+  }
+
+  /** True while PlayStation glyphs should be on screen. */
+  get showPadGlyphs() {
+    return this._showPadGlyphs;
   }
 
   /**
@@ -138,6 +151,9 @@ export class FallingInput {
     window.addEventListener("pointermove", this._onWindowPointerMove);
     window.addEventListener("blur", this._onPointerGone);
     document.documentElement.addEventListener("pointerleave", this._onPointerGone);
+    document.addEventListener("pointerdown", this._onPointerDevice, true);
+    document.addEventListener("pointermove", this._onPointerDevice, true);
+    document.addEventListener("wheel", this._onWheelDevice, { capture: true, passive: true });
     this._bindEmitButton();
   }
 
@@ -159,6 +175,9 @@ export class FallingInput {
     window.removeEventListener("pointermove", this._onWindowPointerMove);
     window.removeEventListener("blur", this._onPointerGone);
     document.documentElement.removeEventListener("pointerleave", this._onPointerGone);
+    document.removeEventListener("pointerdown", this._onPointerDevice, true);
+    document.removeEventListener("pointermove", this._onPointerDevice, true);
+    document.removeEventListener("wheel", this._onWheelDevice, { capture: true });
     this._unbindEmitButton();
     dualsenseHid.routeTouchToMixer = true;
     if (document.pointerLockElement) document.exitPointerLock();
@@ -199,6 +218,10 @@ export class FallingInput {
     this._prevCyclePrev = false;
     this._prevCycleNext = false;
     this._keyCycle = 0;
+    this._device = "idle";
+    this._pointerActivity = false;
+    this._padWasUsing = false;
+    this._showPadGlyphs = false;
   }
 
   /**
@@ -334,6 +357,7 @@ export class FallingInput {
     this._prevAudio = audioDown;
     this._prevCyclePrev = cyclePrev;
     this._prevCycleNext = cycleNext;
+    this._syncGlyphDevice(pad);
 
     const touchDelta = this._consumeTouchDelta();
     const dx = this._moveX + touchDelta.x;
@@ -366,6 +390,7 @@ export class FallingInput {
       rtHeld: rtActive,
       shiftHeld: this._shiftHeld,
       touchAim: !!touch.aim,
+      fingerAim: !!(screen.active && screen.aimAt),
     };
   }
 
@@ -397,6 +422,39 @@ export class FallingInput {
       this.bindings.mouse.emitSingleModifier === "shift";
     this._mouseFull = this._emitHeld && !single;
     this._mouseLight = single;
+  }
+
+  /**
+   * Mouse, trackpad, and touchscreen take the glyphs down. A later controller
+   * gesture, after the pad has rested, brings them back.
+   * @param {PointerEvent} event
+   */
+  _onPointerDevice(event) {
+    const type = event.pointerType;
+    if (type !== "mouse" && type !== "pen" && type !== "touch") return;
+    if (event.type === "pointermove" && type !== "touch" && !event.movementX && !event.movementY) return;
+    this._pointerActivity = true;
+  }
+
+  _onWheelDevice() {
+    this._pointerActivity = true;
+  }
+
+  /**
+   * Glyphs come on with a PlayStation gesture and stay until a mouse, trackpad,
+   * or touchscreen takes over. A pad that is only connected never turns them on.
+   * @param {Gamepad | null} pad
+   */
+  _syncGlyphDevice(pad) {
+    const using = playstationDriving(pad, this.bindings.gamepad.stickDeadzone);
+    if (this._pointerActivity) {
+      this._device = "pointer";
+      this._pointerActivity = false;
+    } else if (using && !this._padWasUsing) {
+      this._device = "pad";
+    }
+    this._padWasUsing = using;
+    this._showPadGlyphs = this._device === "pad";
   }
 
   _onPointerGone() {
@@ -838,4 +896,23 @@ function readTouchpad(pad, pressed) {
 
 function isPlayStationPad(pad) {
   return /dualsense|dualshock|wireless controller|playstation/i.test(pad?.id || "");
+}
+
+/**
+ * Sticks, buttons, triggers, or a finger on the DualSense touch surface.
+ * @param {Gamepad | null | undefined} pad
+ * @param {number} dead
+ */
+function playstationDriving(pad, dead) {
+  if (!isPlayStationPad(pad)) return false;
+  const axes = pad.axes || [];
+  for (let i = 0; i < axes.length; i += 1) {
+    if (Math.abs(Number(axes[i]) || 0) >= dead) return true;
+  }
+  const buttons = pad.buttons || [];
+  for (let i = 0; i < buttons.length; i += 1) {
+    const button = buttons[i];
+    if (button && (button.pressed || button.value > 0.15)) return true;
+  }
+  return !!(dualsenseHid.enabled && dualsenseHid.connected && dualsenseHid.touch?.active);
 }
