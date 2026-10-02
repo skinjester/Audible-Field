@@ -1,16 +1,28 @@
-import { audioEngine } from "./audio-engine.js?v=68";
+import { audioEngine } from "./audio-engine.js?v=70";
 import {
   clearBoard,
   hideFallingBlocks,
   onFallingAudioToggle,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=342";
-import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=33";
+} from "./falling-blocks.js?v=343";
+import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=34";
 import { controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
 const PLAYFIELD_FACE = new Set(["circle", "square", "cross"]);
+const QUAD_IDS = ["tl", "tr", "bl", "br"];
+
+/** Beds, diffuse tails, or a landing still in the graph. An empty grid is none of these. */
+function fieldAudible(shadow) {
+  for (const id of QUAD_IDS) {
+    if ((shadow.gains?.[id] || 0) > 0.001) return true;
+    if ((shadow.diffuses?.[id] || 0) > 0.001) return true;
+    if ((shadow.wets?.[id] || 0) > 0.001) return true;
+    if ((shadow.feedbacks?.[id] || 0) > 0.001) return true;
+  }
+  return false;
+}
 
 /** @type {null | {
  *   getActiveTab: () => string,
@@ -116,14 +128,14 @@ export function tick(frame) {
   if (!(audioEngine.running && fallingAudioEnabled)) return;
   const snap = readGridSnapshot();
   const shadow = fieldFrame(snap, frame?.dt || 0);
-  audioEngine.sync({ x: 0.5, y: 0.5 }, shadow.controller);
+  audioEngine.sync({ x: 0.5, y: 0.5 }, shadow.controller, { stems: false });
   audioEngine.setStemGains(shadow.gains, shadow.pans, shadow.cutoffs);
-  audioEngine.setStemPitch(shadow.rates);
+  audioEngine.setStemPitch(shadow.notes);
   audioEngine.setStemReverb(shadow.reverbs, shadow.decays, shadow.longTails);
   audioEngine.setDiffuseGreyhole(shadow.diffuses, shadow.feedbacks, shadow.wets);
   audioEngine.setPileBody(shadow.halls, shadow.weights);
   if (shadow.splash) audioEngine.playSplash(shadow.splash);
-  audioEngine.setOutputLevel(1);
+  audioEngine.setOutputLevel(fieldAudible(shadow) || audioEngine.hasLiveStrikes() ? 1 : 0);
   audioEngine.setCameraPresence(snap.view?.near, snap.view?.far);
   const label = deps.browserStatusLabel();
   if (deps.statusDiffers(label)) deps.setStatus("audio", label);

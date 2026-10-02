@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=51";
+import { fallingInput } from "./falling-input.js?v=52";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -3819,6 +3819,11 @@ function clockProgress(i) {
 
 /** Corner of a quadrant stays at the sample's pitch. Its center is an octave up. */
 const CENTER_PITCH = 2;
+/** Separate piles in one quadrant that each keep their own note. */
+const PILE_NOTE_CAP = 8;
+/** Previous pile centers, so a note keeps its voice while that mass moves. */
+const pileMemory = { tl: [], tr: [], bl: [], br: [] };
+let pileSerial = 1;
 
 /** Playback rate from distance to the center of the point's quadrant. */
 function pitchForWorld(wx, wz) {
@@ -3866,7 +3871,7 @@ function planeViewportPan() {
  * `rise` is the drawn altitude of grains that are climbing (diffuse blow), in world units.
  * That climb is included in `peak` and `height`, so the height parameter goes up as they lift.
  */
-function quadAudio(cells, peak, rise, stack, pitchSum, quadCells) {
+function quadAudio(cells, peak, rise, stack, rate, quadCells) {
   const top = Math.max(peak, rise);
   return {
     coverage: cells / quadCells,
@@ -3875,8 +3880,99 @@ function quadAudio(cells, peak, rise, stack, pitchSum, quadCells) {
     cells,
     peak: top,
     rise,
-    rate: cells > 0 ? pitchSum / cells : 1,
+    rate: rate > 0 ? rate : 1,
   };
+}
+
+/**
+ * Face-adjacent columns in one quadrant are one pile.
+ * A gap splits them. The quadrant edge splits them too, because each side has its own sample.
+ * @param {{ key: number, x: number, z: number, wx: number, wz: number }[]} entries
+ */
+function pilesInQuadrant(entries) {
+  const byKey = new Map();
+  for (let i = 0; i < entries.length; i += 1) byKey.set(entries[i].key, entries[i]);
+  const seen = new Set();
+  const piles = [];
+  for (let i = 0; i < entries.length; i += 1) {
+    const start = entries[i];
+    if (seen.has(start.key)) continue;
+    const stack = [start];
+    seen.add(start.key);
+    let sx = 0;
+    let sz = 0;
+    let n = 0;
+    while (stack.length) {
+      const cur = stack.pop();
+      sx += cur.wx;
+      sz += cur.wz;
+      n += 1;
+      const next = [];
+      if (cur.x > 0) next.push(cur.key - 1);
+      if (cur.x + 1 < GRID_MAX) next.push(cur.key + 1);
+      if (cur.z > 0) next.push(cur.key - GRID_MAX);
+      if (cur.z + 1 < GRID_MAX) next.push(cur.key + GRID_MAX);
+      for (let k = 0; k < next.length; k += 1) {
+        const key = next[k];
+        if (seen.has(key) || !byKey.has(key)) continue;
+        seen.add(key);
+        stack.push(byKey.get(key));
+      }
+    }
+    const cx = sx / n;
+    const cz = sz / n;
+    piles.push({ cx, cz, cells: n, rate: pitchForWorld(cx, cz) });
+  }
+  piles.sort((a, b) => b.cells - a.cells || a.rate - b.rate);
+  if (piles.length > PILE_NOTE_CAP) piles.length = PILE_NOTE_CAP;
+  return piles;
+}
+
+/**
+ * Keep a pile's note id while its center stays the nearest match.
+ * A split leaves the nearer piece on the old note and starts a new one.
+ * A join keeps one note and drops the other.
+ * @param {string} corner
+ * @param {{ cx: number, cz: number, cells: number, rate: number }[]} piles
+ */
+function trackPiles(corner, piles) {
+  const prev = pileMemory[corner];
+  const pairs = [];
+  for (let i = 0; i < piles.length; i += 1) {
+    for (let j = 0; j < prev.length; j += 1) {
+      pairs.push({
+        i,
+        j,
+        d: Math.hypot(piles[i].cx - prev[j].cx, piles[i].cz - prev[j].cz),
+      });
+    }
+  }
+  pairs.sort((a, b) => a.d - b.d);
+  const takenNew = new Set();
+  const takenOld = new Set();
+  const ids = new Array(piles.length);
+  for (let p = 0; p < pairs.length; p += 1) {
+    const pair = pairs[p];
+    if (takenNew.has(pair.i) || takenOld.has(pair.j)) continue;
+    ids[pair.i] = prev[pair.j].id;
+    takenNew.add(pair.i);
+    takenOld.add(pair.j);
+  }
+  let cells = 0;
+  for (let i = 0; i < piles.length; i += 1) cells += piles[i].cells;
+  const tracked = [];
+  for (let i = 0; i < piles.length; i += 1) {
+    const id = ids[i] || pileSerial++;
+    tracked.push({
+      id,
+      cx: piles[i].cx,
+      cz: piles[i].cz,
+      rate: piles[i].rate,
+      share: cells > 0 ? piles[i].cells / cells : 1,
+    });
+  }
+  pileMemory[corner] = tracked.map((pile) => ({ id: pile.id, cx: pile.cx, cz: pile.cz }));
+  return tracked.map((pile) => ({ id: pile.id, rate: pile.rate, share: pile.share }));
 }
 
 /** Describe the grid for sonification. Does not change the simulation. */
@@ -3929,7 +4025,7 @@ function captureAudioSnapshot(dt) {
   /** Tallest resting column, world units. Rising grains are not included. */
   const stackPeak = { tl: 0, tr: 0, bl: 0, br: 0 };
   const panSum = { tl: 0, tr: 0, bl: 0, br: 0 };
-  const pitchSum = { tl: 0, tr: 0, bl: 0, br: 0 };
+  const pileCols = { tl: [], tr: [], bl: [], br: [] };
   const activity = emptyActivity();
 
   if (cells && occupied.size > 0 && posX && posZ && posY) {
@@ -3966,7 +4062,7 @@ function captureAudioSnapshot(dt) {
         const colXw = worldXForCell(colX, ATOM_SIZE);
         const colZw = worldZForCell(colZ, ATOM_SIZE);
         panSum[id] += screenPan(colXw, colZw, yaw);
-        pitchSum[id] += pitchForWorld(colXw, colZw);
+        pileCols[id].push({ key, x: colX, z: colZ, wx: colXw, wz: colZw });
       }
     }
 
@@ -4018,6 +4114,14 @@ function captureAudioSnapshot(dt) {
     spread = Math.min(1, rms / (PLAYFIELD_HALF * Math.SQRT2));
   }
 
+  const piles = {
+    tl: trackPiles("tl", pilesInQuadrant(pileCols.tl)),
+    tr: trackPiles("tr", pilesInQuadrant(pileCols.tr)),
+    bl: trackPiles("bl", pilesInQuadrant(pileCols.bl)),
+    br: trackPiles("br", pilesInQuadrant(pileCols.br)),
+  };
+  const pileRate = (list) => (list.length ? list[0].rate : 1);
+
   audioSnap = {
     field: {
       x: Math.min(1, Math.max(0, fieldX)),
@@ -4036,11 +4140,12 @@ function captureAudioSnapshot(dt) {
     weight: sumW,
     mass: count,
     quads: {
-      tl: quadAudio(fp.tl, peak.tl, risePeak.tl, stackPeak.tl, pitchSum.tl, quadCells),
-      tr: quadAudio(fp.tr, peak.tr, risePeak.tr, stackPeak.tr, pitchSum.tr, quadCells),
-      bl: quadAudio(fp.bl, peak.bl, risePeak.bl, stackPeak.bl, pitchSum.bl, quadCells),
-      br: quadAudio(fp.br, peak.br, risePeak.br, stackPeak.br, pitchSum.br, quadCells),
+      tl: quadAudio(fp.tl, peak.tl, risePeak.tl, stackPeak.tl, pileRate(piles.tl), quadCells),
+      tr: quadAudio(fp.tr, peak.tr, risePeak.tr, stackPeak.tr, pileRate(piles.tr), quadCells),
+      bl: quadAudio(fp.bl, peak.bl, risePeak.bl, stackPeak.bl, pileRate(piles.bl), quadCells),
+      br: quadAudio(fp.br, peak.br, risePeak.br, stackPeak.br, pileRate(piles.br), quadCells),
     },
+    piles,
     activity,
     pans: {
       tl: fp.tl > 0 ? Math.min(1, Math.max(-1, panSum.tl / fp.tl + viewPan)) : 0,
@@ -4079,6 +4184,7 @@ const GRID_SNAP_IDLE = {
     bl: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, rate: 1 },
     br: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, rate: 1 },
   },
+  piles: { tl: [], tr: [], bl: [], br: [] },
   activity: {
     tl: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
     tr: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },

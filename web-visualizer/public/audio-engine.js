@@ -45,6 +45,30 @@ function clamp01(n) {
   return Math.min(1, Math.max(0, n));
 }
 
+/**
+ * Last value written through writeParam.
+ * AudioParam.value does not update until the audio thread catches up,
+ * so reading it every frame would keep scheduling the same event.
+ * @type {WeakMap<AudioParam, number>}
+ */
+const paramWritten = new WeakMap();
+
+/**
+ * Assign an AudioParam only when the value moved.
+ * Writing the same `.value` every frame inserts a new event at `currentTime`,
+ * and on a quiet graph those events come through as crackles.
+ * @param {AudioParam | null | undefined} param
+ * @param {number} value
+ * @param {number} [eps]
+ */
+function writeParam(param, value, eps = 1e-4) {
+  if (!param || !Number.isFinite(value)) return;
+  const prev = paramWritten.get(param);
+  if (typeof prev === "number" && Math.abs(prev - value) <= eps) return;
+  paramWritten.set(param, value);
+  param.value = value;
+}
+
 /** Equal-power dry/wet. `mix` 0 is fully dry. */
 function equalPowerFade(mix) {
   const m = clamp01(mix);
@@ -263,7 +287,12 @@ export class EchoScapeAudioEngine {
     this.activeFx = "cross";
     /** True while the master trim is at its open level. Falling Blocks closes it on an empty grid. */
     this._outputAudible = true;
+    /** Last requested master trim, as a fraction of the open level. */
+    this._outputAmount = 1;
     this._outputOpen = 0.28;
+    /** Last camera presence applied to the post-master stage. */
+    this._camClose = null;
+    this._camAway = null;
     this._master = null;
     /** Post-master camera stage: far = quieter/darker, close = louder/saturated. */
     this._viewLp = null;
@@ -500,7 +529,7 @@ export class EchoScapeAudioEngine {
     this._watchContext(this.ctx);
     const poke = () => {
       for (const corner of CORNERS) {
-        if (this.stems[corner]?.bedVoice) continue;
+        if (this.stems[corner]?.bedVoice || this.stems[corner]?.notes?.length) continue;
         const wired = this.stems[corner]?.el;
         if (wired) {
           this._playEl(wired, true);
@@ -547,7 +576,7 @@ export class EchoScapeAudioEngine {
   /** Restart bed elements that stopped while the context kept running. */
   _pokePausedBeds() {
     for (const corner of CORNERS) {
-      if (this.stems[corner]?.bedVoice) continue;
+      if (this.stems[corner]?.bedVoice || this.stems[corner]?.notes?.length) continue;
       const wired = this.stems[corner]?.el;
       if (wired) {
         if (wired.paused) this._playEl(wired, true);
@@ -571,7 +600,7 @@ export class EchoScapeAudioEngine {
     let strikeTotal = 0;
     for (const corner of CORNERS) {
       const el = this.stems[corner]?.el || this._pendingEls[corner] || null;
-      const bed = this.stems[corner]?.bedVoice
+      const bed = this.stems[corner]?.bedVoice || this.stems[corner]?.notes?.length
         ? "playing"
         : !el
           ? "missing"
@@ -691,7 +720,7 @@ export class EchoScapeAudioEngine {
   async _playAll() {
     const plays = CORNERS.map(async (corner) => {
       const stem = this.stems[corner];
-      if (!stem?.el || stem.bedVoice) return;
+      if (!stem?.el || stem.bedVoice || stem.notes?.length) return;
       stem.el.muted = false;
       stem.el.volume = 1;
       if (stem.el.paused) {
@@ -716,6 +745,7 @@ export class EchoScapeAudioEngine {
       const stem = this.stems[corner];
       if (!stem) continue;
       this._stopBufferBed(stem);
+      this._stopPileNotes(stem);
       this._releaseStrikes(stem);
       try {
         stem.el.pause();
@@ -1478,6 +1508,7 @@ export class EchoScapeAudioEngine {
     // while the replacement buffers.
     if (prev) {
       this._stopBufferBed(prev);
+      this._stopPileNotes(prev);
       try {
         prev.gain.gain.value = 0;
       } catch {
@@ -1740,8 +1771,26 @@ export class EchoScapeAudioEngine {
   setOutputLevel(amount01) {
     if (!this._master || !this.ctx) return;
     const amount = Math.min(1, Math.max(0, Number(amount01) || 0));
+    if (this._outputAmount === amount) return;
+    this._outputAmount = amount;
     this._outputAudible = amount > 0.0001;
-    this._master.gain.value = this._outputOpen * amount;
+    const target = this._outputOpen * amount;
+    const t = this.ctx.currentTime;
+    this._master.gain.cancelScheduledValues(t);
+    // Callers close this only once beds, tails, and splashes are already quiet.
+    this._master.gain.setValueAtTime(target, t);
+  }
+
+  /** True while a landing splash is still ringing. */
+  hasLiveStrikes() {
+    for (const corner of CORNERS) {
+      const strikes = this.stems[corner]?.strikes;
+      if (!strikes) continue;
+      for (let i = 0; i < strikes.length; i += 1) {
+        if (!strikes[i].released) return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -1753,8 +1802,11 @@ export class EchoScapeAudioEngine {
    */
   setCameraPresence(near, far) {
     if (!this.ctx || !this._viewLevel) return;
-    const close = clamp01(near);
-    const away = clamp01(far);
+    const close = Math.round(clamp01(near) * 10000) / 10000;
+    const away = Math.round(clamp01(far) * 10000) / 10000;
+    if (this._camClose === close && this._camAway === away) return;
+    this._camClose = close;
+    this._camAway = away;
     const t = this.ctx.currentTime;
     const tau = 0.045;
 
@@ -1875,18 +1927,18 @@ export class EchoScapeAudioEngine {
     if (!this.running) return;
     for (const corner of CORNERS) {
       const send = this._hallSends?.[corner];
-      if (send) send.gain.value = 0;
+      if (send) writeParam(send.gain, 0, 1e-5);
       const stem = this.stems[corner];
       if (!stem?.weightLp) continue;
       const amount = clamp01(Number(weights?.[corner]) || 0);
-      stem.weightLp.frequency.value = weightCutoff(amount);
-      if (stem.body) stem.body.gain.value = amount * WEIGHT_SHELF_DB;
-      if (stem.air) stem.air.gain.value = 0;
+      writeParam(stem.weightLp.frequency, weightCutoff(amount), 0.5);
+      if (stem.body) writeParam(stem.body.gain, amount * WEIGHT_SHELF_DB, 1e-3);
+      if (stem.air) writeParam(stem.air.gain, 0, 1e-4);
       const drive = weightDrive(amount);
-      if (stem.satPre) stem.satPre.gain.value = drive.pre;
-      if (stem.satPost) stem.satPost.gain.value = drive.post;
-      if (stem.satDry) stem.satDry.gain.value = drive.dry;
-      if (stem.satWet) stem.satWet.gain.value = drive.wet;
+      if (stem.satPre) writeParam(stem.satPre.gain, drive.pre, 1e-4);
+      if (stem.satPost) writeParam(stem.satPost.gain, drive.post, 1e-4);
+      if (stem.satDry) writeParam(stem.satDry.gain, drive.dry, 1e-4);
+      if (stem.satWet) writeParam(stem.satWet.gain, drive.wet, 1e-4);
     }
   }
 
@@ -1964,13 +2016,16 @@ export class EchoScapeAudioEngine {
       const rec = this._stemReverbs[corner];
       if (!rec?.send) continue;
       const level = Math.min(1, Math.max(0, Number(levels?.[corner]) || 0));
-      rec.send.gain.value = level;
+      writeParam(rec.send.gain, level, 1e-5);
       if (rec.ret && wets) {
         const wet = Math.min(1, Math.max(0, Number(wets[corner]) || 0));
-        rec.ret.gain.value = 0.45 * wet;
+        writeParam(rec.ret.gain, 0.45 * wet, 1e-5);
       }
       if (!rec.node?.setParamValue) continue;
-      const feedback = Math.min(1, Math.max(0, Number(feedbacks?.[corner]) || 0));
+      const rawFeedback = Math.min(1, Math.max(0, Number(feedbacks?.[corner]) || 0));
+      const feedback = rawFeedback < 0.01 ? 0 : Math.round(rawFeedback * 100) / 100;
+      if (rec.feedback === feedback) continue;
+      rec.feedback = feedback;
       try {
         rec.node.setParamValue("/greyhole/feedback", feedback);
       } catch {
@@ -2084,14 +2139,14 @@ export class EchoScapeAudioEngine {
       const stem = this.stems[corner];
       if (!stem?.gain) continue;
       const level = Math.min(1, Math.max(0, Number(gains?.[corner]) || 0));
-      stem.gain.gain.value = level;
+      writeParam(stem.gain.gain, level, 1e-5);
       if (stem.pan) {
         const placed = Math.min(1, Math.max(-1, Number(pans?.[corner]) || 0));
-        stem.pan.pan.value = placed;
+        writeParam(stem.pan.pan, placed, 1e-4);
       }
       if (stem.tone) {
         const hz = Number(cutoffs?.[corner]);
-        stem.tone.frequency.value = Number.isFinite(hz) && hz > 0 ? hz : 20000;
+        writeParam(stem.tone.frequency, Number.isFinite(hz) && hz > 0 ? hz : 20000, 0.5);
       }
     }
   }
@@ -2171,6 +2226,7 @@ export class EchoScapeAudioEngine {
       if (stem.bedVoice !== voice) return;
       stem.bedVoice = null;
       if (!this.running || this.ctx?.state === "closed") return;
+      if (stem.notes?.length) return;
       this._adoptBufferBed(corner, buffer, 0);
     };
   }
@@ -2202,6 +2258,8 @@ export class EchoScapeAudioEngine {
    * @param {{ el?: HTMLAudioElement, bedVoice?: AudioBufferSourceNode | null, bedBuffer?: AudioBuffer | null, bedStartedAt?: number, bedOffset?: number }} stem
    */
   _bedPosition(stem) {
+    const note = stem?.notes?.find((slot) => slot.voice);
+    if (note) return this._notePosition(note);
     const buffer = stem?.bedBuffer;
     const voice = stem?.bedVoice;
     if (buffer && voice && buffer.duration > 0 && this.ctx) {
@@ -2213,18 +2271,189 @@ export class EchoScapeAudioEngine {
     return Number(stem?.el?.currentTime) || 0;
   }
 
+  _clampRate(raw) {
+    const next = Number(raw);
+    if (!Number.isFinite(next) || next <= 0) return 1;
+    return Math.min(4, Math.max(0.25, next));
+  }
+
+  /** @param {{ voice?: AudioBufferSourceNode | null, startedAt?: number, offset?: number }} slot */
+  _notePosition(slot) {
+    const buffer = slot?.voice?.buffer;
+    if (!buffer || !(buffer.duration > 0) || !this.ctx) return 0;
+    const rate = slot.voice.playbackRate.value || 1;
+    const elapsed = (this.ctx.currentTime - (slot.startedAt || 0)) * rate;
+    const pos = (slot.offset || 0) + elapsed;
+    return ((pos % buffer.duration) + buffer.duration) % buffer.duration;
+  }
+
+  /** @param {{ voice?: AudioBufferSourceNode | null, gain?: GainNode | null }} slot */
+  _releasePileNote(slot) {
+    if (!slot) return;
+    const voice = slot.voice;
+    slot.voice = null;
+    if (!voice) return;
+    try {
+      voice.onended = null;
+    } catch {
+      /* ignore */
+    }
+    const now = this.ctx?.currentTime || 0;
+    try {
+      if (slot.gain) {
+        const gain = slot.gain.gain;
+        const current = Math.max(0.0001, gain.value || 0.0001);
+        gain.cancelScheduledValues(now);
+        gain.setValueAtTime(current, now);
+        gain.linearRampToValueAtTime(0.0001, now + 0.04);
+      }
+      voice.stop(now + 0.05);
+      const gainNode = slot.gain;
+      window.setTimeout(() => {
+        try {
+          voice.disconnect();
+        } catch {
+          /* already gone */
+        }
+        try {
+          gainNode?.disconnect();
+        } catch {
+          /* already gone */
+        }
+      }, 80);
+    } catch {
+      /* already stopped */
+    }
+  }
+
+  /** @param {{ notes?: object[] }} stem */
+  _stopPileNotes(stem) {
+    if (!stem?.notes?.length) return;
+    while (stem.notes.length) this._releasePileNote(stem.notes.pop());
+  }
+
   /**
-   * Pitch each quadrant's looping bed. 1 is the file's pitch.
-   * Pass null to return every bed to its original pitch.
-   * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} rates
+   * One looping copy of the quadrant sample per connected pile.
+   * @param {string} corner
+   * @param {{ id: number, rate: number, share: number }[]} notes
+   */
+  _syncPileNotes(corner, notes) {
+    const stem = this.stems[corner];
+    if (!stem) return;
+    if (!stem.notes) stem.notes = [];
+    const wanted = notes.filter((note) => note && note.id != null);
+    if (!wanted.length) {
+      this._stopPileNotes(stem);
+      return;
+    }
+    const buffer = stem.bedBuffer || this._strikeBuffers?.[corner] || null;
+    if (!buffer || !this.ctx) {
+      this._stopPileNotes(stem);
+      const el = stem.el;
+      if (!el) return;
+      let best = wanted[0];
+      for (let i = 1; i < wanted.length; i += 1) {
+        if ((Number(wanted[i].share) || 0) > (Number(best.share) || 0)) best = wanted[i];
+      }
+      const next = this._clampRate(best.rate);
+      if (el.preservesPitch !== false) el.preservesPitch = false;
+      if (Math.abs(el.playbackRate - next) > 0.002) el.playbackRate = next;
+      return;
+    }
+    this._stopBufferBed(stem);
+    if (stem.el && !stem.el.paused) {
+      try {
+        stem.el.pause();
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      stem.source?.disconnect();
+    } catch {
+      /* already disconnected */
+    }
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const keep = new Set();
+    for (let i = 0; i < wanted.length; i += 1) {
+      const note = wanted[i];
+      const id = note.id;
+      keep.add(id);
+      const rate = this._clampRate(note.rate);
+      const share = Math.sqrt(Math.min(1, Math.max(0, Number(note.share) || 0)));
+      const level = share > 0 ? share : 1 / Math.sqrt(wanted.length);
+      let index = -1;
+      for (let n = 0; n < stem.notes.length; n += 1) {
+        if (stem.notes[n].id === id) {
+          index = n;
+          break;
+        }
+      }
+      const existing = index >= 0 ? stem.notes[index] : null;
+      if (!existing?.voice) {
+        if (existing) this._releasePileNote(existing);
+        const gain = ctx.createGain();
+        gain.gain.value = 0.0001;
+        const voice = ctx.createBufferSource();
+        voice.buffer = buffer;
+        voice.loop = true;
+        voice.playbackRate.value = rate;
+        const dur = buffer.duration;
+        let pos = 0;
+        for (let n = 0; n < stem.notes.length; n += 1) {
+          if (stem.notes[n].voice) {
+            pos = this._notePosition(stem.notes[n]);
+            break;
+          }
+        }
+        const offset = dur > 0 ? ((pos % dur) + dur) % dur : 0;
+        voice.connect(gain);
+        gain.connect(stem.gain);
+        voice.start(now, offset);
+        gain.gain.linearRampToValueAtTime(level, now + 0.04);
+        const slot = { id, voice, gain, startedAt: now, offset, rate };
+        voice.onended = () => {
+          if (slot.voice !== voice) return;
+          slot.voice = null;
+        };
+        if (index >= 0) stem.notes[index] = slot;
+        else stem.notes.push(slot);
+        continue;
+      }
+      if (Math.abs(existing.voice.playbackRate.value - rate) > 0.002) existing.voice.playbackRate.value = rate;
+      existing.rate = rate;
+      const gain = existing.gain.gain;
+      const current = Math.max(0.0001, gain.value || 0.0001);
+      gain.cancelScheduledValues(now);
+      gain.setValueAtTime(current, now);
+      gain.setTargetAtTime(level, now, 0.05);
+    }
+    for (let i = stem.notes.length - 1; i >= 0; i -= 1) {
+      if (keep.has(stem.notes[i].id)) continue;
+      this._releasePileNote(stem.notes[i]);
+      stem.notes.splice(i, 1);
+    }
+  }
+
+  /**
+   * Pitch each quadrant's bed.
+   * An array of `{ id, rate, share }` is one note per connected pile.
+   * A number keeps the older single rate. Null returns every bed to its original pitch.
+   * @param {{ tl?: number | { id: number, rate: number, share: number }[], tr?: number | { id: number, rate: number, share: number }[], bl?: number | { id: number, rate: number, share: number }[], br?: number | { id: number, rate: number, share: number }[] } | null} rates
    */
   setStemPitch(rates) {
     if (!this.running) return;
     for (const corner of CORNERS) {
       const stem = this.stems[corner];
       if (!stem) continue;
-      const raw = rates ? Number(rates[corner]) : 1;
-      const next = Number.isFinite(raw) && raw > 0 ? Math.min(4, Math.max(0.25, raw)) : 1;
+      const raw = rates ? rates[corner] : null;
+      if (Array.isArray(raw)) {
+        this._syncPileNotes(corner, raw);
+        continue;
+      }
+      this._stopPileNotes(stem);
+      const next = this._clampRate(raw);
       const voice = stem.bedVoice;
       if (voice) {
         if (Math.abs(voice.playbackRate.value - next) > 0.002) voice.playbackRate.value = next;
@@ -2440,20 +2669,27 @@ export class EchoScapeAudioEngine {
    * Apply mixer-core state to the audio graph.
    * @param {{x:number,y:number}} mixState
    * @param {object} controller
+   * @param {{ stems?: boolean }} [opts]
+   * `stems: false` leaves each bed's gain, pan, and low-pass alone.
+   * Falling Blocks sets those from the grid immediately after this call.
+   * Writing the center mix first opens every bed for one render quantum.
+   * On an empty grid that quantum is a crackle.
    */
-  sync(mixState, controller) {
+  sync(mixState, controller, opts) {
     if (!this.running || !this.ctx) return;
     const t = this.ctx.currentTime;
-    const weights = equalPowerMix(mixState.x, mixState.y);
 
-    for (const corner of CORNERS) {
-      const stem = this.stems[corner];
-      if (!stem) continue;
-      // Snap gains — setTargetAtTime with RAMP was fine, but immediate
-      // values make first audible frame reliable after start.
-      stem.gain.gain.value = weights[corner];
-      if (stem.pan) stem.pan.pan.value = 0;
-      if (stem.tone) stem.tone.frequency.value = 20000;
+    if (opts?.stems !== false) {
+      const weights = equalPowerMix(mixState.x, mixState.y);
+      for (const corner of CORNERS) {
+        const stem = this.stems[corner];
+        if (!stem) continue;
+        // Snap gains — setTargetAtTime with RAMP was fine, but immediate
+        // values make first audible frame reliable after start.
+        writeParam(stem.gain.gain, weights[corner], 1e-5);
+        if (stem.pan) writeParam(stem.pan.pan, 0, 1e-4);
+        if (stem.tone) writeParam(stem.tone.frequency, 20000, 0.5);
+      }
     }
 
     if (controller.activeFx !== this.activeFx) {
@@ -2473,15 +2709,15 @@ export class EchoScapeAudioEngine {
     }
 
     const pan = clamp01((Number(controller.rightX) || 0) * 0.5 + 0.5) * 2 - 1;
-    this._panner.pan.value = pan * 0.9;
+    writeParam(this._panner.pan, pan * 0.9, 1e-4);
 
     const lt = clamp01(Math.abs(Number(controller.lt) || 0) > 1.5 ? controller.lt / 255 : controller.lt);
     const rt = clamp01(Math.abs(Number(controller.rt) || 0) > 1.5 ? controller.rt / 255 : controller.rt);
     // Released = wide open. LT sweeps the lowpass up from ~200 Hz; RT sweeps the highpass down from ~8 kHz.
-    this._tone.frequency.value = lt <= 0.001 ? 20000 : 200 * Math.pow(18000 / 200, lt);
-    this._tone.Q.value = 0.7;
+    writeParam(this._tone.frequency, lt <= 0.001 ? 20000 : 200 * Math.pow(18000 / 200, lt), 0.5);
+    writeParam(this._tone.Q, 0.7, 1e-4);
     if (this._hp) {
-      this._hp.frequency.value = rt <= 0.001 ? 20 : 8000 * Math.pow(35 / 8000, rt);
+      writeParam(this._hp.frequency, rt <= 0.001 ? 20 : 8000 * Math.pow(35 / 8000, rt), 0.5);
     }
 
     this._applyShoulders(controller.l1, controller.r1, t);

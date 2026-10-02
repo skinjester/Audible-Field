@@ -7,8 +7,10 @@ import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=15";
 import { TouchInput } from "./touch-input.js?v=3";
 
-/** How long Emit must be held before atoms pour. Matches --emit-hold. */
+/** How long Emit must be held still before atoms pour. Matches --emit-hold. */
 const EMIT_HOLD_MS = 280;
+/** Movement that counts as still dragging, so the hold waits until the finger rests. */
+const EMIT_REST_PX = 6;
 
 /** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
 
@@ -58,7 +60,7 @@ export class FallingInput {
     /** @type {HTMLButtonElement | null} */
     this._emitButton = null;
     this._emitHeld = false;
-    /** Long-press on Emit has committed. A later drag keeps pouring and sizes the plane. */
+    /** Long-press has committed. Further drags keep pouring and size the plane. */
     this._touchEmit = false;
     this._emitHeldDown = false;
     this._emitHoldTimer = 0;
@@ -69,6 +71,7 @@ export class FallingInput {
     this._emitAnalog = 0.5;
     this._emitOriginY = 0;
     this._emitDownY = 0;
+    this._emitSettleY = 0;
     this._shiftHeld = false;
     this._altHeld = false;
     this._mouseFull = false;
@@ -704,11 +707,14 @@ export class FallingInput {
     this._clearEmitHold();
     this._emitFillGen += 1;
     this._emitPointerId = -1;
+    this._emitSettleY = 0;
     btn.classList.remove("is-pressed", "is-held", "is-charging", "is-filling");
     btn.setAttribute("aria-pressed", "false");
     this._emitAnalog = 0.5;
     const face = btn.querySelector(".falling-emit-face");
     if (face) face.style.transform = "";
+    const fill = btn.querySelector(".falling-emit-fill");
+    if (fill) fill.style.transition = "";
     btn.removeAttribute("data-drag");
     btn.parentElement?.querySelector(".falling-emit-clump")?.classList.remove("is-lit");
     btn.parentElement?.querySelector(".falling-emit-single")?.classList.remove("is-lit");
@@ -721,7 +727,7 @@ export class FallingInput {
     this._emitHoldTimer = 0;
   }
 
-  /** Circle grows for the hold, then atoms pour, even if the finger is also dragging. */
+  /** Circle grows while the finger rests. Motion before the pour restarts that wait. */
   _armEmitHold() {
     this._clearEmitHold();
     this._emitHoldTimer = window.setTimeout(() => {
@@ -730,6 +736,19 @@ export class FallingInput {
       this._touchEmit = true;
       this._emitButton?.setAttribute("aria-pressed", "true");
     }, EMIT_HOLD_MS);
+  }
+
+  /** Snap the fill shut and grow it again for a fresh hold. */
+  _kickEmitCharge() {
+    const btn = this._emitButton;
+    if (!btn || !this._emitHeldDown || this._touchEmit) return;
+    const fill = btn.querySelector(".falling-emit-fill");
+    if (fill) fill.style.transition = "none";
+    btn.classList.remove("is-charging");
+    if (fill) void fill.offsetWidth;
+    if (fill) fill.style.transition = "";
+    this._showEmitFill();
+    this._armEmitHold();
   }
 
   _showEmitFill() {
@@ -755,6 +774,9 @@ export class FallingInput {
     this._emitHeldDown = false;
     this._emitDragging = false;
     this._emitPointerId = -1;
+    this._emitSettleY = 0;
+    const fill = this._emitButton?.querySelector(".falling-emit-fill");
+    if (fill) fill.style.transition = "";
     this._emitButton?.classList.remove("is-pressed", "is-held");
     this._emitButton?.setAttribute("aria-pressed", "false");
     this._hideEmitFill();
@@ -772,11 +794,11 @@ export class FallingInput {
     this._emitDragging = false;
     this._emitPointerId = event.pointerId;
     this._emitDownY = event.clientY;
+    this._emitSettleY = event.clientY;
     const span = 72;
     this._emitOriginY = event.clientY - (0.5 - this._emitAnalog) * span;
     this._emitButton?.classList.add("is-pressed", "is-held");
-    this._showEmitFill();
-    this._armEmitHold();
+    this._kickEmitCharge();
     this._paintEmitDrag();
     event.preventDefault();
     event.stopPropagation();
@@ -798,6 +820,10 @@ export class FallingInput {
     const span = 72;
     this._emitAnalog = clamp(0.5 - (event.clientY - this._emitOriginY) / span, 0, 1);
     this._paintEmitDrag();
+    if (this._touchEmit) return;
+    if (Math.abs(event.clientY - this._emitSettleY) < EMIT_REST_PX) return;
+    this._emitSettleY = event.clientY;
+    this._kickEmitCharge();
   }
 
   /** Keep the button at the size it was dragged to. */

@@ -6,8 +6,9 @@
  * Full weight is 10 atoms (2.5 world units). Taller than that stays pinned. Rising grains do not add weight.
  * Rising Diffuse grains open that bed's Greyhole send, fully by 2.5 world units, and the feedback jumps to the long diffuse tail as soon as they lift. Delay time and size stay fixed. The send is taken before the weight filters. An empty quadrant drops that tail quickly.
  * Greyhole stays off the resting stack: moving its delay with the stack was glitching playback.
- * Closer to the center of its quadrant raises that sample's pitch, up to an octave.
- * Farther from that center lowers it, down to the sample's own pitch at the corners.
+ * Each connected pile plays that quadrant's sample as its own note.
+ * The note is the pitch at the pile's center: an octave up at the quadrant center, the sample's own pitch at the corners.
+ * A gap that splits a mass adds a note. Piles that touch again become one note.
  * Rising Diffuse grains do not change pitch.
  * A landing repeats that quadrant's sample once, in phase with the bed.
  * The low-pass starts at the bed's cutoff and sweeps shut across the ground-ring splash,
@@ -86,6 +87,8 @@ const longTails = { tl: false, tr: false, bl: false, br: false };
 /** Holds the long tail after rising grains have cleared. */
 const riseLatch = { tl: false, tr: false, bl: false, br: false };
 const pitches = { tl: 1, tr: 1, bl: 1, br: 1 };
+/** Smoothed playback rate for each pile note, keyed by pile id. */
+const noteRates = { tl: new Map(), tr: new Map(), bl: new Map(), br: new Map() };
 /** 0..1 short hall from the resting stack. The hall stays closed. */
 const halls = { tl: 0, tr: 0, bl: 0, br: 0 };
 /** 0..1 weight of the resting pile. Rising grains do not move this. */
@@ -130,6 +133,7 @@ export function resetFieldSonify() {
     decays[id] = 0;
     riseLatch[id] = false;
     pitches[id] = 1;
+    noteRates[id].clear();
     halls[id] = 0;
     weights[id] = 0;
     diffuses[id] = 0;
@@ -146,6 +150,7 @@ export function resetFieldSonify() {
 export function fieldFrame(snap, dt) {
   const quads = snap?.quads || {};
   const cutoffs = { tl: LPF_FEW, tr: LPF_FEW, bl: LPF_FEW, br: LPF_FEW };
+  const notes = { tl: [], tr: [], bl: [], br: [] };
   for (const id of CORNERS) {
     const quad = quads[id] || {};
     const coverage = clamp01(quad.coverage);
@@ -196,9 +201,32 @@ export function fieldFrame(snap, dt) {
     diffuses[id] = follow(diffuses[id], riseOpen, dt, empty ? EMPTY_TAIL : rising ? 0.12 : 0.25);
     wets[id] = follow(wets[id], empty ? 0 : 1, dt, empty ? EMPTY_TAIL : 0.08);
     cutoffs[id] = cutoffHz(gains[id]);
-    const rateTarget = Number(quad.rate);
-    const positionRate = Number.isFinite(rateTarget) && rateTarget > 0 ? rateTarget : 1;
-    pitches[id] = follow(pitches[id], positionRate, dt, 0.2);
+    const list = Array.isArray(snap?.piles?.[id]) ? snap.piles[id] : [];
+    const live = new Set();
+    let loudest = 0;
+    let loudRate = 1;
+    for (let i = 0; i < list.length; i += 1) {
+      const pile = list[i];
+      const pileId = pile?.id;
+      if (pileId == null) continue;
+      live.add(pileId);
+      const target = Number(pile.rate);
+      const positionRate = Number.isFinite(target) && target > 0 ? target : 1;
+      const prev = noteRates[id].get(pileId);
+      const next = prev == null ? positionRate : follow(prev, positionRate, dt, 0.2);
+      noteRates[id].set(pileId, next);
+      const share = Number(pile.share);
+      const level = Number.isFinite(share) && share > 0 ? share : 0;
+      notes[id].push({ id: pileId, rate: next, share: level });
+      if (level >= loudest) {
+        loudest = level;
+        loudRate = next;
+      }
+    }
+    for (const pileId of noteRates[id].keys()) {
+      if (!live.has(pileId)) noteRates[id].delete(pileId);
+    }
+    pitches[id] = list.length ? loudRate : follow(pitches[id], 1, dt, 0.2);
   }
 
   let splash = null;
@@ -222,6 +250,7 @@ export function fieldFrame(snap, dt) {
     gains,
     cutoffs,
     rates: pitches,
+    notes,
     reverbs: HEIGHT_REVERB ? heights : { tl: 0, tr: 0, bl: 0, br: 0 },
     decays: HEIGHT_REVERB ? decays : { tl: 0, tr: 0, bl: 0, br: 0 },
     longTails: HEIGHT_REVERB ? longTails : { tl: false, tr: false, bl: false, br: false },

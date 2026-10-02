@@ -33,7 +33,7 @@
  *   two-finger drag  → slide the playfield
  *   two-finger twist → yaw about the ground midpoint of the two fingers
  *   pinch            → zoom from the screen span
- *   Emit button      → hold to emit; drag up or down to size the emitter, including while it pours
+ *   Emit button      → hold still to emit; drag sizes the plane, and a resting hold while dragging starts the pour. Once pouring, a drag keeps emitting.
  */
 
 /** @typedef {"pressure" | "max" | "single"} BrushMode */
