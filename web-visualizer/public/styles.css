@@ -1296,7 +1296,7 @@ dd {
     right: max(var(--falling-edge), env(safe-area-inset-right));
   }
 
-  [data-panel="falling-blocks"] .falling-settings-panel {
+  [data-panel="falling-blocks"] .falling-side {
     right: max(var(--falling-edge), env(safe-area-inset-right));
   }
 
@@ -1523,12 +1523,17 @@ dd {
 }
 
 .falling-icon-btn {
+  appearance: none;
   display: grid;
   place-items: center;
-  flex: 0 0 auto;
+  flex: 0 0 48px;
   box-sizing: border-box;
   width: 48px;
   height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  max-width: 48px;
+  max-height: 48px;
   padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 50%;
@@ -1631,14 +1636,13 @@ dd {
 }
 
 .falling-settings-panel {
-  position: absolute;
-  top: 68px;
-  right: 12px;
-  z-index: 4;
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 10px;
+  margin-top: 12px;
   pointer-events: none;
 }
 
@@ -1659,7 +1663,7 @@ dd {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
-  width: min(320px, 72vw);
+  width: min(420px, 88vw);
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -1680,12 +1684,13 @@ dd {
 
 .falling-rise-options {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
 .falling-rise-option {
   position: relative;
-  flex: 1;
+  flex: 1 1 30%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1789,32 +1794,6 @@ dd {
   font-weight: 600;
 }
 
-.falling-about-close {
-  appearance: none;
-  display: grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  padding: 0;
-  flex: 0 0 auto;
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.8);
-  color: rgba(255, 255, 255, 0.82);
-  cursor: pointer;
-}
-
-.falling-about-close svg {
-  display: block;
-  width: 26px;
-  height: 26px;
-}
-
-.falling-about-close:hover {
-  color: #fff;
-  border-color: #fff;
-}
-
 .falling-about-how h3 {
   margin: 0 0 10px;
   font-size: 11px;
@@ -1903,7 +1882,21 @@ body:not(.has-dualsense) .falling-about-triggers {
 .falling-about-nav {
   display: flex;
   flex-direction: column;
+  gap: 14px;
+}
+
+.falling-about-nav .tabs {
+  flex-wrap: wrap;
+}
+
+.falling-about-nav [role="tabpanel"] {
+  display: flex;
+  flex-direction: column;
   gap: 12px;
+}
+
+.falling-about-nav [role="tabpanel"][hidden] {
+  display: none;
 }
 
 .falling-about-nav h4 {
@@ -1943,7 +1936,15 @@ body:not(.has-dualsense) .falling-about-triggers {
 }
 
 .falling-side {
-  display: contents;
+  position: absolute;
+  top: 56px;
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  pointer-events: none;
 }
 
 .falling-material-bar {
@@ -2060,10 +2061,7 @@ body:not(.has-dualsense) .pad-glyph {
 }
 
 .falling-readout {
-  position: absolute;
-  top: 56px;
-  right: 12px;
-  z-index: 2;
+  position: static;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -2207,22 +2205,21 @@ body:not(.has-dualsense) .pad-glyph {
   pointer-events: none;
 }
 
+.falling-settings-panel .falling-palette-row {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
 .falling-palette {
   display: flex;
   gap: 10px;
   pointer-events: none;
 }
 
-/* Narrow stage: global controls stack inside the settings panel. */
+/* Narrow stage: trigger hints stay off the stacked controls. */
 @container falling-stage (max-width: 820px) {
-  .falling-settings-panel .falling-palette-row {
-    gap: 10px;
-    flex-direction: column;
-    flex-wrap: nowrap;
-    align-items: stretch;
-    justify-content: flex-start;
-  }
-
   .falling-settings-panel [data-falling-trigger] {
     display: none;
   }

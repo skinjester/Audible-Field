@@ -200,12 +200,21 @@ const GRAIN_LIFT = 1.25;
 const RISE_LOOP_CAP = 24;
 /** One-shot flakes that may overlap at once. */
 const RISE_FLAKE_CAP = 40;
-/** Heard length of a flake. Longer and duller than a landing grain. */
-const RISE_FLAKE_SEC = 0.26;
+/** Heard length of a flake. A bright speck, still much longer than a landing grain. */
+const RISE_FLAKE_SEC = 0.42;
+/** How often a shedding atom drops another speck. */
+const RISE_SHED_GAP = 0.16;
+/** Heard length of one shed speck. */
+const RISE_SHED_SEC = 0.12;
 /** Loop length of a loose scrap of the bed. */
-const RISE_LOOSE_SEC = 0.36;
+const RISE_LOOSE_SEC = 0.55;
 /** Shorter loop so a drifting mote reads as its own speck. */
 const RISE_DRIFT_SEC = 0.22;
+/** Loop length of the strand pulled a fourth below the bed. */
+const RISE_THREAD_SEC = 0.5;
+/** Loop length of the octave sheen. */
+const RISE_HALO_SEC = 0.24;
+const RISE_MODE_IDS = new Set(["loose", "flake", "drift", "thread", "shed", "halo"]);
 
 /**
  * Dry level of one rising atom.
@@ -218,7 +227,12 @@ const RISE_DRIFT_SEC = 0.22;
 function riseVoiceLevel(scale, count, mode) {
   const body = Math.sqrt(Math.max(0.05, Math.min(1.5, Number(scale) || 0)));
   const share = 1 / Math.pow(Math.max(1, count), 0.28);
-  const base = mode === "flake" ? 0.32 : mode === "drift" ? 0.2 : 0.24;
+  let base = 0.85;
+  if (mode === "drift") base = 0.2;
+  else if (mode === "flake") base = 1.05;
+  else if (mode === "shed") base = 0.78;
+  else if (mode === "thread") base = 0.72;
+  else if (mode === "halo") base = 0.5;
   return base * body * share;
 }
 
@@ -451,11 +465,13 @@ export class EchoScapeAudioEngine {
     /** Landing voice. Phrase restarts the sample in phase with the bed. */
     this.splashMode = "phrase";
     /** Dry voice of a rising atom: a scrap of its quadrant's bed. */
-    this.riseMode = "loose";
+    this.riseMode = "drift";
     /** @type {Map<number, object>} */
     this._riseVoices = new Map();
     /** Cell ids that already played their one-shot flake. */
     this._riseFired = new Set();
+    /** @type {Map<number, number>} */
+    this._riseShedAt = new Map();
     /** @type {object[]} */
     this._riseFlakes = [];
     /** Last impact start per corner and pile, in context time. */
@@ -2699,22 +2715,25 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * Loose, flake, or drift. Switching releases grains that are still sounding.
+   * Which dry treatment a rising atom uses. Switching releases grains that are still sounding.
    * @param {string} mode
    */
   setRiseMode(mode) {
-    const next = mode === "flake" || mode === "drift" ? mode : "loose";
+    const next = RISE_MODE_IDS.has(mode) ? mode : "drift";
     if (this.riseMode === next) return;
     this.riseMode = next;
     this._clearRiseGrains();
   }
 
   /**
-   * One dry scrap of the bed per rising atom.
-   * Loose keeps the scrap playing and fades it with the drawn scale.
-   * Flake plays the scrap once, when the atom lifts.
-   * Drift keeps it playing, thins it as the atom shrinks, and glides the pitch up.
-   * These voices join the splash bus, so they do not enter the quadrant Greyhole.
+   * One dry scrap of the bed per rising atom. These voices join the splash bus,
+   * so they do not enter the quadrant Greyhole.
+   * Drift glides upward and thins with the drawn scale.
+   * Loose keeps a bright scrap at the bed's pitch and fades it with scale.
+   * Flake is one bright speck when the atom lifts.
+   * Thread pulls the scrap a fourth below the bed.
+   * Shed drops a new speck for as long as the atom is rising.
+   * Halo holds an octave above the bed.
    * @param {{ id: number, corner: string, x?: number, z?: number, scale: number, t?: number, pan?: number, rate?: number }[] | null} atoms
    */
   syncRiseGrains(atoms) {
@@ -2723,19 +2742,29 @@ export class EchoScapeAudioEngine {
       this._clearRiseGrains();
       return;
     }
-    const mode = this.riseMode === "flake" || this.riseMode === "drift" ? this.riseMode : "loose";
+    const mode = RISE_MODE_IDS.has(this.riseMode) ? this.riseMode : "drift";
     const list = Array.isArray(atoms) ? atoms : [];
     if (mode === "flake") {
       this._clearRiseLoops();
+      this._riseShedAt?.clear();
       this._syncRiseFlakes(list);
       return;
     }
+    if (mode === "shed") {
+      this._clearRiseLoops();
+      this._riseFired.clear();
+      this._syncRiseShed(list);
+      return;
+    }
     this._riseFired.clear();
+    this._riseShedAt?.clear();
     this._syncRiseLoops(list, mode);
   }
 
   _riseRate(atom, mode) {
     const base = this._clampRate(atom?.rate);
+    if (mode === "thread") return this._clampRate(base * 0.75);
+    if (mode === "halo") return this._clampRate(base * 2);
     if (mode !== "drift") return base;
     const id = Number(atom?.id) || 0;
     const detune = (((id % 13) - 6) / 6) * 0.07;
@@ -2746,13 +2775,24 @@ export class EchoScapeAudioEngine {
   _riseCutoff(mode, scale) {
     const size = Math.min(1, Math.max(0, Number(scale) || 0));
     if (mode === "drift") return 700 + 2800 * size;
-    if (mode === "flake") return 1700;
-    return 2200;
+    if (mode === "thread") return 480 + 900 * size;
+    if (mode === "halo") return 2600;
+    if (mode === "flake") return 3400;
+    if (mode === "shed") return 4200;
+    return 1600;
+  }
+
+  _riseLoopSeconds(mode) {
+    if (mode === "drift") return RISE_DRIFT_SEC;
+    if (mode === "thread") return RISE_THREAD_SEC;
+    if (mode === "halo") return RISE_HALO_SEC;
+    return RISE_LOOSE_SEC;
   }
 
   _clearRiseGrains() {
     this._clearRiseLoops();
     this._riseFired.clear();
+    this._riseShedAt?.clear();
     const flakes = this._riseFlakes || [];
     while (flakes.length) this._disposeRiseVoice(flakes.pop());
   }
@@ -2834,8 +2874,16 @@ export class EchoScapeAudioEngine {
     const body = ctx.createBiquadFilter();
     const air = ctx.createBiquadFilter();
     const filter = ctx.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.Q.value = 0.7;
+    if (mode === "flake" || mode === "shed") {
+      filter.type = "bandpass";
+      filter.Q.value = mode === "shed" ? 0.85 : 0.9;
+    } else if (mode === "loose" || mode === "halo") {
+      filter.type = "highpass";
+      filter.Q.value = 0.7;
+    } else {
+      filter.type = "lowpass";
+      filter.Q.value = 0.7;
+    }
     filter.frequency.value = this._riseCutoff(mode, atom.scale);
     const pan = ctx.createStereoPanner();
     pan.pan.value = Math.min(1, Math.max(-1, Number(atom.pan) || 0));
@@ -2915,6 +2963,13 @@ export class EchoScapeAudioEngine {
         voice.filter.frequency.setValueAtTime(voice.filter.frequency.value, now);
         voice.filter.frequency.setTargetAtTime(hz, now, 0.08);
       }
+    } else if (mode === "thread" && voice.filter) {
+      const hz = this._riseCutoff(mode, atom.scale);
+      if (Math.abs(voice.filter.frequency.value - hz) > 30) {
+        voice.filter.frequency.cancelScheduledValues(now);
+        voice.filter.frequency.setValueAtTime(voice.filter.frequency.value, now);
+        voice.filter.frequency.setTargetAtTime(hz, now, 0.08);
+      }
     }
     const stem = this.stems?.[voice.corner];
     if (stem && voice.body && voice.air) this._copySplashShelves(stem, voice.body, voice.air);
@@ -2943,7 +2998,7 @@ export class EchoScapeAudioEngine {
       let voice = this._riseVoices.get(atom.id);
       if (!voice || voice.mode !== mode || voice.released) {
         if (voice) this._releaseRiseVoice(voice, true);
-        voice = this._makeRiseVoice(atom, mode, mode === "drift" ? RISE_DRIFT_SEC : RISE_LOOSE_SEC, true);
+        voice = this._makeRiseVoice(atom, mode, this._riseLoopSeconds(mode), true);
         if (!voice) continue;
         this._riseVoices.set(atom.id, voice);
       }
@@ -2980,7 +3035,8 @@ export class EchoScapeAudioEngine {
       const gain = voice.gain.gain;
       gain.cancelScheduledValues(when);
       gain.setValueAtTime(0.001, when);
-      gain.exponentialRampToValueAtTime(level, when + 0.018);
+      gain.exponentialRampToValueAtTime(level, when + 0.012);
+      gain.setValueAtTime(level, when + 0.08);
       gain.exponentialRampToValueAtTime(0.001, when + RISE_FLAKE_SEC);
       this._riseFlakes.push(voice);
       voice.voice.onended = () => this._dropFlake(voice);
@@ -2988,6 +3044,55 @@ export class EchoScapeAudioEngine {
     }
     for (const id of this._riseFired) {
       if (!live.has(id)) this._riseFired.delete(id);
+    }
+  }
+
+  /**
+   * A new speck of the bed for as long as the atom is rising.
+   * Each speck is a different slice, and it gets quieter as the atom shrinks.
+   * @param {{ id: number, corner: string, scale: number, x?: number, z?: number, rate?: number, pan?: number, t?: number }[]} list
+   */
+  _syncRiseShed(list) {
+    if (!this._riseShedAt) this._riseShedAt = new Map();
+    if (!this._riseFlakes) this._riseFlakes = [];
+    const counts = riseCornerCounts(list);
+    const ranked = list.slice().sort((a, b) => (Number(b.scale) || 0) - (Number(a.scale) || 0));
+    const live = new Set();
+    const now = this.ctx.currentTime;
+    let room = RISE_FLAKE_CAP - this._riseFlakes.length;
+    for (let i = 0; i < ranked.length; i += 1) {
+      const atom = ranked[i];
+      if (atom?.id == null) continue;
+      live.add(atom.id);
+      const last = this._riseShedAt.get(atom.id) || 0;
+      if (now - last < RISE_SHED_GAP) continue;
+      if (room <= 0) break;
+      const speck = {
+        id: (Number(atom.id) || 0) + Math.floor(now * 12) * 131,
+        corner: atom.corner,
+        x: atom.x,
+        z: atom.z,
+        scale: atom.scale,
+        t: atom.t,
+        pan: atom.pan,
+        rate: atom.rate,
+      };
+      const voice = this._makeRiseVoice(speck, "shed", RISE_SHED_SEC, false);
+      if (!voice) continue;
+      this._riseShedAt.set(atom.id, now);
+      room -= 1;
+      const level = Math.max(0.001, riseVoiceLevel(atom.scale, counts[atom.corner] || 1, "shed"));
+      const gain = voice.gain.gain;
+      gain.cancelScheduledValues(now);
+      gain.setValueAtTime(0.001, now);
+      gain.exponentialRampToValueAtTime(level, now + 0.008);
+      gain.exponentialRampToValueAtTime(0.001, now + RISE_SHED_SEC);
+      this._riseFlakes.push(voice);
+      voice.voice.onended = () => this._dropFlake(voice);
+      voice.timer = window.setTimeout(() => this._dropFlake(voice), (RISE_SHED_SEC + 0.08) * 1000);
+    }
+    for (const id of this._riseShedAt.keys()) {
+      if (!live.has(id)) this._riseShedAt.delete(id);
     }
   }
 

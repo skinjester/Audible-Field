@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { audioEngine } from "./audio-engine.js?v=82";
+import { audioEngine } from "./audio-engine.js?v=83";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
@@ -2148,8 +2148,11 @@ function bindAboutUi() {
   if (btn.dataset.bound === "1") return;
   btn.dataset.bound = "1";
   onFieldPress(btn, () => {
-    if (!dialog.open) dialog.showModal();
+    if (dialog.open) return;
+    dialog.showModal();
+    dialog.focus({ preventScroll: true });
   });
+  bindAboutNav(dialog);
   const closeBtn = dialog.querySelector(".falling-about-close");
   if (closeBtn instanceof HTMLButtonElement) {
     onFieldPress(closeBtn, () => {
@@ -2159,6 +2162,32 @@ function bindAboutUi() {
   dialog.addEventListener("pointerdown", (event) => {
     if (event.target === dialog) dialog.close();
   });
+}
+
+function bindAboutNav(dialog) {
+  const root = dialog.querySelector("[data-falling-nav]");
+  if (!(root instanceof HTMLElement) || root.dataset.bound === "1") return;
+  root.dataset.bound = "1";
+  const tabs = [...root.querySelectorAll("[role='tab']")];
+  const panels = [...root.querySelectorAll("[role='tabpanel']")];
+  const select = (id) => {
+    for (const tab of tabs) {
+      const on = tab.getAttribute("aria-controls") === id;
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+      tab.tabIndex = on ? 0 : -1;
+    }
+    for (const panel of panels) {
+      if (!(panel instanceof HTMLElement)) continue;
+      panel.toggleAttribute("hidden", panel.id !== id);
+    }
+  };
+  for (const tab of tabs) {
+    if (!(tab instanceof HTMLButtonElement)) continue;
+    tab.addEventListener("click", () => {
+      const id = tab.getAttribute("aria-controls");
+      if (id) select(id);
+    });
+  }
 }
 
 function bindClearUi() {

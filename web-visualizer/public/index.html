@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=240" />
+    <link rel="stylesheet" href="/styles.css?v=244" />
     <script type="importmap">
       {
         "imports": {
@@ -378,13 +378,13 @@
               </div>
             </div>
             <p class="viz-error" data-falling-error hidden></p>
-              <dialog class="falling-about-dialog" data-falling-about-dialog aria-labelledby="falling-about-title">
+              <dialog class="falling-about-dialog" data-falling-about-dialog aria-labelledby="falling-about-title" tabindex="-1">
                 <form method="dialog" class="falling-about-panel">
                   <header class="falling-about-head">
-                    <h2 id="falling-about-title">Falling Blocks (Field-1)</h2>
-                    <button type="submit" class="falling-about-close" value="cancel" aria-label="Close">
-                      <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M3.75 3.75 L12.25 12.25 M12.25 3.75 L3.75 12.25" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+                    <h2 id="falling-about-title">Falling Blocks</h2>
+                    <button type="button" class="falling-icon-btn falling-about-close" aria-label="Close">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6 6 L18 18 M18 6 L6 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                       </svg>
                     </button>
                   </header>
@@ -410,18 +410,53 @@
                   </section>
                   <section class="falling-about-how">
                     <h3>Navigation</h3>
-                    <div class="falling-about-nav">
-                      <div>
-                        <h4>Move</h4>
-                        <p>Drag with <span class="falling-about-mouse"><svg viewBox="0 0 14 20" aria-hidden="true"><path d="M7 1.2C3.6 1.2 1.2 3.6 1.2 7.2v6c0 3.4 2.4 5.6 5.8 5.6s5.8-2.2 5.8-5.6v-6C12.8 3.6 10.4 1.2 7 1.2z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 1.6V8.2M1.6 8.2h10.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7.6 2.5C9.7 2.8 11.3 4.4 11.4 7.3H7.6z" fill="currentColor"/></svg>RMB</span> to move about.</p>
+                    <div class="falling-about-nav" data-falling-nav>
+                      <div class="tabs" role="tablist" aria-label="Navigation">
+                        <button type="button" role="tab" id="falling-nav-tab-mouse" aria-controls="falling-nav-mouse" aria-selected="true">Mouse</button>
+                        <button type="button" role="tab" id="falling-nav-tab-touch" aria-controls="falling-nav-touch" aria-selected="false" tabindex="-1">Touch</button>
+                        <button type="button" role="tab" id="falling-nav-tab-pad" aria-controls="falling-nav-pad" aria-selected="false" tabindex="-1">Controller</button>
                       </div>
-                      <div>
-                        <h4>Zoom</h4>
-                        <p>Scroll the mouse wheel to zoom in and out.</p>
+                      <div role="tabpanel" id="falling-nav-mouse" aria-labelledby="falling-nav-tab-mouse">
+                        <div>
+                          <h4>Move</h4>
+                          <p>Drag with <span class="falling-about-mouse"><svg viewBox="0 0 14 20" aria-hidden="true"><path d="M7 1.2C3.6 1.2 1.2 3.6 1.2 7.2v6c0 3.4 2.4 5.6 5.8 5.6s5.8-2.2 5.8-5.6v-6C12.8 3.6 10.4 1.2 7 1.2z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 1.6V8.2M1.6 8.2h10.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7.6 2.5C9.7 2.8 11.3 4.4 11.4 7.3H7.6z" fill="currentColor"/></svg>RMB</span> to move about.</p>
+                        </div>
+                        <div>
+                          <h4>Zoom</h4>
+                          <p>Scroll the mouse wheel to zoom in and out.</p>
+                        </div>
+                        <div>
+                          <h4>Rotate</h4>
+                          <p>Drag with the middle mouse button to turn the view. <kbd>Shift</kbd> or <kbd>Alt</kbd> with <span class="falling-about-mouse"><svg viewBox="0 0 14 20" aria-hidden="true"><path d="M7 1.2C3.6 1.2 1.2 3.6 1.2 7.2v6c0 3.4 2.4 5.6 5.8 5.6s5.8-2.2 5.8-5.6v-6C12.8 3.6 10.4 1.2 7 1.2z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 1.6V8.2M1.6 8.2h10.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7.6 2.5C9.7 2.8 11.3 4.4 11.4 7.3H7.6z" fill="currentColor"/></svg>RMB</span> also turns it.</p>
+                        </div>
                       </div>
-                      <div>
-                        <h4>Rotate</h4>
-                        <p>Drag with the middle mouse button to turn the view.<br>You can also use <kbd>Alt</kbd> + <span class="falling-about-mouse"><svg viewBox="0 0 14 20" aria-hidden="true"><path d="M7 1.2C3.6 1.2 1.2 3.6 1.2 7.2v6c0 3.4 2.4 5.6 5.8 5.6s5.8-2.2 5.8-5.6v-6C12.8 3.6 10.4 1.2 7 1.2z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 1.6V8.2M1.6 8.2h10.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7.6 2.5C9.7 2.8 11.3 4.4 11.4 7.3H7.6z" fill="currentColor"/></svg>RMB</span> to rotate.</p>
+                      <div role="tabpanel" id="falling-nav-touch" aria-labelledby="falling-nav-tab-touch" hidden>
+                        <div>
+                          <h4>Move</h4>
+                          <p>Drag with one finger. The field slides under the emitter, which stays at the center of the screen.</p>
+                        </div>
+                        <div>
+                          <h4>Zoom</h4>
+                          <p>Pinch to zoom toward and away from the emitter.</p>
+                        </div>
+                        <div>
+                          <h4>Rotate</h4>
+                          <p>Twist two fingers to turn the field around the emitter.</p>
+                        </div>
+                      </div>
+                      <div role="tabpanel" id="falling-nav-pad" aria-labelledby="falling-nav-tab-pad" hidden>
+                        <div>
+                          <h4>Move</h4>
+                          <p>The left stick or D-pad moves the emitter. At the edge of the view the plane scrolls.</p>
+                        </div>
+                        <div>
+                          <h4>Zoom</h4>
+                          <p>The right stick up and down zooms.</p>
+                        </div>
+                        <div>
+                          <h4>Rotate</h4>
+                          <p>The right stick left and right turns the view.</p>
+                        </div>
                       </div>
                     </div>
                   </section>
@@ -476,6 +511,7 @@
                   </svg>
                 </button>
               </div>
+              <div class="falling-side">
               <div class="falling-settings-panel" id="falling-settings-panel" data-falling-settings-panel hidden>
                 <div class="falling-hud">
                   <div class="falling-palette-row">
@@ -501,28 +537,32 @@
                 <div class="falling-rise-modes" data-falling-rise-modes>
                   <p class="falling-rise-label" id="falling-rise-label">Rising atoms</p>
                   <div class="falling-rise-options" role="radiogroup" aria-labelledby="falling-rise-label">
-                    <label class="falling-rise-option" title="A piece of the bed keeps playing, and fades as the atom shrinks.">
-                      <input type="radio" name="falling-rise-mode" value="loose" checked />
+                    <label class="falling-rise-option" title="The piece keeps playing, thins as it shrinks, and drifts upward.">
+                      <input type="radio" name="falling-rise-mode" value="drift" checked />
+                      Drift
+                    </label>
+                    <label class="falling-rise-option" title="A bright scrap of the bed keeps playing at the pile's pitch, and fades as the atom shrinks.">
+                      <input type="radio" name="falling-rise-mode" value="loose" />
                       Loose
                     </label>
-                    <label class="falling-rise-option" title="One short speck of the bed when the atom lifts off.">
+                    <label class="falling-rise-option" title="One bright speck of the bed when the atom lifts off.">
                       <input type="radio" name="falling-rise-mode" value="flake" />
                       Flake
                     </label>
-                    <label class="falling-rise-option" title="The piece keeps playing, thins as it shrinks, and drifts upward.">
-                      <input type="radio" name="falling-rise-mode" value="drift" />
-                      Drift
+                    <label class="falling-rise-option" title="A lower strand of the bed is pulled free and thins as the atom shrinks.">
+                      <input type="radio" name="falling-rise-mode" value="thread" />
+                      Thread
+                    </label>
+                    <label class="falling-rise-option" title="The atom keeps dropping short specks of the bed on the way up.">
+                      <input type="radio" name="falling-rise-mode" value="shed" />
+                      Shed
+                    </label>
+                    <label class="falling-rise-option" title="An octave above the bed, a thin sheen that fades as the atom shrinks.">
+                      <input type="radio" name="falling-rise-mode" value="halo" />
+                      Halo
                     </label>
                   </div>
-                  <p class="falling-rise-hint" data-falling-rise-hint>A piece of the bed keeps playing, and fades as the atom shrinks.</p>
-                </div>
-              </div>
-              <div class="falling-material-bar">
-                <div class="falling-material-row">
-                  <span class="pad-glyph" data-falling-shoulder="prev" role="img" aria-label="L2">&#x011A;</span>
-                  <div class="falling-palette" data-falling-palette role="group" aria-label="Materials"></div>
-                  <span class="pad-glyph" data-falling-shoulder="next" role="img" aria-label="R2">&#x011B;</span>
-                  <p class="falling-material-current" data-falling-material-name></p>
+                  <p class="falling-rise-hint" data-falling-rise-hint>The piece keeps playing, thins as it shrinks, and drifts upward.</p>
                 </div>
               </div>
             <aside class="falling-readout" data-falling-readout>
@@ -622,10 +662,19 @@
                 <ol data-falling-life-list></ol>
               </div>
             </aside>
+              </div>
+              <div class="falling-material-bar">
+                <div class="falling-material-row">
+                  <span class="pad-glyph" data-falling-shoulder="prev" role="img" aria-label="L2">&#x011A;</span>
+                  <div class="falling-palette" data-falling-palette role="group" aria-label="Materials"></div>
+                  <span class="pad-glyph" data-falling-shoulder="next" role="img" aria-label="R2">&#x011B;</span>
+                  <p class="falling-material-current" data-falling-material-name></p>
+                </div>
+              </div>
           </div>
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=437"></script>
+    <script type="module" src="/app.js?v=438"></script>
   </body>
 </html>

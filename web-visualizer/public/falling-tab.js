@@ -1,4 +1,4 @@
-import { audioEngine } from "./audio-engine.js?v=82";
+import { audioEngine } from "./audio-engine.js?v=83";
 import {
   clearBoard,
   hideFallingBlocks,
@@ -6,7 +6,7 @@ import {
   onFieldPress,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=357";
+} from "./falling-blocks.js?v=358";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=41";
 import { controller, setActiveFx } from "./mixer-core.js?v=67";
 
@@ -75,9 +75,12 @@ export function setFallingAudioEnabled(enabled) {
 }
 
 const RISE_MODES = {
-  loose: "A piece of the bed keeps playing, and fades as the atom shrinks.",
-  flake: "One short speck of the bed when the atom lifts off.",
   drift: "The piece keeps playing, thins as it shrinks, and drifts upward.",
+  loose: "A bright scrap of the bed keeps playing at the pile's pitch, and fades as the atom shrinks.",
+  flake: "One bright speck of the bed when the atom lifts off.",
+  thread: "A lower strand of the bed is pulled free and thins as the atom shrinks.",
+  shed: "The atom keeps dropping short specks of the bed on the way up.",
+  halo: "An octave above the bed, a thin sheen that fades as the atom shrinks.",
 };
 
 function bindRiseModeUi() {
@@ -92,7 +95,7 @@ function bindRiseModeUi() {
   } catch {
     /* private mode */
   }
-  const initial = Object.prototype.hasOwnProperty.call(RISE_MODES, stored) ? stored : "loose";
+  const initial = Object.prototype.hasOwnProperty.call(RISE_MODES, stored) ? stored : "drift";
   audioEngine.setRiseMode(initial);
   // A label click never arrives: the playfield cancels touchstart.
   group.addEventListener("pointerdown", (event) => {
@@ -112,7 +115,7 @@ function bindRiseModeUi() {
     input.checked = input.value === initial;
     input.addEventListener("change", () => {
       if (!input.checked) return;
-      const mode = Object.prototype.hasOwnProperty.call(RISE_MODES, input.value) ? input.value : "loose";
+      const mode = Object.prototype.hasOwnProperty.call(RISE_MODES, input.value) ? input.value : "drift";
       audioEngine.setRiseMode(mode);
       if (hint) hint.textContent = RISE_MODES[mode];
       try {
