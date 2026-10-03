@@ -530,18 +530,21 @@ export class FallingInput {
       if (event.cancelable) event.preventDefault();
     }
     if (!event.cancelable) return;
+    const target = event.target;
     // A material button left to the browser becomes a click that iOS uses to
     // end every other contact, including the thumb still on Emit.
-    if (isMaterialSwatch(event.target)) {
+    if (isMaterialSwatch(target)) {
       event.preventDefault();
       return;
     }
+    // About is modal. Leave its touches alone so it can scroll and its close
+    // control can run. The top-bar buttons stay claimed; they act on pointerdown.
+    if (target instanceof Element && target.closest("dialog[open]")) return;
     if (this._emitHeldDown) {
       event.preventDefault();
       return;
     }
     const stage = this._gestureStage;
-    const target = event.target;
     if (stage && target instanceof Node && stage.contains(target)) event.preventDefault();
   }
 

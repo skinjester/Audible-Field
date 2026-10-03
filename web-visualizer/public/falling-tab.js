@@ -3,9 +3,10 @@ import {
   clearBoard,
   hideFallingBlocks,
   onFallingAudioToggle,
+  onFieldPress,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=356";
+} from "./falling-blocks.js?v=357";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=41";
 import { controller, setActiveFx } from "./mixer-core.js?v=67";
 
@@ -93,6 +94,19 @@ function bindRiseModeUi() {
   }
   const initial = Object.prototype.hasOwnProperty.call(RISE_MODES, stored) ? stored : "loose";
   audioEngine.setRiseMode(initial);
+  // A label click never arrives: the playfield cancels touchstart.
+  group.addEventListener("pointerdown", (event) => {
+    if (!(event.target instanceof Element)) return;
+    const label = event.target.closest(".falling-rise-option");
+    if (!(label instanceof HTMLLabelElement) || !group.contains(label)) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    const input = label.querySelector("input");
+    if (!(input instanceof HTMLInputElement)) return;
+    event.stopPropagation();
+    if (input.checked) return;
+    input.checked = true;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
   for (const input of inputs) {
     if (!(input instanceof HTMLInputElement)) continue;
     input.checked = input.value === initial;
@@ -116,8 +130,7 @@ function bindFallingAudioUi() {
   if (!(button instanceof HTMLButtonElement) || button.dataset.bound === "1") return;
   button.dataset.bound = "1";
   syncFallingAudioButton();
-  button.addEventListener("click", (event) => {
-    event.stopPropagation();
+  onFieldPress(button, () => {
     void setFallingAudioEnabled(!fallingAudioEnabled);
   });
 }

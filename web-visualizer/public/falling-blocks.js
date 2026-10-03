@@ -3,7 +3,7 @@ import { audioEngine } from "./audio-engine.js?v=82";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=60";
+import { fallingInput } from "./falling-input.js?v=61";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -2083,6 +2083,31 @@ export function clearBoard() {
   reconcileMeshes();
 }
 
+/**
+ * The playfield calls preventDefault on touchstart, so a tap never becomes a click.
+ * Act on the press. A mouse still emits click afterward; ignore that one.
+ * Keyboard activation has no preceding press, so the click still runs.
+ * @param {HTMLElement} el
+ * @param {(event: Event) => void} onPress
+ */
+export function onFieldPress(el, onPress) {
+  let swallowClicksUntil = 0;
+  el.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.stopPropagation();
+    swallowClicksUntil = performance.now() + 800;
+    onPress(event);
+  });
+  el.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (performance.now() < swallowClicksUntil) {
+      event.preventDefault();
+      return;
+    }
+    onPress(event);
+  });
+}
+
 function bindFpsUi() {
   const btn = document.querySelector("[data-falling-fps-toggle]");
   if (!(btn instanceof HTMLButtonElement) || btn.dataset.bound === "1") return;
@@ -2090,8 +2115,7 @@ function bindFpsUi() {
   const setOpen = (open) => {
     btn.setAttribute("aria-expanded", open ? "true" : "false");
   };
-  btn.addEventListener("click", (event) => {
-    event.stopPropagation();
+  onFieldPress(btn, () => {
     setOpen(btn.getAttribute("aria-expanded") !== "true");
   });
 }
@@ -2106,8 +2130,7 @@ function bindSettingsUi() {
     panel.toggleAttribute("hidden", !open);
     btn.setAttribute("aria-expanded", open ? "true" : "false");
   };
-  btn.addEventListener("click", (event) => {
-    event.stopPropagation();
+  onFieldPress(btn, () => {
     setOpen(panel.hasAttribute("hidden"));
   });
   document.addEventListener("pointerdown", (event) => {
@@ -2124,11 +2147,16 @@ function bindAboutUi() {
   if (!(btn instanceof HTMLButtonElement) || !(dialog instanceof HTMLDialogElement)) return;
   if (btn.dataset.bound === "1") return;
   btn.dataset.bound = "1";
-  btn.addEventListener("click", (event) => {
-    event.stopPropagation();
+  onFieldPress(btn, () => {
     if (!dialog.open) dialog.showModal();
   });
-  dialog.addEventListener("click", (event) => {
+  const closeBtn = dialog.querySelector(".falling-about-close");
+  if (closeBtn instanceof HTMLButtonElement) {
+    onFieldPress(closeBtn, () => {
+      if (dialog.open) dialog.close();
+    });
+  }
+  dialog.addEventListener("pointerdown", (event) => {
     if (event.target === dialog) dialog.close();
   });
 }
@@ -2137,8 +2165,7 @@ function bindClearUi() {
   const btn = document.querySelector("[data-falling-clear]");
   if (!(btn instanceof HTMLButtonElement) || btn.dataset.bound === "1") return;
   btn.dataset.bound = "1";
-  btn.addEventListener("click", (event) => {
-    event.stopPropagation();
+  onFieldPress(btn, () => {
     clearBoard();
   });
 }
