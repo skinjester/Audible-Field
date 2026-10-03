@@ -58,7 +58,7 @@ mouse / keyboard / DualSense
  audio-engine  active view
 ```
 
-`mixer-core.js` owns shared position and controller state. `audio-engine.js` consumes that state and builds the Web Audio graph: four looping stems, equal-power gains, filters, sends, face-button effects, WAM inserts, panning, and output limiting.
+`mixer-core.js` owns shared position and controller state. `audio-engine.js` consumes that state and builds the Web Audio graph: four looping stems, equal-power gains, filters, sends, face-button effects, WAM inserts, panning, and output limiting. The routing, and the extra steps iOS Safari needs before those beds make sound, are described in [documentation/audio-graph.md](documentation/audio-graph.md).
 
 ### Main modules
 
@@ -97,10 +97,11 @@ npm run build --prefix web-visualizer
 | `web-visualizer/dist` | Built site served locally and deployed |
 | `samples` | Sample library copied into the build |
 | `EchoScape Max patch files` | Max patch and plugin presets for the original instrument |
-| `documentation` | Design notes for Falling Blocks, the sample library, and WAMs |
+| `documentation` | Design notes for the audio graph, Falling Blocks, the sample library, and WAMs |
 
 ## Documentation
 
+- [The audio graph](documentation/audio-graph.md), including iOS Safari playback
 - [Falling Blocks](documentation/falling-blocks.md)
 - [Web Audio Modules](documentation/web-audio-modules.md)
 

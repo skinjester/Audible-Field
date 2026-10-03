@@ -1,7 +1,8 @@
 /**
  * Minimal WAM2 host for EchoScape browser audio.
  * Plugins are vendored under /wams/ (no CDN).
- * Stick axes use hand-editable bindings in wam-stick-maps.js.
+ * Face-button parameters come from the loaded plugin. wam-stick-maps.js
+ * only supplies a tighter slider window when a raw AudioParam span is unusable.
  */
 
 import { getWamStickMap } from "./wam-stick-maps.js?v=2";
@@ -250,5 +251,333 @@ export function applyStickToWamParams(audioNode, binding, stickX, stickY, scale 
   }
   for (const id of binding.forceOff || []) {
     setWamParam(audioNode, id, 0);
+  }
+}
+
+const RAW_SPAN = 1e6;
+
+function clampNum(n, min, max) {
+  let v = Number(n);
+  if (!Number.isFinite(v)) v = Number.isFinite(min) ? min : 0;
+  if (Number.isFinite(min) && v < min) v = min;
+  if (Number.isFinite(max) && v > max) v = max;
+  return v;
+}
+
+function leafName(id, label) {
+  const raw = String(label || id || "");
+  const leaf = raw.includes("/") ? raw.split("/").pop() : raw;
+  return String(leaf || raw).toLowerCase();
+}
+
+export function isBypassParam(param) {
+  return leafName(param?.id, param?.label).includes("bypass");
+}
+
+export function isEnabledParam(param) {
+  return leafName(param?.id, param?.label) === "enabled";
+}
+
+/**
+ * True when min/max are a Web Audio limit rather than an authored musical range.
+ * @param {number} min
+ * @param {number} max
+ */
+export function isRawAudioSpan(min, max) {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || !(max > min)) return true;
+  if (Math.abs(min) >= RAW_SPAN || Math.abs(max) >= RAW_SPAN) return true;
+  if (min <= -153600 && max >= 153600) return true;
+  if (min <= 0 && max >= 20000) return true;
+  return false;
+}
+
+function standInWindow(param) {
+  const blob = `${param?.id || ""} ${param?.label || ""}`.toLowerCase();
+  const def = Number.isFinite(param?.def) ? param.def : 0;
+  if (blob.includes("detune")) return { min: -1200, max: 1200 };
+  if (blob.includes("freq") || blob.includes("cutoff")) return { min: 20, max: 20000 };
+  if (blob.includes("gain")) return { min: def - 24, max: def + 24 };
+  const half = Math.max(Math.abs(def), 1);
+  return { min: def - half, max: def + half };
+}
+
+/**
+ * @param {number} low
+ * @param {number} high
+ * @param {number} stick −1…1
+ */
+export function valueFromStickRange(low, high, stick) {
+  const lo = Number(low);
+  const hi = Number(high);
+  const s = Math.min(1, Math.max(-1, Number(stick) || 0));
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return 0;
+  const rest = (lo + hi) / 2;
+  return rest + s * ((hi - lo) / 2);
+}
+
+/**
+ * Value sent while a continuous parameter is not on X or Y.
+ * Booleans and choices use this as their initial switch value too.
+ * @param {{ id: string, label: string, type?: string, min: number, max: number, def: number, authored?: boolean }} param
+ */
+export function neutralParamValue(param) {
+  if (!param) return 0;
+  if (isBypassParam(param)) return 0;
+  if (isEnabledParam(param)) return clampNum(1, param.min, param.max);
+  if (param.type === "boolean") return 0;
+  if (param.type === "choice") return clampNum(param.def, param.min, param.max);
+  if (!param.authored) return clampNum(param.def, param.min, param.max);
+  if (param.min <= 0 && param.max >= 0) return 0;
+  return clampNum(param.def, param.min, param.max);
+}
+
+function quantizeParam(value, param) {
+  let v = clampNum(value, param.min, param.max);
+  const step = Number(param.discreteStep);
+  if (step > 0) {
+    v = param.min + Math.round((v - param.min) / step) * step;
+    v = clampNum(v, param.min, param.max);
+  }
+  if (param.type === "boolean") v = v >= 0.5 ? 1 : 0;
+  if (param.type === "choice") v = Math.round(v);
+  return v;
+}
+
+/**
+ * @param {{ id: string, label?: string, type?: string, min: number, max: number, def: number, choices?: string[], discreteStep?: number, authored?: boolean }} raw
+ * @param {{ id: string, min: number, max: number } | null} [mapEntry]
+ */
+export function finalizeListedParam(raw, mapEntry) {
+  const type = raw.type === "boolean" || raw.type === "choice" ? raw.type : "float";
+  let min = Number(raw.min);
+  let max = Number(raw.max);
+  let def = Number(raw.def);
+  let authored = raw.authored !== false;
+  if (type === "boolean") {
+    min = 0;
+    max = 1;
+    if (!Number.isFinite(def)) def = 0;
+    authored = true;
+  } else if (type === "choice") {
+    const count = Array.isArray(raw.choices) ? raw.choices.length : 0;
+    if (!Number.isFinite(min)) min = 0;
+    if (!Number.isFinite(max)) max = count > 0 ? count - 1 : 1;
+    if (!Number.isFinite(def)) def = min;
+    authored = true;
+  } else if (isRawAudioSpan(min, max)) {
+    const mapped =
+      mapEntry && Number.isFinite(mapEntry.min) && Number.isFinite(mapEntry.max) && mapEntry.max > mapEntry.min
+        ? { min: mapEntry.min, max: mapEntry.max }
+        : standInWindow({ ...raw, def });
+    min = mapped.min;
+    max = mapped.max;
+    authored = false;
+  }
+  if (!(max > min)) {
+    min = 0;
+    max = 1;
+  }
+  if (!Number.isFinite(def)) def = min;
+  def = clampNum(def, min, max);
+  return {
+    id: String(raw.id),
+    label: shortParamLabel(raw.label || raw.id, raw.id),
+    type,
+    min,
+    max,
+    def,
+    choices: Array.isArray(raw.choices) ? raw.choices.map(String) : [],
+    discreteStep: Number(raw.discreteStep) > 0 ? Number(raw.discreteStep) : 0,
+    authored,
+  };
+}
+
+async function readSdkParamInfo(audioNode, moduleInstance) {
+  const targets = [audioNode, moduleInstance, audioNode?._wamNode].filter(Boolean);
+  let info = {};
+  for (const target of targets) {
+    if (typeof target.getParameterInfo !== "function") continue;
+    try {
+      const next = await target.getParameterInfo();
+      if (next && typeof next === "object" && Object.keys(next).length) {
+        info = next;
+        break;
+      }
+    } catch {
+      /* try next */
+    }
+  }
+  const out = [];
+  for (const [id, p] of Object.entries(info)) {
+    if (!p || typeof p !== "object") continue;
+    const type = p.type === "boolean" || p.type === "choice" ? p.type : "float";
+    const min = Number(p.minValue);
+    const max = Number(p.maxValue);
+    if (type === "float" && (!Number.isFinite(min) || !Number.isFinite(max) || !(max > min))) continue;
+    out.push({
+      id,
+      label: shortParamLabel(p.label || id, id),
+      type,
+      min: Number.isFinite(min) ? min : 0,
+      max: Number.isFinite(max) ? max : 1,
+      def: Number.isFinite(p.defaultValue) ? Number(p.defaultValue) : Number.isFinite(min) ? min : 0,
+      choices: Array.isArray(p.choices) ? p.choices : [],
+      discreteStep: Number(p.discreteStep) > 0 ? Number(p.discreteStep) : 0,
+      authored: true,
+    });
+  }
+  out.sort((a, b) => a.id.localeCompare(b.id));
+  return out;
+}
+
+function readFaustParams(audioNode) {
+  const desc = audioNode?.descriptor;
+  if (!Array.isArray(desc)) return [];
+  const out = [];
+  for (const item of desc) {
+    if (!item || item.address == null) continue;
+    const kind = String(item.type || "");
+    if (kind === "hbargraph" || kind === "vbargraph") continue;
+    const id = String(item.address);
+    const label = shortParamLabel(item.label || id, id);
+    const init = Number(item.init);
+    if (kind === "checkbox" || kind === "button") {
+      out.push({
+        id,
+        label,
+        type: "boolean",
+        min: 0,
+        max: 1,
+        def: Number.isFinite(init) ? (init >= 0.5 ? 1 : 0) : 0,
+        choices: [],
+        discreteStep: 1,
+        authored: true,
+      });
+      continue;
+    }
+    if (kind !== "vslider" && kind !== "hslider" && kind !== "nentry") continue;
+    const min = Number(item.min);
+    const max = Number(item.max);
+    if (!Number.isFinite(min) || !Number.isFinite(max) || !(max > min)) continue;
+    out.push({
+      id,
+      label,
+      type: "float",
+      min,
+      max,
+      def: Number.isFinite(init) ? init : min,
+      choices: [],
+      discreteStep: Number(item.step) > 0 ? Number(item.step) : 0,
+      authored: true,
+    });
+  }
+  return out;
+}
+
+/**
+ * Every parameter a loaded WAM reports. Faust descriptor entries win on id
+ * so a checkbox is not turned into an extreme float slider.
+ * @param {{ getParameterInfo?: Function, descriptor?: unknown }} audioNode
+ * @param {{ getParameterInfo?: Function }} [moduleInstance]
+ * @param {string} [pluginPath]
+ */
+export async function listWamParams(audioNode, moduleInstance, pluginPath) {
+  const sdk = await readSdkParamInfo(audioNode, moduleInstance);
+  const faust = readFaustParams(audioNode);
+  const map = getWamStickMap(pluginPath);
+  const mapById = new Map((map?.params || []).map((p) => [p.id, p]));
+  /** @type {Map<string, object>} */
+  const byId = new Map();
+  for (const p of sdk) byId.set(p.id, p);
+  for (const p of faust) byId.set(p.id, p);
+  const order = [];
+  const seen = new Set();
+  const push = (p) => {
+    if (!p || seen.has(p.id)) return;
+    seen.add(p.id);
+    order.push(p);
+  };
+  if (faust.length) {
+    for (const p of faust) push(byId.get(p.id));
+    for (const p of sdk) push(byId.get(p.id));
+  } else {
+    for (const p of sdk) push(p);
+  }
+  return order.map((p) => finalizeListedParam(p, mapById.get(p.id) || null));
+}
+
+/**
+ * @param {ReturnType<typeof finalizeListedParam>[]} params
+ * @param {{ ranges?: Record<string, { low: number, high: number }>, axes?: Record<string, string>, switches?: Record<string, number> } | null} [saved]
+ * @param {string} [path]
+ */
+export function createParamModel(params, saved, path) {
+  const ranges = {};
+  const axes = {};
+  const switches = {};
+  for (const param of params) {
+    const prior = saved?.ranges?.[param.id];
+    let low = Number(prior?.low);
+    let high = Number(prior?.high);
+    if (!Number.isFinite(low)) low = param.min;
+    if (!Number.isFinite(high)) high = param.max;
+    low = clampNum(low, param.min, param.max);
+    high = clampNum(high, param.min, param.max);
+    if (high < low) {
+      const swap = low;
+      low = high;
+      high = swap;
+    }
+    ranges[param.id] = { low, high };
+    const axis = saved?.axes?.[param.id];
+    axes[param.id] = param.type === "float" && (axis === "x" || axis === "y") ? axis : null;
+    const stored = Number(saved?.switches?.[param.id]);
+    switches[param.id] =
+      param.type === "boolean" || param.type === "choice"
+        ? quantizeParam(Number.isFinite(stored) ? stored : neutralParamValue(param), param)
+        : neutralParamValue(param);
+  }
+  return {
+    path: path ? String(path) : "",
+    params,
+    ranges,
+    axes,
+    switches,
+  };
+}
+
+/**
+ * @param {ReturnType<typeof finalizeListedParam>} param
+ * @param {{ ranges: Record<string, { low: number, high: number }>, axes: Record<string, string | null>, switches: Record<string, number> }} model
+ * @param {number} stickX
+ * @param {number} stickY
+ */
+export function paramSentValue(param, model, stickX, stickY) {
+  if (!param) return 0;
+  if (param.type === "boolean" || param.type === "choice") {
+    const stored = Number(model?.switches?.[param.id]);
+    return quantizeParam(Number.isFinite(stored) ? stored : neutralParamValue(param), param);
+  }
+  const axis = model?.axes?.[param.id];
+  if (axis === "x" || axis === "y") {
+    const range = model?.ranges?.[param.id] || { low: param.min, high: param.max };
+    const stick = axis === "x" ? stickX : stickY;
+    return quantizeParam(valueFromStickRange(range.low, range.high, stick), param);
+  }
+  return quantizeParam(neutralParamValue(param), param);
+}
+
+/**
+ * Write every parameter: stick window for armed floats, neutral for the rest,
+ * and the switch or menu value for booleans and choices.
+ * @param {{ setParamValue?: Function }} audioNode
+ * @param {ReturnType<typeof createParamModel> | null} model
+ * @param {number} stickX
+ * @param {number} stickY
+ */
+export function applyWamControls(audioNode, model, stickX, stickY) {
+  if (!audioNode || !model?.params) return;
+  for (const param of model.params) {
+    setWamParam(audioNode, param.id, paramSentValue(param, model, stickX, stickY));
   }
 }

@@ -29,6 +29,8 @@ WAMs are the web-native plugin format: loadable ES modules that expose an `audio
 
 ## Architecture (browser)
 
+The live mix, including beds, pile voices, shoulder effects, the camera stage, and iOS playback, is [The audio graph](audio-graph.md). The diagram below is the face-button insert those beds run through.
+
 ```mermaid
 flowchart TB
   beds[4 looping beds] --> mix[Equal-power mix]
@@ -52,7 +54,7 @@ Relevant code:
 | Piece | Path |
 | --- | --- |
 | WAM host | [`web-visualizer/public/wam-host.js`](../web-visualizer/public/wam-host.js) |
-| Audio graph | [`web-visualizer/public/audio-engine.js`](../web-visualizer/public/audio-engine.js) |
+| Audio graph | [`web-visualizer/public/audio-engine.js`](../web-visualizer/public/audio-engine.js). Full routing: [The audio graph](audio-graph.md) |
 | Vendored plugins | [`web-visualizer/public/wams/`](../web-visualizer/public/wams/) |
 | MIME (`.wasm`) | [`web-visualizer/server.js`](../web-visualizer/server.js) |
 

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=244" />
+    <link rel="stylesheet" href="/styles.css?v=245" />
     <script type="importmap">
       {
         "imports": {
@@ -236,32 +236,7 @@
                   <span class="stem-caret" aria-hidden="true"></span>
                 </button>
               </div>
-              <dl>
-                <div class="fx-axis">
-                  <dt data-fx-x-label="square">Stick X</dt>
-                  <dd class="fx-axis-value">
-                    <span data-fx-x>0.00</span>
-                    <div class="fx-scale" data-fx-scale-wrap="square" data-fx-scale-axis="x" hidden title="Max multiplier at full +stick. Center stick is 1 (plugin default). Full −stick is 1/max.">
-                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="square" data-fx-scale-axis="x" aria-label="Decrease Stick X max multiplier">−</button>
-                      <span class="fx-scale-max">max</span>
-                      <input type="number" class="fx-scale-input" data-fx-scale="square" data-fx-scale-axis="x" value="1" min="1" step="0.1" inputmode="decimal" aria-label="Stick X max multiplier" />
-                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="square" data-fx-scale-axis="x" aria-label="Increase Stick X max multiplier">+</button>
-                    </div>
-                  </dd>
-                </div>
-                <div class="fx-axis">
-                  <dt data-fx-y-label="square">Stick Y</dt>
-                  <dd class="fx-axis-value">
-                    <span data-fx-y>0.00</span>
-                    <div class="fx-scale" data-fx-scale-wrap="square" data-fx-scale-axis="y" hidden title="Max multiplier at full +stick. Center stick is 1 (plugin default). Full −stick is 1/max.">
-                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="square" data-fx-scale-axis="y" aria-label="Decrease Stick Y max multiplier">−</button>
-                      <span class="fx-scale-max">max</span>
-                      <input type="number" class="fx-scale-input" data-fx-scale="square" data-fx-scale-axis="y" value="1" min="1" step="0.1" inputmode="decimal" aria-label="Stick Y max multiplier" />
-                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="square" data-fx-scale-axis="y" aria-label="Increase Stick Y max multiplier">+</button>
-                    </div>
-                  </dd>
-                </div>
-              </dl>
+              <p class="fx-stick-summary" data-fx-summary="square">X · —    Y · —</p>
             </article>
             <article class="fx-card" data-fx-card="triangle">
               <p class="fx-btn">Triangle</p>
@@ -271,32 +246,7 @@
                   <span class="stem-caret" aria-hidden="true"></span>
                 </button>
               </div>
-              <dl>
-                <div class="fx-axis">
-                  <dt data-fx-x-label="triangle">Param 2</dt>
-                  <dd class="fx-axis-value">
-                    <span data-fx-x>0.00</span>
-                    <div class="fx-scale" data-fx-scale-wrap="triangle" data-fx-scale-axis="x" hidden title="Max multiplier at full +stick. Center stick is 1 (plugin default). Full −stick is 1/max.">
-                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="triangle" data-fx-scale-axis="x" aria-label="Decrease Stick X max multiplier">−</button>
-                      <span class="fx-scale-max">max</span>
-                      <input type="number" class="fx-scale-input" data-fx-scale="triangle" data-fx-scale-axis="x" value="1" min="1" step="0.1" inputmode="decimal" aria-label="Stick X max multiplier" />
-                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="triangle" data-fx-scale-axis="x" aria-label="Increase Stick X max multiplier">+</button>
-                    </div>
-                  </dd>
-                </div>
-                <div class="fx-axis">
-                  <dt data-fx-y-label="triangle">Param 3</dt>
-                  <dd class="fx-axis-value">
-                    <span data-fx-y>0.00</span>
-                    <div class="fx-scale" data-fx-scale-wrap="triangle" data-fx-scale-axis="y" hidden title="Max multiplier at full +stick. Center stick is 1 (plugin default). Full −stick is 1/max.">
-                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="triangle" data-fx-scale-axis="y" aria-label="Decrease Stick Y max multiplier">−</button>
-                      <span class="fx-scale-max">max</span>
-                      <input type="number" class="fx-scale-input" data-fx-scale="triangle" data-fx-scale-axis="y" value="1" min="1" step="0.1" inputmode="decimal" aria-label="Stick Y max multiplier" />
-                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="triangle" data-fx-scale-axis="y" aria-label="Increase Stick Y max multiplier">+</button>
-                    </div>
-                  </dd>
-                </div>
-              </dl>
+              <p class="fx-stick-summary" data-fx-summary="triangle">X · —    Y · —</p>
             </article>
             <article class="fx-card" data-fx-card="circle">
               <p class="fx-btn">Circle</p>
@@ -306,34 +256,10 @@
                   <span class="stem-caret" aria-hidden="true"></span>
                 </button>
               </div>
-              <dl>
-                <div class="fx-axis">
-                  <dt data-fx-x-label="circle">Param 17</dt>
-                  <dd class="fx-axis-value">
-                    <span data-fx-x>0.00</span>
-                    <div class="fx-scale" data-fx-scale-wrap="circle" data-fx-scale-axis="x" hidden title="Max multiplier at full +stick. Center stick is 1 (plugin default). Full −stick is 1/max.">
-                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="circle" data-fx-scale-axis="x" aria-label="Decrease Stick X max multiplier">−</button>
-                      <span class="fx-scale-max">max</span>
-                      <input type="number" class="fx-scale-input" data-fx-scale="circle" data-fx-scale-axis="x" value="1" min="1" step="0.1" inputmode="decimal" aria-label="Stick X max multiplier" />
-                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="circle" data-fx-scale-axis="x" aria-label="Increase Stick X max multiplier">+</button>
-                    </div>
-                  </dd>
-                </div>
-                <div class="fx-axis">
-                  <dt data-fx-y-label="circle">Param 4</dt>
-                  <dd class="fx-axis-value">
-                    <span data-fx-y>0.00</span>
-                    <div class="fx-scale" data-fx-scale-wrap="circle" data-fx-scale-axis="y" hidden title="Max multiplier at full +stick. Center stick is 1 (plugin default). Full −stick is 1/max.">
-                      <button type="button" class="fx-scale-btn" data-fx-scale-dec="circle" data-fx-scale-axis="y" aria-label="Decrease Stick Y max multiplier">−</button>
-                      <span class="fx-scale-max">max</span>
-                      <input type="number" class="fx-scale-input" data-fx-scale="circle" data-fx-scale-axis="y" value="1" min="1" step="0.1" inputmode="decimal" aria-label="Stick Y max multiplier" />
-                      <button type="button" class="fx-scale-btn" data-fx-scale-inc="circle" data-fx-scale-axis="y" aria-label="Increase Stick Y max multiplier">+</button>
-                    </div>
-                  </dd>
-                </div>
-              </dl>
+              <p class="fx-stick-summary" data-fx-summary="circle">X · —    Y · —</p>
             </article>
           </div>
+          <div class="fx-params" data-fx-params hidden></div>
         </section>
         </div>
       </div>
@@ -675,6 +601,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=438"></script>
+    <script type="module" src="/app.js?v=441"></script>
   </body>
 </html>

@@ -1,6 +1,6 @@
 # Falling Blocks
 
-The Falling Blocks tab pours atoms onto a ground plane. Where they land, how wide the pile is, and how tall it stands drive the four stem samples. The Web Audio / WAM graph is the same one the rest of AUDIBLE FIELD uses.
+The Falling Blocks tab pours atoms onto a ground plane. Where they land, how wide the pile is, and how tall it stands drive the four stem samples. The Web Audio / WAM graph is the same one the rest of AUDIBLE FIELD uses. How that graph is built, and how iOS Safari is allowed to play it, is in [The audio graph](audio-graph.md).
 
 ## Where it lives
 
@@ -15,7 +15,7 @@ Own tab, not a mode inside Visualize.
 | Materials and rules | [`web-visualizer/public/materials.json`](../web-visualizer/public/materials.json) |
 | Rule step | [`web-visualizer/public/rule-engine.js`](../web-visualizer/public/rule-engine.js) |
 | Quadrant → stem levels | [`web-visualizer/public/grid-sonify.js`](../web-visualizer/public/grid-sonify.js) |
-| Graph | [`web-visualizer/public/audio-engine.js`](../web-visualizer/public/audio-engine.js) |
+| Graph | [`web-visualizer/public/audio-engine.js`](../web-visualizer/public/audio-engine.js). Routing and iOS playback: [The audio graph](audio-graph.md) |
 
 ## Play
 
@@ -95,7 +95,7 @@ flowchart TB
 
 ## Audio
 
-`captureAudioSnapshot` describes the grid. `fieldFrame` in `grid-sonify.js` turns one frame of that snapshot into stem controls. `falling-tab.js` writes them on the audio engine. Face effect slots stay dry: the controller shadow passed into `sync` is zeros.
+`captureAudioSnapshot` describes the grid. `fieldFrame` in `grid-sonify.js` turns one frame of that snapshot into stem controls. `falling-tab.js` writes them on the audio engine. Face effect slots stay dry: the controller shadow passed into `sync` is zeros. The nodes those calls reach are in [The audio graph](audio-graph.md).
 
 Per quadrant, for atoms that sonify:
 

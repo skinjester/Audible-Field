@@ -7,6 +7,8 @@
  * without Max. Face-button slots can load vendored WAMs (e.g. OWLShimmer) via
  * the FX picker; native approximations remain the fallback.
  *
+ * Routing and iOS playback: documentation/audio-graph.md.
+ *
  * Shoulder / trigger character:
  *   LT — Lowpass sweeps upward (cutoff rises as the trigger is pulled)
  *   RT — Highpass sweeps downward (cutoff falls as the trigger is pulled)
@@ -23,10 +25,10 @@ import {
 } from "./mixer-core.js?v=67";
 import {
   loadWam,
-  resolveStickBinding,
-  applyWamDefaults,
-  applyStickToWamParams,
-} from "./wam-host.js?v=9";
+  listWamParams,
+  createParamModel,
+  applyWamControls,
+} from "./wam-host.js?v=10";
 import {
   NATIVE_FX,
   DEFAULT_STICK_SCALE,
@@ -490,13 +492,19 @@ export class EchoScapeAudioEngine {
     this._r1Held = false;
     /** @type {AudioContext | null} */
     this._watchedCtx = null;
-    /**
-     * Phones can report a running context that is still silent until the
-     * first gesture suspends it and resumes it. Startup resume does not count.
-     */
-    this._outputUnlocked = false;
-    /** @type {Promise<void> | null} */
-    this._kickPromise = null;
+    /** True after a proof buffer has finished while the context was running. */
+    this._speakerProved = false;
+    /** Proof buffers that never finished. Two failures replace the context. */
+    this._proofMisses = 0;
+    this._proofGeneration = 0;
+    this._proofPending = false;
+    this._gestureAt = 0;
+    this._pressPrimed = false;
+    this._liftHandled = false;
+    this._fingerDown = false;
+    this._restartRequested = false;
+    /** @type {number | null} */
+    this._proofTimer = null;
     /** @type {'pending' | 'wam' | 'native'} */
     this.circleFxMode = "pending";
     /** @type {Record<string, { id: string, label: string, kind: string, path?: string }>} */
@@ -507,6 +515,10 @@ export class EchoScapeAudioEngine {
     this._fxInsertIn = {};
     /** @type {Record<string, object | null>} */
     this._fxStickParams = {};
+    /** @type {Record<string, object | null>} */
+    this._fxParamState = {};
+    /** Saved ranges and axis switches, keyed by slot then plugin path. */
+    this._fxParamSaved = { square: {}, triangle: {}, circle: {} };
     /** @type {Record<string, { x: number, y: number }>} */
     this.fxStickScale = {
       square: defaultAxisScales(),
@@ -665,15 +677,33 @@ export class EchoScapeAudioEngine {
     this._watchedCtx = ctx;
     ctx.addEventListener("statechange", () => {
       console.info("[EchoScape audio] AudioContext:", ctx.state);
+      if (ctx.state === "interrupted") this.forgetSpeakerProof();
     });
+  }
+
+  /** True once a proof buffer has finished while the context was running. */
+  speakerProved() {
+    return this._speakerProved;
+  }
+
+  /** The next real press must open the speaker again. */
+  forgetSpeakerProof() {
+    this._speakerProved = false;
+    this._proofPending = false;
+  }
+
+  /** True once, after a failed proof replaced the context and the graph must be rebuilt. */
+  takeGraphRestart() {
+    const restart = this._restartRequested;
+    this._restartRequested = false;
+    return restart;
   }
 
   /** Resume without hanging when autoplay policy blocks the promise. */
   async _safeResume(timeoutMs = 300) {
     if (!this.ctx || this.ctx.state === "running") return;
-    // A resume() before the first gesture sticks some phones in a running
-    // context that never reaches the speaker. Leave it suspended until a tap.
-    if (!this._outputUnlocked && navigator.userActivation?.isActive !== true) return;
+    // Startup must not resume. A resume before the finger spends the gesture.
+    if (!this._speakerProved) return;
     try {
       await Promise.race([
         this.ctx.resume(),
@@ -685,69 +715,136 @@ export class EchoScapeAudioEngine {
   }
 
   async resume() {
-    if (this._kickPromise) await this._kickPromise;
     await this._safeResume(1000);
   }
 
   /**
-   * Open the speaker from a user gesture.
-   * A context that is already running was resumed at launch (or started by the
-   * browser) and stays silent on phones until it is suspended and resumed.
-   * A context that is still suspended must resume on this call stack.
-   * @param {() => void} poke
+   * A short, very quiet buffer. Its end is the proof the audio thread rendered.
+   * Started synchronously from the press. Pure silence can be skipped.
    */
-  _unlockFromGesture(poke) {
+  _primeSpeaker() {
     const ctx = this.ctx;
-    if (!ctx || ctx.state === "closed") return;
-    if (this._outputUnlocked) {
-      if (contextNeedsResume(ctx)) {
-        void ctx.resume().then(() => {
-          if (navigator.userActivation?.isActive) poke();
-        });
+    if (!ctx || ctx.state === "closed" || this._speakerProved) return;
+    const rate = ctx.sampleRate || 44100;
+    const length = Math.max(1, Math.floor(rate * 0.25));
+    const buffer = ctx.createBuffer(1, length, rate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < length; i += 1) {
+      const env = Math.sin((i / (length - 1 || 1)) * Math.PI);
+      data[i] = (Math.random() * 2 - 1) * 0.0008 * env;
+    }
+    const voice = ctx.createBufferSource();
+    voice.buffer = buffer;
+    voice.connect(ctx.destination);
+    const generation = this._proofGeneration + 1;
+    this._proofGeneration = generation;
+    this._proofPending = true;
+    voice.onended = () => {
+      if (generation !== this._proofGeneration) return;
+      this._proofPending = false;
+      if (this._proofTimer != null) {
+        window.clearTimeout(this._proofTimer);
+        this._proofTimer = null;
       }
+      if (this.ctx !== ctx || ctx.state !== "running") return;
+      this._speakerProved = true;
+      this._proofMisses = 0;
+      this._applyProvedOutput();
+      this._restartSuspendedBeds();
+    };
+    try {
+      voice.start(ctx.currentTime);
+    } catch {
+      this._proofPending = false;
       return;
     }
-    this._outputUnlocked = true;
-    poke();
-    if (ctx.state !== "running") {
-      // Still suspended: resume on this stack. iOS ignores a resume that
-      // happens after suspend() resolves.
-      void ctx.resume().then(() => {
-        if (navigator.userActivation?.isActive) poke();
-      });
-      return;
-    }
-    // Already running at the first gesture: the launch resume (or the browser)
-    // left the speaker closed. Suspend and resume, which is what Audio off/on does.
-    this._restartSilentBeds();
-    poke();
-    let kick = ctx
-      .suspend()
-      .catch(() => {})
-      .then(() => {
-        if (this.ctx !== ctx || ctx.state === "closed") return undefined;
-        return ctx.resume();
-      })
-      .then(() => {
-        if (navigator.userActivation?.isActive) poke();
-      });
-    kick = kick.finally(() => {
-      if (this._kickPromise === kick) this._kickPromise = null;
-    });
-    this._kickPromise = kick;
+    if (this._proofTimer != null) window.clearTimeout(this._proofTimer);
+    this._proofTimer = window.setTimeout(() => {
+      this._proofTimer = null;
+      if (generation !== this._proofGeneration || this._speakerProved) return;
+      if (this._fingerDown || this._proofPending) return;
+      if (ctx.state !== "running" || this.ctx !== ctx) return;
+      this._proofMisses += 1;
+      void ctx.suspend().catch(() => {});
+    }, 700);
   }
 
-  /** Media beds that are already "playing" stay silent until play() is called again. */
-  _restartSilentBeds() {
+  /**
+   * Two proofs that never finished: the context is replaced inside this gesture.
+   * The mixer is rebuilt afterward, because nodes cannot move.
+   */
+  _maybeReplaceContext() {
+    if (this._proofMisses < 2 || !this.ctx || this.ctx.state === "closed") return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const old = this.ctx;
+    this._proofMisses = 0;
+    this._speakerProved = false;
+    this._proofPending = false;
+    this.running = false;
+    this.ready = false;
+    this.stems = {};
+    this._pendingEls = {};
+    this.ctx = new AC();
+    this._watchContext(this.ctx);
+    void old.close().catch(() => {});
+    this._restartRequested = true;
+  }
+
+  /** Ask the context to run, and start the proof buffer, on this call stack. */
+  _unlockOnPress() {
+    this._maybeReplaceContext();
+    const ctx = this.ctx;
+    if (!ctx || ctx.state === "closed") return;
+    if (this._speakerProved) {
+      if (contextNeedsResume(ctx)) void ctx.resume();
+      return;
+    }
+    if (contextNeedsResume(ctx)) void ctx.resume();
+    this._primeSpeaker();
+  }
+
+  /**
+   * Finger is up. Retry only if the press never started a proof.
+   * A running context that still has no proof is suspended for the next press.
+   */
+  _unlockOnLift() {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state === "closed" || this._speakerProved) return;
+    if (this._proofPending) return;
+    if (contextNeedsResume(ctx)) {
+      void ctx.resume();
+      this._primeSpeaker();
+      return;
+    }
+    if (ctx.state === "running") {
+      this._proofMisses += 1;
+      void ctx.suspend().catch(() => {});
+    }
+  }
+
+  /** Clear a master event that was written while currentTime was frozen at 0. */
+  _applyProvedOutput() {
+    if (!this._master || !this.ctx) return;
+    const target = this._outputOpen * this._outputAmount;
+    this._master.gain.cancelScheduledValues(this.ctx.currentTime);
+    this._master.gain.value = target;
+  }
+
+  /** Beds started while the context was suspended never sound on iOS. Start them again. */
+  _restartSuspendedBeds() {
     for (const corner of CORNERS) {
-      if (this.stems[corner]?.bedVoice || this.stems[corner]?.notes?.length) continue;
-      const el = this.stems[corner]?.el || this._pendingEls[corner];
-      if (!el || el.paused) continue;
-      try {
-        el.pause();
-      } catch {
-        /* ignore */
+      const stem = this.stems[corner];
+      if (!stem?.bedAwaitingProof) continue;
+      const buffer = stem.bedBuffer;
+      if (!buffer) {
+        stem.bedAwaitingProof = false;
+        continue;
       }
+      const offset = this._bedPosition(stem);
+      stem.bedAwaitingProof = false;
+      this._stopBufferBed(stem);
+      this._adoptBufferBed(corner, buffer, offset);
     }
   }
 
@@ -755,10 +852,12 @@ export class EchoScapeAudioEngine {
    * Start the looping beds during a user gesture.
    * Chrome allows AudioBuffer splashes once the context is running, but it
    * blocks HTML media playback unless play() is called in the gesture itself.
-   * Call this synchronously from pointerdown or keydown, before any await.
-   * @param {boolean} [fromUser] True when called from a pointer or key listener.
+   * Call this synchronously from the press or key, before any await.
+   * `lift` is the backup when the press was ignored. It does not suspend a hold.
+   * @param {boolean} [fromUser]
+   * @param {'press' | 'lift'} [phase]
    */
-  beginGesture(fromUser = false) {
+  beginGesture(fromUser = false, phase = "press") {
     const AC = window.AudioContext || window.webkitAudioContext;
     if ((!this.ctx || this.ctx.state === "closed") && AC) this.ctx = new AC();
     this._watchContext(this.ctx);
@@ -775,39 +874,45 @@ export class EchoScapeAudioEngine {
         if (pending) this._playEl(pending, false);
       }
     };
-    // Only a pointer or key listener counts. userActivation can stay true after
-    // that event, and a resume from there does not open a phone speaker.
     if (!fromUser) {
       poke();
       return;
     }
+    const now = performance.now();
+    if (phase === "lift") {
+      this._fingerDown = false;
+      if (now - this._gestureAt < 700) {
+        if (this._liftHandled) return;
+        this._liftHandled = true;
+      } else {
+        this._gestureAt = now;
+        this._pressPrimed = false;
+        this._liftHandled = true;
+      }
+      poke();
+      this._unlockOnLift();
+      return;
+    }
+    this._fingerDown = true;
+    if (this._pressPrimed && now - this._gestureAt < 700) {
+      poke();
+      return;
+    }
+    this._gestureAt = now;
+    this._pressPrimed = true;
+    this._liftHandled = false;
     poke();
-    this._unlockFromGesture(poke);
+    this._unlockOnPress();
   }
 
   /**
-   * Bring sound back after the page returns to the foreground.
-   * An interrupted or suspended context gets Safari's suspend-then-resume.
+   * The page is visible again. Resume waits for the next real press.
    * A context that stayed running only restarts beds that actually paused.
    */
   async recoverForeground() {
     const ctx = this.ctx;
-    if (!ctx || ctx.state === "closed" || !this._outputUnlocked) return;
-    if (contextNeedsResume(ctx)) {
-      try {
-        await ctx.suspend();
-      } catch {
-        /* an interrupted context may reject suspend */
-      }
-      try {
-        await ctx.resume();
-      } catch {
-        /* the next tap retries */
-      }
-      this.beginGesture();
-      return;
-    }
-    if (ctx.state === "running") this._pokePausedBeds();
+    if (!ctx || ctx.state === "closed") return;
+    if (this._speakerProved && ctx.state === "running") this._pokePausedBeds();
   }
 
   /** Restart bed elements that stopped while the context kept running. */
@@ -905,7 +1010,8 @@ export class EchoScapeAudioEngine {
   _playEl(el, audible) {
     if (!el) return;
     el.muted = false;
-    if (audible) el.volume = 1;
+    // The ringer switch mutes element output. Phones hear the buffer voice only.
+    if (audible && !isCoarseTouch()) el.volume = 1;
     if (!el.paused) return;
     const pending = el.play();
     if (pending && typeof pending.catch === "function") pending.catch(() => {});
@@ -958,7 +1064,7 @@ export class EchoScapeAudioEngine {
       const stem = this.stems[corner];
       if (!stem?.el || stem.bedVoice || stem.notes?.length) return;
       stem.el.muted = false;
-      stem.el.volume = 1;
+      if (!isCoarseTouch()) stem.el.volume = 1;
       if (stem.el.paused) {
         await stem.el.play();
       }
@@ -1015,6 +1121,7 @@ export class EchoScapeAudioEngine {
     this._fxWam = {};
     this._fxInsertIn = {};
     this._fxStickParams = {};
+    this._fxParamState = {};
     this._viewLp = null;
     this._brightDry = null;
     this._brightWet = null;
@@ -1458,14 +1565,38 @@ export class EchoScapeAudioEngine {
     return assigned;
   }
 
+  _snapshotParamModel(button) {
+    const model = this._fxParamState?.[button];
+    if (!model?.path) return;
+    if (!this._fxParamSaved[button] || typeof this._fxParamSaved[button] !== "object") {
+      this._fxParamSaved[button] = {};
+    }
+    this._fxParamSaved[button][model.path] = {
+      ranges: model.ranges,
+      axes: model.axes,
+      switches: model.switches,
+    };
+  }
+
+  _applyFxParams(button) {
+    const fx = this.fx?.[button];
+    if (!fx?.apply || this.fxAssignment?.[button]?.kind !== "wam") return;
+    try {
+      fx.apply(Number(mixerController.rawX) || 0, Number(mixerController.rawY) || 0);
+    } catch {
+      /* ignore */
+    }
+  }
+
   /**
-   * Persist current face FX assignments + stick scales as the next-session defaults.
+   * Persist current face FX assignments and per-plugin parameter windows.
    * Switching to X / Cross does not call this — muting leaves prefs intact.
    */
   _persistFxPrefs() {
     const assignments = {};
-    const scales = {};
+    const paramUi = {};
     for (const slot of FX_PICK_SLOTS) {
+      this._snapshotParamModel(slot);
       const assigned = this.fxAssignment?.[slot];
       if (assigned?.kind === "wam" && assigned.path) {
         assignments[slot] = {
@@ -1482,29 +1613,30 @@ export class EchoScapeAudioEngine {
           label: native.label,
         };
       }
-      scales[slot] = normalizeAxisScales(this.fxStickScale?.[slot]);
+      paramUi[slot] = this._fxParamSaved[slot] || {};
     }
     const face = FX_IDS.includes(this.activeFx)
       ? this.activeFx
       : mixerController.activeFx || "cross";
     saveFxPrefs({
       assignments,
-      scales,
+      paramUi,
       activeFx: face,
     });
   }
 
   /**
-   * Apply saved WAM / scale prefs after native FX graph is built.
+   * Apply saved WAM assignments and parameter windows after the native FX graph is built.
    * Each face keeps its own assignment; only the active face is audible.
    */
   async _restoreFxPrefs() {
     const prefs = loadFxPrefs();
     if (!prefs) return;
 
-    for (const slot of FX_PICK_SLOTS) {
-      if (prefs.scales?.[slot] != null) {
-        this.fxStickScale[slot] = normalizeAxisScales(prefs.scales[slot]);
+    if (prefs.paramUi && typeof prefs.paramUi === "object") {
+      for (const slot of FX_PICK_SLOTS) {
+        const bag = prefs.paramUi[slot];
+        this._fxParamSaved[slot] = bag && typeof bag === "object" ? bag : {};
       }
     }
 
@@ -1546,9 +1678,6 @@ export class EchoScapeAudioEngine {
     console.info("[EchoScape audio] restored FX prefs", {
       restored,
       face,
-      scales: Object.fromEntries(
-        restored.map((slot) => [slot, this.fxStickScale[slot]])
-      ),
     });
   }
 
@@ -1567,6 +1696,8 @@ export class EchoScapeAudioEngine {
     const slot = this.fx[button];
     const insertIn = this._fxInsertIn[button];
     if (!slot || !insertIn || !this.ctx) throw new Error(`FX slot ${button} not built`);
+
+    this._snapshotParamModel(button);
 
     // Tear down current insert (WAM or native chain).
     await this._destroySlotWam(button);
@@ -1592,25 +1723,23 @@ export class EchoScapeAudioEngine {
         insertIn.connect(wamNode);
         wamNode.connect(slot.out);
         this._fxWam[button] = instance;
-        const binding = resolveStickBinding(path);
-        if (!binding) {
+        let listed = [];
+        try {
+          listed = await listWamParams(wamNode, instance, path);
+        } catch (err) {
           console.warn(
-            `[EchoScape audio] no stick map for ${path} — edit public/wam-stick-maps.js`
+            `[EchoScape audio] parameter list failed for ${path}:`,
+            err?.message || err
           );
         }
-        this._fxStickParams[button] = binding;
-        applyWamDefaults(wamNode, binding);
-        this.fxStickScale[button] = normalizeAxisScales(this.fxStickScale[button]);
+        const saved = this._fxParamSaved?.[button]?.[path] || null;
+        const model = createParamModel(listed, saved, path);
+        this._fxParamState[button] = model;
+        this._fxStickParams[button] = null;
         slot.apply = (stickX, stickY) => {
-          applyStickToWamParams(
-            wamNode,
-            this._fxStickParams[button],
-            stickX,
-            stickY,
-            this.fxStickScale[button] || defaultAxisScales()
-          );
+          applyWamControls(wamNode, this._fxParamState[button], stickX, stickY);
         };
-        slot.apply(0, 0);
+        slot.apply(Number(mixerController.rawX) || 0, Number(mixerController.rawY) || 0);
         this.fxAssignment[button] = {
           id: choice.id,
           label: choice.label || path,
@@ -1620,12 +1749,7 @@ export class EchoScapeAudioEngine {
         if (button === "circle") this.circleFxMode = "wam";
         console.info(
           `[EchoScape audio] ${button} FX → ${choice.label || path} (WAM)`,
-          binding
-            ? {
-                x: binding.x.map((p) => p.label || p.id),
-                y: binding.y.map((p) => p.label || p.id),
-              }
-            : "(no map)"
+          `${listed.length} params`
         );
         const shouldActivate = opts.activate !== false;
         if (shouldActivate) {
@@ -1650,6 +1774,7 @@ export class EchoScapeAudioEngine {
 
     // Native
     this._fxStickParams[button] = null;
+    this._fxParamState[button] = null;
     const native = slot.rebuildNative?.() || this._wireFallbackNative(button, insertIn, slot.out);
     slot.apply = native.apply;
     slot.teardownNative = native.teardown;
@@ -1706,6 +1831,67 @@ export class EchoScapeAudioEngine {
 
   getFxStickParams(button) {
     return this._fxStickParams?.[button] || null;
+  }
+
+  getFxParamModel(button) {
+    return this._fxParamState?.[button] || null;
+  }
+
+  /**
+   * @param {string} button
+   * @param {string} id
+   * @param {number} low
+   * @param {number} high
+   * @param {{ persist?: boolean }} [opts]
+   */
+  setFxParamRange(button, id, low, high, opts = {}) {
+    const model = this._fxParamState?.[button];
+    const param = model?.params?.find((p) => p.id === id);
+    if (!param || param.type !== "float") return;
+    let lo = Number(low);
+    let hi = Number(high);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+    lo = Math.min(param.max, Math.max(param.min, lo));
+    hi = Math.min(param.max, Math.max(param.min, hi));
+    if (hi < lo) {
+      const swap = lo;
+      lo = hi;
+      hi = swap;
+    }
+    model.ranges[id] = { low: lo, high: hi };
+    this._applyFxParams(button);
+    if (opts.persist !== false) this._persistFxPrefs();
+  }
+
+  /**
+   * @param {string} button
+   * @param {string} id
+   * @param {'x'|'y'|null} axis
+   */
+  setFxParamAxis(button, id, axis) {
+    const model = this._fxParamState?.[button];
+    const param = model?.params?.find((p) => p.id === id);
+    if (!param || param.type !== "float") return;
+    model.axes[id] = axis === "x" || axis === "y" ? axis : null;
+    this._applyFxParams(button);
+    this._persistFxPrefs();
+  }
+
+  /**
+   * @param {string} button
+   * @param {string} id
+   * @param {number} value
+   */
+  setFxParamSwitch(button, id, value) {
+    const model = this._fxParamState?.[button];
+    const param = model?.params?.find((p) => p.id === id);
+    if (!param || (param.type !== "boolean" && param.type !== "choice")) return;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return;
+    const clamped = Math.min(param.max, Math.max(param.min, n));
+    model.switches[id] = param.type === "boolean" ? (clamped >= 0.5 ? 1 : 0) : Math.round(clamped);
+    this._applyFxParams(button);
+    this._persistFxPrefs();
   }
 
   _wireFallbackNative(button, insertIn, out) {
@@ -1814,7 +2000,8 @@ export class EchoScapeAudioEngine {
       typeof opts.initialGain === "number" ? opts.initialGain : weights[corner] ?? 0;
     gain.gain.value = initialGain;
     pan.pan.value = 0;
-    source.connect(gain);
+    // A media element in the graph follows the ringer switch. Buffer beds do not.
+    if (!isCoarseTouch()) source.connect(gain);
     gain.connect(mono);
     mono.connect(pan);
     pan.connect(weightLp);
@@ -1941,7 +2128,7 @@ export class EchoScapeAudioEngine {
     };
     this._primeStrikeBuffer(corner, url);
 
-    el.volume = 1;
+    if (!isCoarseTouch()) el.volume = 1;
     if (opts.resume !== false && (this.running || navigator.userActivation?.isActive)) {
       try {
         el.muted = false;
@@ -2013,7 +2200,11 @@ export class EchoScapeAudioEngine {
     const target = this._outputOpen * amount;
     const t = this.ctx.currentTime;
     this._master.gain.cancelScheduledValues(t);
-    // Callers close this only once beds, tails, and splashes are already quiet.
+    // Until the speaker is proved, currentTime stays 0 and a scheduled event sticks.
+    if (!this._speakerProved) {
+      this._master.gain.value = target;
+      return;
+    }
     this._master.gain.setValueAtTime(target, t);
   }
 
@@ -2464,6 +2655,8 @@ export class EchoScapeAudioEngine {
     stem.bedBuffer = buffer;
     stem.bedStartedAt = when;
     stem.bedOffset = pos;
+    // A start() while the context is suspended is discarded. Start once more after proof.
+    stem.bedAwaitingProof = !this._speakerProved || this.ctx.state !== "running";
     voice.onended = () => {
       if (stem.bedVoice !== voice) return;
       stem.bedVoice = null;

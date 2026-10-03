@@ -1,32 +1,61 @@
 /**
- * Phone launch: the context can be "running" while the speaker stays closed.
- * Output opens only after suspend() inside a tap or key press, then resume().
- * That is the Settings → Audio off → on workaround.
+ * Safari on a phone: the speaker stays closed until resume() or a buffer
+ * start runs inside a trusted gesture. A buffer started before that is discarded.
+ * An untrusted event does not count. userActivation alone does not count.
+ * Depth stays up through the event's microtasks. A later macrotask releases it.
  */
 (() => {
+  const coarseQuery = (query) => String(query).includes("pointer") && String(query).includes("coarse");
+  const nativeMatch = window.matchMedia.bind(window);
+  window.matchMedia = (query) => {
+    if (coarseQuery(query)) {
+      return {
+        matches: true,
+        media: String(query),
+        onchange: null,
+        addListener() {},
+        removeListener() {},
+        addEventListener() {},
+        removeEventListener() {},
+        dispatchEvent() {
+          return false;
+        },
+      };
+    }
+    return nativeMatch(query);
+  };
+  try {
+    Object.defineProperty(navigator, "maxTouchPoints", { configurable: true, get: () => 5 });
+  } catch {
+    /* already defined */
+  }
+
   const Native = window.AudioContext || window.webkitAudioContext;
   const origResume = Native.prototype.resume;
-  const origSuspend = Native.prototype.suspend;
+  const origStart = AudioBufferSourceNode.prototype.start;
   const origConnect = AudioNode.prototype.connect;
   const contexts = [];
   let depth = 0;
 
-  const arm = () => {
-    depth += 1;
-  };
-  const disarm = () => {
-    depth = Math.max(0, depth - 1);
-  };
-  window.addEventListener("pointerdown", arm, true);
-  window.addEventListener("keydown", arm, true);
-  window.addEventListener("pointerup", disarm, true);
-  window.addEventListener("pointercancel", disarm, true);
-  window.addEventListener("keyup", disarm, true);
+  const gestureTypes = ["touchstart", "pointerdown", "touchend", "click", "keydown"];
+  for (const type of gestureTypes) {
+    window.addEventListener(
+      type,
+      (event) => {
+        if (event.isTrusted !== true) return;
+        depth += 1;
+        setTimeout(() => {
+          depth = Math.max(0, depth - 1);
+        }, 0);
+      },
+      true
+    );
+  }
 
   function meta(ctx) {
     let row = ctx.__launchMeta;
     if (!row) {
-      row = { live: false, kickArmed: false, gate: null, analyser: null };
+      row = { live: false, gate: null, analyser: null };
       ctx.__launchMeta = row;
       contexts.push(ctx);
     }
@@ -36,20 +65,30 @@
   function openGate(ctx) {
     const row = meta(ctx);
     row.live = true;
-    row.kickArmed = false;
     if (row.gate) row.gate.gain.value = 1;
   }
 
-  Native.prototype.suspend = function () {
-    const row = meta(this);
-    if (depth > 0) row.kickArmed = true;
-    return origSuspend.call(this);
-  };
-
   Native.prototype.resume = function () {
     const pending = origResume.call(this);
-    if (meta(this).kickArmed) openGate(this);
+    if (depth > 0) openGate(this);
     return pending;
+  };
+
+  AudioBufferSourceNode.prototype.start = function (...args) {
+    const row = meta(this.context);
+    const allowed = depth > 0 || (row.live && this.context.state === "running");
+    if (depth > 0) openGate(this.context);
+    if (!allowed) {
+      try {
+        this.disconnect();
+      } catch {
+        /* not connected yet */
+      }
+      const silent = this.context.createGain();
+      silent.gain.value = 0;
+      origConnect.call(this, silent);
+    }
+    return origStart.apply(this, args);
   };
 
   AudioNode.prototype.connect = function (dest, ...rest) {
@@ -89,7 +128,6 @@
       ready: true,
       state: ctx.state,
       live: row.live,
-      kickArmed: row.kickArmed,
       rms,
       detail: document.querySelector("[data-audio-detail]")?.textContent || "",
       health: document.querySelector("[data-audio-health]")?.textContent || "",

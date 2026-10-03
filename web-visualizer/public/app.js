@@ -1,11 +1,11 @@
 import { notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=83";
+import { audioEngine } from "./audio-engine.js?v=84";
 import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=25";
-import * as fallingTab from "./falling-tab.js?v=80";
-import * as visualizeTab from "./visualize-tab.js?v=15";
+import * as diagnostics from "./diagnostics.js?v=26";
+import * as fallingTab from "./falling-tab.js?v=81";
+import * as visualizeTab from "./visualize-tab.js?v=16";
 
 const statusEl = document.querySelector(".status");
 const audioHealthEl = document.querySelector("[data-audio-health]");
@@ -116,6 +116,7 @@ function audioKindLabel() {
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return "Audio off";
   if (audioStarting) return "Loading audio";
   if (!audioEngine.running) return "Audio off";
+  if (audioEngine.ctx && !audioEngine.speakerProved()) return "Tap for audio";
   const state = audioEngine.ctx?.state;
   if (state === "suspended") return "Audio paused";
   if (state === "interrupted") return "Audio interrupted";
@@ -231,15 +232,26 @@ function enqueueAudio(task) {
   return run;
 }
 
-function unlockBedsFromGesture() {
+function unlockBedsFromGesture(event, phase) {
+  if (!event.isTrusted) return;
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return;
-  audioEngine.beginGesture(true);
+  audioEngine.beginGesture(true, phase);
+  if (audioEngine.takeGraphRestart()) void ensureBrowserAudio();
 }
 
-document.addEventListener("pointerdown", unlockBedsFromGesture, true);
-document.addEventListener("keydown", unlockBedsFromGesture, true);
+document.addEventListener("touchstart", (event) => unlockBedsFromGesture(event, "press"), true);
+document.addEventListener("pointerdown", (event) => unlockBedsFromGesture(event, "press"), true);
+document.addEventListener("keydown", (event) => unlockBedsFromGesture(event, "press"), true);
+document.addEventListener("touchend", (event) => unlockBedsFromGesture(event, "lift"), true);
+document.addEventListener("click", (event) => unlockBedsFromGesture(event, "lift"), true);
+window.addEventListener("pagehide", () => {
+  audioEngine.forgetSpeakerProof();
+});
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "visible") return;
+  if (document.visibilityState !== "visible") {
+    audioEngine.forgetSpeakerProof();
+    return;
+  }
   if (!audioShouldBeAudible()) return;
   void audioEngine.recoverForeground();
 });

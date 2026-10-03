@@ -13,16 +13,11 @@ import {
   state,
   STEM_CORNERS,
 } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=83";
+import { audioEngine } from "./audio-engine.js?v=84";
 import { DualsenseHid } from "./dualsense-hid.js?v=5";
 import { openStemDropdown } from "./sample-picker.js?v=18";
 import { openFxDropdown } from "./fx-picker.js?v=5";
-import {
-  DEFAULT_STICK_SCALE,
-  STICK_SCALE_STEP,
-  STICK_SCALE_MIN,
-} from "./wam-catalog.js?v=5";
-import { stickMultiplier } from "./wam-host.js?v=9";
+import { paramSentValue } from "./wam-host.js?v=10";
 
 const root = document.querySelector('[data-panel="diagnostics"]');
 const pad = root?.querySelector("[data-pad]");
@@ -146,145 +141,333 @@ export function updateFxPluginState() {
   }
 }
 
-export function syncFxLabelsFromEngine() {
-  if (!audioEngine.running) return;
-  setFxName("cross", "WAM Off");
-  for (const slot of ["square", "triangle", "circle"]) {
+const FX_PICK_SLOTS = ["square", "triangle", "circle"];
+let fxParamsKey = "";
+
+function fmtParam(n) {
+  if (!Number.isFinite(n)) return "—";
+  const abs = Math.abs(n);
+  if (abs >= 100) return n.toFixed(0);
+  if (abs >= 10) return n.toFixed(1);
+  return n.toFixed(2);
+}
+
+function stickSummary(model) {
+  const names = (axis) =>
+    (model?.params || []).filter((p) => model.axes?.[p.id] === axis).map((p) => p.label);
+  const x = names("x");
+  const y = names("y");
+  return `X · ${x.join(" + ") || "—"}    Y · ${y.join(" + ") || "—"}`;
+}
+
+function paintStickSummaries() {
+  for (const slot of FX_PICK_SLOTS) {
+    const el = root?.querySelector(`[data-fx-summary="${slot}"]`);
+    if (!el) continue;
     const assigned = audioEngine.fxAssignment?.[slot];
-    const scaleWraps = root?.querySelectorAll(`[data-fx-scale-wrap="${slot}"]`) ?? [];
-    const xLabel = root?.querySelector(`[data-fx-x-label="${slot}"]`);
-    const yLabel = root?.querySelector(`[data-fx-y-label="${slot}"]`);
-    const isWam = assigned?.kind === "wam";
-    for (const wrap of scaleWraps) {
-      wrap.hidden = !isWam;
-    }
-    if (isWam) {
-      for (const axis of ["x", "y"]) {
-        const scaleInput = root?.querySelector(
-          `[data-fx-scale="${slot}"][data-fx-scale-axis="${axis}"]`
-        );
-        if (scaleInput && document.activeElement !== scaleInput) {
-          scaleInput.value = String(audioEngine.getFxStickScale(slot, axis));
-        }
-      }
-      const binding = audioEngine.getFxStickParams(slot);
-      const xNames = Array.isArray(binding?.x)
-        ? binding.x.map((p) => p.label || p.id)
-        : [];
-      const yNames = Array.isArray(binding?.y)
-        ? binding.y.map((p) => p.label || p.id)
-        : [];
-      if (xLabel) {
-        xLabel.textContent = xNames.length ? `X · ${xNames.join(" + ")}` : "Stick X";
-      }
-      if (yLabel) {
-        yLabel.textContent = yNames.length ? `Y · ${yNames.join(" + ")}` : "Stick Y";
-      }
-      setFxName(slot, assigned.label);
-    } else if (assigned?.label) {
-      if (xLabel) xLabel.textContent = "Stick X";
-      if (yLabel) yLabel.textContent = "Stick Y";
-      setFxName(slot, assigned.label);
-    }
+    const text = assigned?.kind === "wam" ? stickSummary(audioEngine.getFxParamModel(slot)) : "X · —    Y · —";
+    if (el.textContent !== text) el.textContent = text;
   }
 }
 
-function clampStickScale(n) {
-  const v = Math.round((Number(n) || DEFAULT_STICK_SCALE) * 10) / 10;
-  if (!Number.isFinite(v)) return DEFAULT_STICK_SCALE;
-  return Math.max(STICK_SCALE_MIN, v);
+function paintParamSent() {
+  const list = root?.querySelector("[data-fx-params]");
+  if (!list || list.hidden) return;
+  const slot = controller.activeFx;
+  const model = audioEngine.getFxParamModel(slot);
+  if (!model) return;
+  const stickX = Number(controller.rawX) || 0;
+  const stickY = Number(controller.rawY) || 0;
+  for (const row of list.querySelectorAll("[data-fx-param]")) {
+    const param = model.params.find((p) => p.id === row.dataset.fxParam);
+    if (!param) continue;
+    if (param.type === "float") {
+      const armed = model.axes?.[param.id] === "x" || model.axes?.[param.id] === "y";
+      const nextArmed = armed ? "true" : "false";
+      if (row.dataset.armed !== nextArmed) row.dataset.armed = nextArmed;
+    }
+    const sent = row.querySelector("[data-fx-sent]");
+    if (!sent) continue;
+    const text = sentText(param, model, stickX, stickY);
+    if (sent.textContent !== text) sent.textContent = text;
+  }
 }
 
-function setStickScaleUi(slot, axis, value) {
-  if (axis !== "x" && axis !== "y") return;
-  const next = clampStickScale(value);
-  audioEngine.setFxStickScale(slot, axis, next);
-  const input = root?.querySelector(
-    `[data-fx-scale="${slot}"][data-fx-scale-axis="${axis}"]`
-  );
-  if (input) input.value = String(next);
+function sentText(param, model, stickX, stickY) {
+  const value = paramSentValue(param, model, stickX, stickY);
+  if (param.type === "boolean") return value >= 0.5 ? "On" : "Off";
+  if (param.type === "choice") {
+    const index = Math.round(value - param.min);
+    return param.choices[index] || fmtParam(value);
+  }
+  return fmtParam(value);
 }
 
-/** Hold a button to keep firing `step` until release (or leave / cancel). */
-function bindHoldRepeat(button, step, { delayMs = 350, intervalMs = 60 } = {}) {
-  if (!button) return;
-  let delayId = 0;
-  let intervalId = 0;
+function paintRange(track, param, range) {
+  const span = param.max - param.min || 1;
+  const lowPct = ((range.low - param.min) / span) * 100;
+  const highPct = ((range.high - param.min) / span) * 100;
+  const midPct = (lowPct + highPct) / 2;
+  const fill = track.querySelector("[data-span]");
+  const mid = track.querySelector("[data-mid]");
+  const lowThumb = track.querySelector('[data-thumb="low"]');
+  const highThumb = track.querySelector('[data-thumb="high"]');
+  if (fill) {
+    fill.style.left = `${lowPct}%`;
+    fill.style.width = `${Math.max(0, highPct - lowPct)}%`;
+  }
+  if (mid) mid.style.left = `${midPct}%`;
+  if (lowThumb) lowThumb.style.left = `${lowPct}%`;
+  if (highThumb) highThumb.style.left = `${highPct}%`;
+}
 
-  const stop = () => {
-    if (delayId) {
-      clearTimeout(delayId);
-      delayId = 0;
-    }
-    if (intervalId) {
-      clearInterval(intervalId);
-      intervalId = 0;
-    }
+function bindRange(host, slot, param) {
+  const track = host.querySelector(".fx-range-track");
+  if (!track) return;
+  let drag = null;
+
+  const valueAt = (clientX) => {
+    const rect = track.getBoundingClientRect();
+    const t = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
+    const u = Math.min(1, Math.max(0, t));
+    return param.min + u * (param.max - param.min);
   };
 
-  button.addEventListener("pointerdown", (event) => {
-    if (event.button != null && event.button !== 0) return;
+  const current = () => audioEngine.getFxParamModel(slot)?.ranges?.[param.id];
+
+  track.addEventListener("pointerdown", (event) => {
+    const thumb = event.target.closest("[data-thumb]");
+    const onSpan = event.target.closest("[data-span]");
+    const range = current();
+    if (!range) return;
+    if (thumb) drag = { kind: thumb.dataset.thumb, pointerId: event.pointerId };
+    else if (onSpan) {
+      drag = {
+        kind: "span",
+        pointerId: event.pointerId,
+        originX: event.clientX,
+        low: range.low,
+        high: range.high,
+      };
+    } else return;
     event.preventDefault();
     event.stopPropagation();
-    stop();
-    step();
-    delayId = setTimeout(() => {
-      delayId = 0;
-      intervalId = setInterval(step, intervalMs);
-    }, delayMs);
     try {
-      button.setPointerCapture(event.pointerId);
+      track.setPointerCapture(event.pointerId);
     } catch {
       /* ignore */
     }
   });
 
-  button.addEventListener("pointerup", stop);
-  button.addEventListener("pointercancel", stop);
-  button.addEventListener("lostpointercapture", stop);
-  button.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
+  track.addEventListener("pointermove", (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const range = current();
+    if (!range) return;
+    if (drag.kind === "low") {
+      audioEngine.setFxParamRange(slot, param.id, Math.min(valueAt(event.clientX), range.high), range.high, {
+        persist: false,
+      });
+    } else if (drag.kind === "high") {
+      audioEngine.setFxParamRange(slot, param.id, range.low, Math.max(valueAt(event.clientX), range.low), {
+        persist: false,
+      });
+    } else if (drag.kind === "span") {
+      const rect = track.getBoundingClientRect();
+      const dx = rect.width > 0 ? ((event.clientX - drag.originX) / rect.width) * (param.max - param.min) : 0;
+      const width = drag.high - drag.low;
+      let low = drag.low + dx;
+      let high = drag.high + dx;
+      if (low < param.min) {
+        low = param.min;
+        high = param.min + width;
+      }
+      if (high > param.max) {
+        high = param.max;
+        low = param.max - width;
+      }
+      audioEngine.setFxParamRange(slot, param.id, low, high, { persist: false });
+    }
+    const next = current();
+    if (next) paintRange(track, param, next);
+    paintParamSent();
   });
+
+  const end = (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    drag = null;
+    const range = current();
+    if (range) audioEngine.setFxParamRange(slot, param.id, range.low, range.high, { persist: true });
+  };
+  track.addEventListener("pointerup", end);
+  track.addEventListener("pointercancel", end);
 }
 
-function bindStickScaleControls() {
-  for (const slot of ["square", "triangle", "circle"]) {
-    for (const axis of ["x", "y"]) {
-      const wrap = root?.querySelector(
-        `[data-fx-scale-wrap="${slot}"][data-fx-scale-axis="${axis}"]`
-      );
-      const input = root?.querySelector(
-        `[data-fx-scale="${slot}"][data-fx-scale-axis="${axis}"]`
-      );
-      const dec = root?.querySelector(
-        `[data-fx-scale-dec="${slot}"][data-fx-scale-axis="${axis}"]`
-      );
-      const inc = root?.querySelector(
-        `[data-fx-scale-inc="${slot}"][data-fx-scale-axis="${axis}"]`
-      );
-      if (wrap) {
-        wrap.addEventListener("click", (event) => event.stopPropagation());
-        wrap.addEventListener("pointerdown", (event) => event.stopPropagation());
-      }
-      if (input) {
-        input.addEventListener("change", () => setStickScaleUi(slot, axis, input.value));
-        input.addEventListener("keydown", (event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            setStickScaleUi(slot, axis, input.value);
-            input.blur();
-          }
-        });
-      }
-      bindHoldRepeat(dec, () => {
-        setStickScaleUi(slot, axis, audioEngine.getFxStickScale(slot, axis) - STICK_SCALE_STEP);
-      });
-      bindHoldRepeat(inc, () => {
-        setStickScaleUi(slot, axis, audioEngine.getFxStickScale(slot, axis) + STICK_SCALE_STEP);
-      });
-    }
+function syncAxisButtons(row, axis) {
+  for (const button of row.querySelectorAll("[data-fx-axis]")) {
+    button.setAttribute("aria-pressed", button.dataset.fxAxis === axis ? "true" : "false");
   }
+}
+
+function buildParamRow(slot, param, model) {
+  const row = document.createElement("div");
+  row.className = "fx-param";
+  row.dataset.fxParam = param.id;
+  const armed = model.axes?.[param.id] === "x" || model.axes?.[param.id] === "y";
+  row.dataset.armed = param.type !== "float" || armed ? "true" : "false";
+
+  const label = document.createElement("p");
+  label.className = "fx-param-label";
+  label.textContent = param.label;
+  label.title = param.label;
+  row.append(label);
+
+  if (param.type === "float") {
+    const range = document.createElement("div");
+    range.className = "fx-range";
+    const track = document.createElement("div");
+    track.className = "fx-range-track";
+    const fill = document.createElement("div");
+    fill.className = "fx-range-span";
+    fill.dataset.span = "";
+    const mid = document.createElement("div");
+    mid.className = "fx-range-mid";
+    mid.dataset.mid = "";
+    const lowThumb = document.createElement("button");
+    lowThumb.type = "button";
+    lowThumb.className = "fx-range-thumb";
+    lowThumb.dataset.thumb = "low";
+    lowThumb.setAttribute("aria-label", `${param.label} low`);
+    const highThumb = document.createElement("button");
+    highThumb.type = "button";
+    highThumb.className = "fx-range-thumb";
+    highThumb.dataset.thumb = "high";
+    highThumb.setAttribute("aria-label", `${param.label} high`);
+    track.append(fill, mid, lowThumb, highThumb);
+    range.append(track);
+    row.append(range);
+    const bounds = model.ranges?.[param.id] || { low: param.min, high: param.max };
+    paintRange(range, param, bounds);
+    bindRange(range, slot, param);
+  } else if (param.type === "choice") {
+    const select = document.createElement("select");
+    select.className = "fx-choice";
+    const choices = param.choices.length
+      ? param.choices
+      : Array.from({ length: Math.round(param.max - param.min) + 1 }, (_, i) => String(param.min + i));
+    choices.forEach((choice, index) => {
+      const option = document.createElement("option");
+      option.value = String(param.min + index);
+      option.textContent = choice;
+      select.append(option);
+    });
+    select.value = String(model.switches?.[param.id] ?? param.def);
+    select.addEventListener("change", () => {
+      audioEngine.setFxParamSwitch(slot, param.id, Number(select.value));
+      paintParamSent();
+    });
+    select.addEventListener("pointerdown", (event) => event.stopPropagation());
+    row.append(select);
+  } else {
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "fx-bool";
+    const on = (model.switches?.[param.id] ?? 0) >= 0.5;
+    toggle.setAttribute("aria-pressed", on ? "true" : "false");
+    toggle.textContent = on ? "On" : "Off";
+    toggle.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const next = toggle.getAttribute("aria-pressed") !== "true";
+      toggle.setAttribute("aria-pressed", next ? "true" : "false");
+      toggle.textContent = next ? "On" : "Off";
+      audioEngine.setFxParamSwitch(slot, param.id, next ? 1 : 0);
+      paintParamSent();
+    });
+    row.append(toggle);
+  }
+
+  const sent = document.createElement("p");
+  sent.className = "fx-param-sent";
+  sent.dataset.fxSent = "";
+  sent.textContent = sentText(
+    param,
+    model,
+    Number(controller.rawX) || 0,
+    Number(controller.rawY) || 0
+  );
+  row.append(sent);
+
+  if (param.type === "float") {
+    const axes = document.createElement("div");
+    axes.className = "fx-param-axes";
+    for (const axis of ["x", "y"]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "fx-axis-sw";
+      button.dataset.fxAxis = axis;
+      button.textContent = axis.toUpperCase();
+      button.setAttribute("aria-pressed", model.axes?.[param.id] === axis ? "true" : "false");
+      button.setAttribute("aria-label", `Assign ${param.label} to stick ${axis.toUpperCase()}`);
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const live = audioEngine.getFxParamModel(slot);
+        const current = live?.axes?.[param.id] || null;
+        const next = current === axis ? null : axis;
+        audioEngine.setFxParamAxis(slot, param.id, next);
+        syncAxisButtons(row, next);
+        row.dataset.armed = next ? "true" : "false";
+        paintStickSummaries();
+        paintParamSent();
+      });
+      axes.append(button);
+    }
+    row.append(axes);
+  }
+
+  return row;
+}
+
+function ensureParamList() {
+  const host = root?.querySelector("[data-fx-params]");
+  if (!host) return;
+  const slot = controller.activeFx;
+  const assigned = audioEngine.fxAssignment?.[slot];
+  const model = assigned?.kind === "wam" ? audioEngine.getFxParamModel(slot) : null;
+  const key = model ? `${slot}|${model.path}|${model.params.map((p) => p.id).join("\n")}` : "";
+  if (!model) {
+    host.hidden = true;
+    host.replaceChildren();
+    fxParamsKey = "";
+    return;
+  }
+  host.hidden = false;
+  if (key === fxParamsKey) return;
+  fxParamsKey = key;
+  host.replaceChildren();
+  const head = document.createElement("h3");
+  head.className = "fx-params-head";
+  head.textContent = `${fxButtonLabels[slot] || slot} · ${assigned.label || model.path}`;
+  host.append(head);
+  if (!model.params.length) {
+    const empty = document.createElement("p");
+    empty.className = "fx-params-empty";
+    empty.textContent = "This plugin did not report parameters.";
+    host.append(empty);
+    return;
+  }
+  for (const param of model.params) host.append(buildParamRow(slot, param, model));
+}
+
+export function syncFxLabelsFromEngine() {
+  if (!audioEngine.running) return;
+  setFxName("cross", "WAM Off");
+  for (const slot of FX_PICK_SLOTS) {
+    const assigned = audioEngine.fxAssignment?.[slot];
+    if (assigned?.label) setFxName(slot, assigned.label);
+  }
+  paintStickSummaries();
+  ensureParamList();
 }
 
 async function assignFxPlugin(slot, choice) {
@@ -414,16 +597,12 @@ export function renderDiagnostics() {
     card.dataset.on = key === controller.activeFx ? "true" : "";
     const fxXEl = card.querySelector("[data-fx-x]");
     const fxYEl = card.querySelector("[data-fx-y]");
-    if (audioEngine.fxAssignment?.[key]?.kind === "wam") {
-      const maxX = audioEngine.getFxStickScale(key, "x");
-      const maxY = audioEngine.getFxStickScale(key, "y");
-      if (fxXEl) fxXEl.textContent = fmt(stickMultiplier(controller.rawX, maxX));
-      if (fxYEl) fxYEl.textContent = fmt(stickMultiplier(controller.rawY, maxY));
-    } else {
-      if (fxXEl) fxXEl.textContent = fmt(controller.fx[key].x);
-      if (fxYEl) fxYEl.textContent = fmt(controller.fx[key].y);
-    }
+    if (fxXEl) fxXEl.textContent = fmt(controller.fx[key].x);
+    if (fxYEl) fxYEl.textContent = fmt(controller.fx[key].y);
   }
+  ensureParamList();
+  paintStickSummaries();
+  paintParamSent();
 
   if (stickRawXEl) stickRawXEl.textContent = fmt(controller.rawX);
   if (stickRawYEl) stickRawYEl.textContent = fmt(controller.rawY);
@@ -706,7 +885,6 @@ export function initDiagnostics(nextDeps) {
   }
   bindUiShoulder(l1El, "l1");
   bindUiShoulder(r1El, "r1");
-  bindStickScaleControls();
   bindPad();
 
   if (dsConnectBtn) {
