@@ -3,7 +3,7 @@ import { audioEngine } from "./audio-engine.js?v=80";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=57";
+import { fallingInput } from "./falling-input.js?v=58";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -1957,10 +1957,17 @@ function buildPalette() {
     glyph.className = "falling-material-glyph";
     glyph.innerHTML = materialGlyph(mat.id);
     btn.append(glyph);
-    btn.addEventListener("click", (event) => {
+    // pointerdown so a second finger can switch materials while Emit is held.
+    // A click often never arrives for that extra contact.
+    const pick = (event) => {
       event.stopPropagation();
       setActiveMaterial(mat.id);
+    };
+    btn.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      pick(event);
     });
+    btn.addEventListener("click", pick);
     paletteEl.appendChild(btn);
   }
   for (const line of document.querySelectorAll(".falling-about-materials [data-material]")) {

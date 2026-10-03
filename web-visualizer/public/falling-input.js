@@ -522,6 +522,9 @@ export class FallingInput {
    */
   _onBlockBrowserGesture(event) {
     if (!event.cancelable) return;
+    // A material tap must still click while Emit is held. Claiming it here
+    // suppresses that tap, and the pour would stay on the old material.
+    if (isMaterialSwatch(event.target)) return;
     if (this._emitHeldDown) {
       event.preventDefault();
       return;
@@ -935,6 +938,11 @@ export const fallingInput = new FallingInput();
 
 function isEditableTarget(target) {
   return !!(target && /^(INPUT|TEXTAREA|SELECT)$/i.test(target.tagName));
+}
+
+/** Palette buttons only. The about-page notes also carry data-material. */
+function isMaterialSwatch(target) {
+  return target instanceof Element && !!target.closest("button[data-material]");
 }
 
 function clamp(n, lo, hi) {

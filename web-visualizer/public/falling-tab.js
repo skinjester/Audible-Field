@@ -5,7 +5,7 @@ import {
   onFallingAudioToggle,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=351";
+} from "./falling-blocks.js?v=352";
 import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=40";
 import { controller, setActiveFx } from "./mixer-core.js?v=67";
 
