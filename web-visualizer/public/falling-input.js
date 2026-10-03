@@ -21,6 +21,7 @@ const EMIT_REST_PX = 6;
  *   aimAt: { x: number, y: number } | null,
  *   emit: boolean,
  *   emitSizing: boolean,
+ *   touchPour: boolean,
  *   brushMode: BrushMode,
  *   analog: number,
  *   curveInvert: boolean,
@@ -161,10 +162,14 @@ export class FallingInput {
     window.addEventListener("pointermove", this._onWindowPointerMove);
     window.addEventListener("blur", this._onPointerGone);
     document.documentElement.addEventListener("pointerleave", this._onPointerGone);
+    document.documentElement.classList.add("is-field-play");
     const stage = canvas.parentElement;
     this._gestureStage = stage;
-    stage?.addEventListener("gesturestart", this._onBlockBrowserGesture, { capture: true, passive: false });
-    stage?.addEventListener("gesturechange", this._onBlockBrowserGesture, { capture: true, passive: false });
+    const guard = { capture: true, passive: false };
+    document.addEventListener("touchstart", this._onBlockBrowserGesture, guard);
+    document.addEventListener("touchmove", this._onBlockBrowserGesture, guard);
+    document.addEventListener("gesturestart", this._onBlockBrowserGesture, guard);
+    document.addEventListener("gesturechange", this._onBlockBrowserGesture, guard);
     document.addEventListener("pointerdown", this._onPointerDevice, true);
     document.addEventListener("pointermove", this._onPointerDevice, true);
     document.addEventListener("wheel", this._onWheelDevice, { capture: true, passive: true });
@@ -191,8 +196,12 @@ export class FallingInput {
     window.removeEventListener("pointermove", this._onWindowPointerMove);
     window.removeEventListener("blur", this._onPointerGone);
     document.documentElement.removeEventListener("pointerleave", this._onPointerGone);
-    this._gestureStage?.removeEventListener("gesturestart", this._onBlockBrowserGesture, { capture: true });
-    this._gestureStage?.removeEventListener("gesturechange", this._onBlockBrowserGesture, { capture: true });
+    document.documentElement.classList.remove("is-field-play");
+    const guard = { capture: true };
+    document.removeEventListener("touchstart", this._onBlockBrowserGesture, guard);
+    document.removeEventListener("touchmove", this._onBlockBrowserGesture, guard);
+    document.removeEventListener("gesturestart", this._onBlockBrowserGesture, guard);
+    document.removeEventListener("gesturechange", this._onBlockBrowserGesture, guard);
     this._gestureStage = null;
     document.removeEventListener("pointerdown", this._onPointerDevice, true);
     document.removeEventListener("pointermove", this._onPointerDevice, true);
@@ -390,6 +399,7 @@ export class FallingInput {
       aimAt: screen.active ? null : this._aimAt,
       emit,
       emitSizing,
+      touchPour: this._touchEmit,
       brushMode,
       analog,
       curveInvert,
@@ -481,17 +491,15 @@ export class FallingInput {
   }
 
   /**
-   * Touch has no hover, so a lifted field finger fires pointerleave on <html>.
-   * That contact ending must not release a thumb that is still holding Emit.
+   * A field drag fires pointerleave on <html> when that finger lifts, and the
+   * browser does it again when it steals the gesture. Neither one is the thumb
+   * coming up. Blur still releases Emit.
    * @param {Event} [event]
    */
   _onPointerGone(event) {
-    if (
-      event?.type === "pointerleave" &&
-      this._emitHeldDown &&
-      /** @type {PointerEvent} */ (event).pointerId !== this._emitPointerId
-    ) {
-      this._screenTouch.pointerUp(/** @type {PointerEvent} */ (event));
+    if (event?.type === "pointerleave" && this._emitHeldDown) {
+      const pointerId = /** @type {PointerEvent} */ (event).pointerId;
+      if (pointerId !== this._emitPointerId) this._screenTouch.pointerUp(/** @type {PointerEvent} */ (event));
       return;
     }
     this._pointerAt = null;
@@ -507,13 +515,20 @@ export class FallingInput {
   }
 
   /**
-   * A thumb on Emit plus a finger on the field is a pinch to the browser.
-   * Claiming that gesture cancels the thumb even though it never moved.
-   * pointerdown.preventDefault does not stop this; touch and gesture events do.
+   * Back-swipe, pinch-zoom, and pull-to-refresh cancel every contact they claim,
+   * including a thumb that is still on Emit. touch-action cannot express "these
+   * two fingers are one gesture," so the playfield claims the touches itself.
    * @param {Event} event
    */
   _onBlockBrowserGesture(event) {
-    if (event.cancelable) event.preventDefault();
+    if (!event.cancelable) return;
+    if (this._emitHeldDown) {
+      event.preventDefault();
+      return;
+    }
+    const stage = this._gestureStage;
+    const target = event.target;
+    if (stage && target instanceof Node && stage.contains(target)) event.preventDefault();
   }
 
   /**
@@ -837,7 +852,15 @@ export class FallingInput {
    */
   _onEmitPointerDown(event) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    if (this._emitHeldDown) return;
+    if (this._emitHeldDown) {
+      // A navigation gesture may have dropped the first contact. This press is the thumb again.
+      this._emitPointerId = event.pointerId;
+      this._trackEmitPointer(true);
+      this._emitButton?.setPointerCapture?.(event.pointerId);
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     this._touchEmit = false;
     this._emitHeldDown = true;
     this._emitDragging = false;
@@ -894,6 +917,8 @@ export class FallingInput {
   }
 
   _onEmitPointerUp(event) {
+    // pointercancel means the browser took the gesture, not that the thumb lifted.
+    if (event?.type === "pointercancel") return;
     if (event?.pointerId != null && event.pointerId !== this._emitPointerId) return;
     this._endEmitGesture();
   }

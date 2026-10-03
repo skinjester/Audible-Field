@@ -3,7 +3,7 @@ import { audioEngine } from "./audio-engine.js?v=80";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=56";
+import { fallingInput } from "./falling-input.js?v=57";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -2178,7 +2178,9 @@ function applyInput(dt) {
     scale = emitScaleFromTrigger(frame.analog, false);
   }
   const settled = emitterSizeSettled(dt, brush, scale);
-  updateEmitStream(dt, frame.emit && settled);
+  // A pressed Emit button keeps pouring. Navigation must not pause it, and
+  // neither does the footprint-settle wait that gates a trigger sweep.
+  updateEmitStream(dt, frame.emit && (settled || frame.touchPour));
 
   syncShoulderGlyphs(frame.cyclePrevHeld, frame.cycleNextHeld);
   syncTriggerLabels(frame.ltHeld, frame.rtHeld);

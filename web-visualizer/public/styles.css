@@ -34,6 +34,14 @@
   box-sizing: border-box;
 }
 
+html.is-field-play,
+html.is-field-play body {
+  /* While the playfield is up, a second finger must not become a back-swipe,
+     pinch-zoom, or pull-to-refresh. Those cancel the Emit contact. */
+  touch-action: none;
+  overscroll-behavior: none;
+}
+
 html,
 body {
   margin: 0;
