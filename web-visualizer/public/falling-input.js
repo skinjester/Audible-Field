@@ -124,6 +124,7 @@ export class FallingInput {
     this._onKeyUp = this._onKeyUp.bind(this);
     this._onWindowPointerMove = this._onWindowPointerMove.bind(this);
     this._onPointerGone = this._onPointerGone.bind(this);
+    this._onBlockBrowserGesture = this._onBlockBrowserGesture.bind(this);
     this._onEmitPointerDown = this._onEmitPointerDown.bind(this);
     this._onEmitPointerMove = this._onEmitPointerMove.bind(this);
     this._onEmitPointerUp = this._onEmitPointerUp.bind(this);
@@ -150,6 +151,8 @@ export class FallingInput {
     canvas.addEventListener("pointerdown", this._onPointerDown);
     canvas.addEventListener("pointerup", this._onPointerUp);
     canvas.addEventListener("pointercancel", this._onPointerCancel);
+    canvas.addEventListener("touchstart", this._onBlockBrowserGesture, { passive: false });
+    canvas.addEventListener("touchmove", this._onBlockBrowserGesture, { passive: false });
     canvas.addEventListener("wheel", this._onWheel, { passive: false });
     canvas.addEventListener("contextmenu", this._onContextMenu);
     canvas.addEventListener("auxclick", this._onAuxClick);
@@ -158,6 +161,10 @@ export class FallingInput {
     window.addEventListener("pointermove", this._onWindowPointerMove);
     window.addEventListener("blur", this._onPointerGone);
     document.documentElement.addEventListener("pointerleave", this._onPointerGone);
+    const stage = canvas.parentElement;
+    this._gestureStage = stage;
+    stage?.addEventListener("gesturestart", this._onBlockBrowserGesture, { capture: true, passive: false });
+    stage?.addEventListener("gesturechange", this._onBlockBrowserGesture, { capture: true, passive: false });
     document.addEventListener("pointerdown", this._onPointerDevice, true);
     document.addEventListener("pointermove", this._onPointerDevice, true);
     document.addEventListener("wheel", this._onWheelDevice, { capture: true, passive: true });
@@ -173,6 +180,8 @@ export class FallingInput {
       canvas.removeEventListener("pointerdown", this._onPointerDown);
       canvas.removeEventListener("pointerup", this._onPointerUp);
       canvas.removeEventListener("pointercancel", this._onPointerCancel);
+      canvas.removeEventListener("touchstart", this._onBlockBrowserGesture);
+      canvas.removeEventListener("touchmove", this._onBlockBrowserGesture);
       canvas.removeEventListener("wheel", this._onWheel);
       canvas.removeEventListener("contextmenu", this._onContextMenu);
       canvas.removeEventListener("auxclick", this._onAuxClick);
@@ -182,6 +191,9 @@ export class FallingInput {
     window.removeEventListener("pointermove", this._onWindowPointerMove);
     window.removeEventListener("blur", this._onPointerGone);
     document.documentElement.removeEventListener("pointerleave", this._onPointerGone);
+    this._gestureStage?.removeEventListener("gesturestart", this._onBlockBrowserGesture, { capture: true });
+    this._gestureStage?.removeEventListener("gesturechange", this._onBlockBrowserGesture, { capture: true });
+    this._gestureStage = null;
     document.removeEventListener("pointerdown", this._onPointerDevice, true);
     document.removeEventListener("pointermove", this._onPointerDevice, true);
     document.removeEventListener("wheel", this._onWheelDevice, { capture: true });
@@ -468,7 +480,20 @@ export class FallingInput {
     this._showPadGlyphs = this._device === "pad";
   }
 
-  _onPointerGone() {
+  /**
+   * Touch has no hover, so a lifted field finger fires pointerleave on <html>.
+   * That contact ending must not release a thumb that is still holding Emit.
+   * @param {Event} [event]
+   */
+  _onPointerGone(event) {
+    if (
+      event?.type === "pointerleave" &&
+      this._emitHeldDown &&
+      /** @type {PointerEvent} */ (event).pointerId !== this._emitPointerId
+    ) {
+      this._screenTouch.pointerUp(/** @type {PointerEvent} */ (event));
+      return;
+    }
     this._pointerAt = null;
     this._aimAt = null;
     this._pointer = null;
@@ -479,6 +504,16 @@ export class FallingInput {
     this._touchPrev = null;
     this._endEmitGesture();
     this._screenTouch.reset();
+  }
+
+  /**
+   * A thumb on Emit plus a finger on the field is a pinch to the browser.
+   * Claiming that gesture cancels the thumb even though it never moved.
+   * pointerdown.preventDefault does not stop this; touch and gesture events do.
+   * @param {Event} event
+   */
+  _onBlockBrowserGesture(event) {
+    if (event.cancelable) event.preventDefault();
   }
 
   /**
@@ -696,6 +731,8 @@ export class FallingInput {
     this._emitButton = btn;
     btn.style.setProperty("--emit-hold", `${EMIT_HOLD_MS}ms`);
     btn.addEventListener("pointerdown", this._onEmitPointerDown);
+    btn.addEventListener("touchstart", this._onBlockBrowserGesture, { passive: false });
+    btn.addEventListener("touchmove", this._onBlockBrowserGesture, { passive: false });
     btn.addEventListener("contextmenu", this._onEmitContextMenu);
   }
 
@@ -710,6 +747,8 @@ export class FallingInput {
     const btn = this._emitButton;
     if (!btn) return;
     btn.removeEventListener("pointerdown", this._onEmitPointerDown);
+    btn.removeEventListener("touchstart", this._onBlockBrowserGesture);
+    btn.removeEventListener("touchmove", this._onBlockBrowserGesture);
     btn.removeEventListener("contextmenu", this._onEmitContextMenu);
     this._trackEmitPointer(false);
     this._clearEmitHold();

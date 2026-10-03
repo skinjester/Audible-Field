@@ -1103,6 +1103,9 @@ dd {
 
 [data-panel="falling-blocks"] .viz-canvas-wrap {
   container: falling-stage / inline-size;
+  /* Common ancestor of the field and Emit. Without this, a thumb plus a
+     dragging finger is a page pinch, and the browser cancels the thumb. */
+  touch-action: none;
 }
 
 .viz-pad-gate {
