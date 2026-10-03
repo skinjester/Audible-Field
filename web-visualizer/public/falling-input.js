@@ -62,7 +62,7 @@ export class FallingInput {
     this._screenTouch = new TouchInput(bindings.touch);
     /** @type {HTMLElement | null} */
     this._canvas = null;
-    /** @type {HTMLButtonElement | null} */
+    /** @type {HTMLElement | null} */
     this._emitButton = null;
     this._emitHeld = false;
     /** Long-press has committed. Further drags keep pouring and size the plane. */
@@ -71,6 +71,8 @@ export class FallingInput {
     this._emitHoldTimer = 0;
     this._emitFillGen = 0;
     this._emitPointerId = -1;
+    /** Touch.identifier for the thumb. Distinct from the pointer id. */
+    this._emitTouchId = null;
     this._emitDragging = false;
     this._emitSizeLatched = false;
     this._emitAnalog = 0.5;
@@ -129,6 +131,7 @@ export class FallingInput {
     this._onEmitPointerDown = this._onEmitPointerDown.bind(this);
     this._onEmitPointerMove = this._onEmitPointerMove.bind(this);
     this._onEmitPointerUp = this._onEmitPointerUp.bind(this);
+    this._onEmitTouchEnd = this._onEmitTouchEnd.bind(this);
     this._onEmitContextMenu = this._onEmitContextMenu.bind(this);
     this._onPointerDevice = this._onPointerDevice.bind(this);
     this._onWheelDevice = this._onWheelDevice.bind(this);
@@ -521,10 +524,18 @@ export class FallingInput {
    * @param {Event} event
    */
   _onBlockBrowserGesture(event) {
+    if (event.type === "touchstart" && isEmitTarget(event.target)) {
+      const touch = event.changedTouches?.[0];
+      if (touch && this._emitTouchId == null) this._emitTouchId = touch.identifier;
+      if (event.cancelable) event.preventDefault();
+    }
     if (!event.cancelable) return;
-    // A material tap must still click while Emit is held. Claiming it here
-    // suppresses that tap, and the pour would stay on the old material.
-    if (isMaterialSwatch(event.target)) return;
+    // A material button left to the browser becomes a click that iOS uses to
+    // end every other contact, including the thumb still on Emit.
+    if (isMaterialSwatch(event.target)) {
+      event.preventDefault();
+      return;
+    }
     if (this._emitHeldDown) {
       event.preventDefault();
       return;
@@ -745,7 +756,7 @@ export class FallingInput {
 
   _bindEmitButton() {
     const btn = this._canvas?.parentElement?.querySelector("[data-falling-touch-emit]");
-    if (!(btn instanceof HTMLButtonElement)) return;
+    if (!(btn instanceof HTMLElement)) return;
     this._emitButton = btn;
     btn.style.setProperty("--emit-hold", `${EMIT_HOLD_MS}ms`);
     btn.addEventListener("pointerdown", this._onEmitPointerDown);
@@ -759,6 +770,7 @@ export class FallingInput {
     window[method]("pointermove", this._onEmitPointerMove);
     window[method]("pointerup", this._onEmitPointerUp);
     window[method]("pointercancel", this._onEmitPointerUp);
+    document[method]("touchend", this._onEmitTouchEnd, true);
   }
 
   _unbindEmitButton() {
@@ -772,6 +784,7 @@ export class FallingInput {
     this._clearEmitHold();
     this._emitFillGen += 1;
     this._emitPointerId = -1;
+    this._emitTouchId = null;
     this._emitSettleY = 0;
     btn.classList.remove("is-pressed", "is-held", "is-charging", "is-filling");
     btn.setAttribute("aria-pressed", "false");
@@ -841,6 +854,7 @@ export class FallingInput {
     this._emitHeldDown = false;
     this._emitDragging = false;
     this._emitPointerId = -1;
+    this._emitTouchId = null;
     this._emitSettleY = 0;
     const fill = this._emitButton?.querySelector(".falling-emit-fill");
     if (fill) fill.style.transition = "";
@@ -920,9 +934,31 @@ export class FallingInput {
   }
 
   _onEmitPointerUp(event) {
-    // pointercancel means the browser took the gesture, not that the thumb lifted.
+    // Ending a pan, pinch, or material tap makes iOS fire pointerup for the
+    // thumb too, sometimes as a compatibility mouse event. The thumb is still
+    // down. A real lift arrives later as touchend for its identifier.
     if (event?.type === "pointercancel") return;
+    if (this._emitTouchId != null) return;
     if (event?.pointerId != null && event.pointerId !== this._emitPointerId) return;
+    this._endEmitGesture();
+  }
+
+  /**
+   * The thumb lifted. A touchend aimed at the field or a material does not count,
+   * even if the phone folds the thumb's identifier into that event.
+   * @param {TouchEvent} event
+   */
+  _onEmitTouchEnd(event) {
+    if (this._emitTouchId == null) return;
+    if (!isEmitTarget(event.target)) return;
+    let ended = false;
+    for (const touch of event.changedTouches) {
+      if (touch.identifier === this._emitTouchId) ended = true;
+    }
+    if (!ended) return;
+    for (const touch of event.touches) {
+      if (touch.identifier === this._emitTouchId) return;
+    }
     this._endEmitGesture();
   }
 
@@ -940,9 +976,14 @@ function isEditableTarget(target) {
   return !!(target && /^(INPUT|TEXTAREA|SELECT)$/i.test(target.tagName));
 }
 
-/** Palette buttons only. The about-page notes also carry data-material. */
+/** Palette swatches only. The about-page notes also carry data-material. */
 function isMaterialSwatch(target) {
-  return target instanceof Element && !!target.closest("button[data-material]");
+  return target instanceof Element
+    && !!target.closest("[data-falling-palette] .falling-material-swatch");
+}
+
+function isEmitTarget(target) {
+  return target instanceof Element && !!target.closest("[data-falling-touch-emit]");
 }
 
 function clamp(n, lo, hi) {

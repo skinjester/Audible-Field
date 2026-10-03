@@ -1210,7 +1210,7 @@ dd {
   cursor: url("/cursor-yaw.svg") 16 16, crosshair;
 }
 
-button.falling-touch-emit,
+.falling-touch-emit,
 .falling-emit-dock {
   display: none;
 }
@@ -1651,6 +1651,72 @@ button.falling-touch-emit,
   bottom: auto;
   left: auto;
   align-items: flex-end;
+}
+
+.falling-rise-modes {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: min(320px, 72vw);
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.8);
+  color: var(--muted);
+}
+
+.falling-rise-label,
+.falling-rise-hint {
+  margin: 0;
+}
+
+.falling-rise-label {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.falling-rise-options {
+  display: flex;
+  gap: 6px;
+}
+
+.falling-rise-option {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.falling-rise-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.falling-rise-option:hover,
+.falling-rise-option:focus-within {
+  color: var(--live);
+  border-color: var(--live-line);
+}
+
+.falling-rise-option:has(input:checked) {
+  background: var(--pill-selected);
+  color: var(--live);
+  border-color: var(--live-line);
+}
+
+.falling-rise-hint {
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .falling-about-dialog {

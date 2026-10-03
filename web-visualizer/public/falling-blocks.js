@@ -1,9 +1,9 @@
 import * as THREE from "three";
-import { audioEngine } from "./audio-engine.js?v=80";
+import { audioEngine } from "./audio-engine.js?v=82";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=58";
+import { fallingInput } from "./falling-input.js?v=60";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -1941,15 +1941,61 @@ function materialGlyph(id) {
   return MATERIAL_GLYPHS[id] || MATERIAL_GLYPHS.block;
 }
 
+function materialSwatchFrom(target) {
+  if (!(target instanceof Element)) return null;
+  const swatch = target.closest("[data-falling-palette] .falling-material-swatch");
+  if (!(swatch instanceof HTMLElement)) return null;
+  return swatch;
+}
+
 function buildPalette() {
   paletteEl = document.querySelector("[data-falling-palette]");
   if (!paletteEl || !catalog) return;
+  if (paletteEl.dataset.bound !== "1") {
+    paletteEl.dataset.bound = "1";
+    // A touch click can land on the previously selected swatch after iOS
+    // retargets it. Swallow those clicks; the press already chose the material.
+    let swallowClicksUntil = 0;
+    paletteEl.addEventListener("touchstart", (event) => {
+      const btn = materialSwatchFrom(event.target);
+      if (!btn) return;
+      swallowClicksUntil = performance.now() + 800;
+      setActiveMaterial(btn.dataset.material);
+    }, { passive: false });
+    paletteEl.addEventListener("pointerdown", (event) => {
+      const btn = materialSwatchFrom(event.target);
+      if (!btn) return;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      event.stopPropagation();
+      if (event.pointerType === "touch") swallowClicksUntil = performance.now() + 800;
+      setActiveMaterial(btn.dataset.material);
+    });
+    paletteEl.addEventListener("click", (event) => {
+      const btn = materialSwatchFrom(event.target);
+      if (!btn) return;
+      event.stopPropagation();
+      if (performance.now() < swallowClicksUntil) {
+        event.preventDefault();
+        return;
+      }
+      setActiveMaterial(btn.dataset.material);
+    });
+    paletteEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const btn = materialSwatchFrom(event.target);
+      if (!btn) return;
+      event.preventDefault();
+      setActiveMaterial(btn.dataset.material);
+    });
+  }
   paletteEl.replaceChildren();
   for (const mat of catalog.list) {
-    const btn = document.createElement("button");
-    btn.type = "button";
+    const btn = document.createElement("div");
     btn.dataset.material = mat.id;
     btn.className = "falling-material-swatch";
+    btn.setAttribute("role", "button");
+    btn.tabIndex = 0;
+    btn.setAttribute("aria-pressed", "false");
     btn.setAttribute("aria-label", mat.label);
     btn.title = mat.label;
     btn.style.setProperty("--swatch", mat.color);
@@ -1957,17 +2003,6 @@ function buildPalette() {
     glyph.className = "falling-material-glyph";
     glyph.innerHTML = materialGlyph(mat.id);
     btn.append(glyph);
-    // pointerdown so a second finger can switch materials while Emit is held.
-    // A click often never arrives for that extra contact.
-    const pick = (event) => {
-      event.stopPropagation();
-      setActiveMaterial(mat.id);
-    };
-    btn.addEventListener("pointerdown", (event) => {
-      if (event.pointerType === "mouse" && event.button !== 0) return;
-      pick(event);
-    });
-    btn.addEventListener("click", pick);
     paletteEl.appendChild(btn);
   }
   for (const line of document.querySelectorAll(".falling-about-materials [data-material]")) {
@@ -3980,8 +4015,9 @@ function planeViewportPan() {
  * One quadrant's audio measures.
  * `rise` is the drawn altitude of grains that are climbing (diffuse blow), in world units.
  * That climb is included in `peak` and `height`, so the height parameter goes up as they lift.
+ * `riseMass` is the sum of those grains' drawn scales. One full-size atom is 1.
  */
-function quadAudio(cells, peak, rise, stack, rate, quadCells) {
+function quadAudio(cells, peak, rise, stack, rate, quadCells, riseMass) {
   const top = Math.max(peak, rise);
   return {
     coverage: cells / quadCells,
@@ -3990,6 +4026,7 @@ function quadAudio(cells, peak, rise, stack, rate, quadCells) {
     cells,
     peak: top,
     rise,
+    riseMass: Math.max(0, riseMass || 0),
     rate: rate > 0 ? rate : 1,
   };
 }
@@ -4096,6 +4133,21 @@ function splashAtPilePitch(pending, rawPiles, tracked) {
 }
 
 /**
+ * Column key → playback rate of the pile that contains it.
+ * @param {{ keys?: number[], rate: number }[]} raw
+ * @param {{ rate: number }[]} tracked
+ */
+function pileRateByColumn(raw, tracked) {
+  const map = new Map();
+  for (let p = 0; p < raw.length; p += 1) {
+    const rate = tracked[p]?.rate > 0 ? tracked[p].rate : raw[p].rate;
+    const keys = raw[p].keys || [];
+    for (let k = 0; k < keys.length; k += 1) map.set(keys[k], rate > 0 ? rate : 1);
+  }
+  return map;
+}
+
+/**
  * Keep a pile's note id while its center stays the nearest match.
  * A split leaves the nearer piece on the old note and starts a new one.
  * A join keeps one note and drops the other.
@@ -4191,6 +4243,10 @@ function captureAudioSnapshot(dt) {
   const panSum = { tl: 0, tr: 0, bl: 0, br: 0 };
   const pileCols = { tl: [], tr: [], bl: [], br: [] };
   const activity = emptyActivity();
+  /** Drawn scale of every grain that is currently rising. One full-size atom is 1. */
+  const riseMass = { tl: 0, tr: 0, bl: 0, br: 0 };
+  /** @type {{ id: number, corner: string, x: number, z: number, key: number, scale: number, t: number, pan: number, rate?: number }[]} */
+  const riseAtoms = [];
 
   if (cells && occupied.size > 0 && posX && posZ && posY) {
     for (let c = 0; c < columnKeys.length; c += 1) {
@@ -4240,8 +4296,27 @@ function captureAudioSnapshot(dt) {
       const az = ((i / GRID_MAX) | 0) % GRID_MAX;
       const aid = ax < mid ? (az < mid ? "tl" : "bl") : az < mid ? "tr" : "br";
       const bucket = activity[aid];
-      if ((riseT?.[i] || 0) > 0) bucket.rise += 1;
-      else if (!resting) bucket.fall += 1;
+      const risingNow = (riseT?.[i] || 0) > 0;
+      if (risingNow) {
+        bucket.rise += 1;
+        const t = Math.min(1, riseT[i]);
+        const visual = Math.max(0.02, 1 - t);
+        const poured = cellAtomSize(i) / ATOM_SIZE;
+        const scale = visual * (poured > 0 ? poured : 1);
+        riseMass[aid] += scale;
+        const wx = posX[i];
+        const wz = posZ[i];
+        riseAtoms.push({
+          id: i,
+          corner: aid,
+          x: ax,
+          z: az,
+          key: ax + az * GRID_MAX,
+          scale,
+          t,
+          pan: Math.min(1, Math.max(-1, screenPan(wx, wz, yaw) + viewPan)),
+        });
+      } else if (!resting) bucket.fall += 1;
       else if (shrinkFlags?.[i] === 1) bucket.shrink += 1;
       else if ((flowDx?.[i] || 0) !== 0 || (flowDz?.[i] || 0) !== 0) bucket.slide += 1;
       else bucket.rest += 1;
@@ -4292,6 +4367,17 @@ function captureAudioSnapshot(dt) {
   };
   const splash = splashAtPilePitch(splashPending, rawPiles, piles);
   const pileRate = (list) => (list.length ? list[0].rate : 1);
+  const riseRates = {
+    tl: pileRateByColumn(rawPiles.tl, piles.tl),
+    tr: pileRateByColumn(rawPiles.tr, piles.tr),
+    bl: pileRateByColumn(rawPiles.bl, piles.bl),
+    br: pileRateByColumn(rawPiles.br, piles.br),
+  };
+  for (let r = 0; r < riseAtoms.length; r += 1) {
+    const atom = riseAtoms[r];
+    const rate = riseRates[atom.corner]?.get(atom.key);
+    atom.rate = rate > 0 ? rate : 1;
+  }
 
   audioSnap = {
     field: {
@@ -4311,12 +4397,13 @@ function captureAudioSnapshot(dt) {
     weight: sumW,
     mass: count,
     quads: {
-      tl: quadAudio(fp.tl, peak.tl, risePeak.tl, stackPeak.tl, pileRate(piles.tl), quadCells),
-      tr: quadAudio(fp.tr, peak.tr, risePeak.tr, stackPeak.tr, pileRate(piles.tr), quadCells),
-      bl: quadAudio(fp.bl, peak.bl, risePeak.bl, stackPeak.bl, pileRate(piles.bl), quadCells),
-      br: quadAudio(fp.br, peak.br, risePeak.br, stackPeak.br, pileRate(piles.br), quadCells),
+      tl: quadAudio(fp.tl, peak.tl, risePeak.tl, stackPeak.tl, pileRate(piles.tl), quadCells, riseMass.tl),
+      tr: quadAudio(fp.tr, peak.tr, risePeak.tr, stackPeak.tr, pileRate(piles.tr), quadCells, riseMass.tr),
+      bl: quadAudio(fp.bl, peak.bl, risePeak.bl, stackPeak.bl, pileRate(piles.bl), quadCells, riseMass.bl),
+      br: quadAudio(fp.br, peak.br, risePeak.br, stackPeak.br, pileRate(piles.br), quadCells, riseMass.br),
     },
     piles,
+    rises: riseAtoms,
     activity,
     pans: {
       tl: fp.tl > 0 ? Math.min(1, Math.max(-1, panSum.tl / fp.tl + viewPan)) : 0,
@@ -4350,12 +4437,13 @@ const GRID_SNAP_IDLE = {
   weight: 0,
   mass: 0,
   quads: {
-    tl: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, rate: 1 },
-    tr: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, rate: 1 },
-    bl: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, rate: 1 },
-    br: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, rate: 1 },
+    tl: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, riseMass: 0, rate: 1 },
+    tr: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, riseMass: 0, rate: 1 },
+    bl: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, riseMass: 0, rate: 1 },
+    br: { coverage: 0, height: 0, cells: 0, peak: 0, rise: 0, riseMass: 0, rate: 1 },
   },
   piles: { tl: [], tr: [], bl: [], br: [] },
+  rises: [],
   activity: {
     tl: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
     tr: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },

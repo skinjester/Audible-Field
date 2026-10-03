@@ -1,12 +1,12 @@
-import { audioEngine } from "./audio-engine.js?v=80";
+import { audioEngine } from "./audio-engine.js?v=82";
 import {
   clearBoard,
   hideFallingBlocks,
   onFallingAudioToggle,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=352";
-import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=40";
+} from "./falling-blocks.js?v=356";
+import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=41";
 import { controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
@@ -52,7 +52,7 @@ export function setFallingAudioEnabled(enabled) {
     return;
   }
   if (fallingAudioEnabled) {
-    audioEngine.beginGesture();
+    audioEngine.beginGesture(true);
     resetFieldSonify();
     void deps.ensureBrowserAudio().then(() => {
       deps.setStatus(audioEngine.running ? "audio" : "loading", deps.browserStatusLabel());
@@ -62,6 +62,7 @@ export function setFallingAudioEnabled(enabled) {
     return;
   }
   resetFieldSonify();
+  audioEngine.syncRiseGrains(null);
   void deps.enqueueAudio(async () => {
     if (deps.getActiveTab() !== "falling-blocks" || isAudioEnabled()) return;
     if (audioEngine.running) {
@@ -70,6 +71,44 @@ export function setFallingAudioEnabled(enabled) {
     }
     deps.setStatus("offline", deps.browserStatusLabel());
   });
+}
+
+const RISE_MODES = {
+  loose: "A piece of the bed keeps playing, and fades as the atom shrinks.",
+  flake: "One short speck of the bed when the atom lifts off.",
+  drift: "The piece keeps playing, thins as it shrinks, and drifts upward.",
+};
+
+function bindRiseModeUi() {
+  const group = document.querySelector("[data-falling-rise-modes]");
+  if (!(group instanceof HTMLElement) || group.dataset.bound === "1") return;
+  group.dataset.bound = "1";
+  const hint = group.querySelector("[data-falling-rise-hint]");
+  const inputs = group.querySelectorAll("input[name='falling-rise-mode']");
+  let stored = "";
+  try {
+    stored = sessionStorage.getItem("echoscape.riseMode") || "";
+  } catch {
+    /* private mode */
+  }
+  const initial = Object.prototype.hasOwnProperty.call(RISE_MODES, stored) ? stored : "loose";
+  audioEngine.setRiseMode(initial);
+  for (const input of inputs) {
+    if (!(input instanceof HTMLInputElement)) continue;
+    input.checked = input.value === initial;
+    input.addEventListener("change", () => {
+      if (!input.checked) return;
+      const mode = Object.prototype.hasOwnProperty.call(RISE_MODES, input.value) ? input.value : "loose";
+      audioEngine.setRiseMode(mode);
+      if (hint) hint.textContent = RISE_MODES[mode];
+      try {
+        sessionStorage.setItem("echoscape.riseMode", mode);
+      } catch {
+        /* private mode */
+      }
+    });
+  }
+  if (hint) hint.textContent = RISE_MODES[initial];
 }
 
 function bindFallingAudioUi() {
@@ -86,6 +125,7 @@ function bindFallingAudioUi() {
 export function initFallingTab(nextDeps) {
   deps = nextDeps;
   bindFallingAudioUi();
+  bindRiseModeUi();
   onFallingAudioToggle(() => {
     void setFallingAudioEnabled(!fallingAudioEnabled);
   });
@@ -113,6 +153,7 @@ export function show() {
 export function hide() {
   showGen += 1;
   hideFallingBlocks();
+  audioEngine.syncRiseGrains(null);
   if (!deps) return;
   void deps.enqueueAudio(async () => {
     if (deps.getActiveTab() === "falling-blocks") return;
@@ -134,6 +175,7 @@ export function tick(frame) {
   audioEngine.setStemReverb(shadow.reverbs, shadow.decays, shadow.longTails);
   audioEngine.setDiffuseGreyhole(shadow.diffuses, shadow.feedbacks, shadow.wets);
   audioEngine.setPileBody(shadow.halls, shadow.weights);
+  audioEngine.syncRiseGrains(snap.rises);
   if (shadow.splash) {
     try {
       audioEngine.playSplash(shadow.splash);

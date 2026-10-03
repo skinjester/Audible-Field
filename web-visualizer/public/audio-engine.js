@@ -196,6 +196,59 @@ const GRAIN_BP_Q = 3;
 const GRAIN_HOLD_SEC = 0.025;
 /** Small lift. The bandpass is what separates the splash from the bed. */
 const GRAIN_LIFT = 1.25;
+/** Sustained rising voices. A wider cloud keeps the loudest and lets the reverb carry the rest. */
+const RISE_LOOP_CAP = 24;
+/** One-shot flakes that may overlap at once. */
+const RISE_FLAKE_CAP = 40;
+/** Heard length of a flake. Longer and duller than a landing grain. */
+const RISE_FLAKE_SEC = 0.26;
+/** Loop length of a loose scrap of the bed. */
+const RISE_LOOSE_SEC = 0.36;
+/** Shorter loop so a drifting mote reads as its own speck. */
+const RISE_DRIFT_SEC = 0.22;
+
+/**
+ * Dry level of one rising atom.
+ * A single full-size atom sits clearly beside the bed.
+ * More atoms in that quadrant are each a little quieter, and the sum still grows.
+ * @param {number} scale
+ * @param {number} count
+ * @param {string} mode
+ */
+function riseVoiceLevel(scale, count, mode) {
+  const body = Math.sqrt(Math.max(0.05, Math.min(1.5, Number(scale) || 0)));
+  const share = 1 / Math.pow(Math.max(1, count), 0.28);
+  const base = mode === "flake" ? 0.32 : mode === "drift" ? 0.2 : 0.24;
+  return base * body * share;
+}
+
+/** @param {{ corner?: string }[]} list */
+function riseCornerCounts(list) {
+  const counts = { tl: 0, tr: 0, bl: 0, br: 0 };
+  for (let i = 0; i < list.length; i += 1) {
+    const corner = list[i]?.corner;
+    if (counts[corner] != null) counts[corner] += 1;
+  }
+  return counts;
+}
+
+/**
+ * A slice of the bed, picked by the cell so two atoms are different scraps.
+ * @param {AudioBuffer} buffer
+ * @param {{ x?: number, z?: number, id?: number }} atom
+ * @param {number} seconds
+ */
+function riseSlice(buffer, atom, seconds) {
+  const dur = Number(buffer?.duration) || 0;
+  if (!(dur > 0)) return { offset: 0, duration: 0.04 };
+  const slice = Math.min(dur * 0.5, Math.max(0.04, seconds));
+  const span = Math.max(0, dur - slice);
+  const x = Number(atom?.x) || 0;
+  const z = Number(atom?.z) || 0;
+  const h = Math.abs((x | 0) * 17 + (z | 0) * 31 + (Number(atom?.id) | 0));
+  const offset = span > 1e-4 ? ((h % 997) / 997) * span : 0;
+  return { offset, duration: slice };
+}
 /** Tick bandpass at the pile's pitch. Wide enough to read as a tick, not a whistle. */
 const TICK_BASE_HZ = 240;
 const TICK_Q = 2;
@@ -397,6 +450,14 @@ export class EchoScapeAudioEngine {
     this._splashOut = null;
     /** Landing voice. Phrase restarts the sample in phase with the bed. */
     this.splashMode = "phrase";
+    /** Dry voice of a rising atom: a scrap of its quadrant's bed. */
+    this.riseMode = "loose";
+    /** @type {Map<number, object>} */
+    this._riseVoices = new Map();
+    /** Cell ids that already played their one-shot flake. */
+    this._riseFired = new Set();
+    /** @type {object[]} */
+    this._riseFlakes = [];
     /** Last impact start per corner and pile, in context time. */
     this._impactAt = null;
     /** @type {AudioBuffer | null} */
@@ -413,6 +474,13 @@ export class EchoScapeAudioEngine {
     this._r1Held = false;
     /** @type {AudioContext | null} */
     this._watchedCtx = null;
+    /**
+     * Phones can report a running context that is still silent until the
+     * first gesture suspends it and resumes it. Startup resume does not count.
+     */
+    this._outputUnlocked = false;
+    /** @type {Promise<void> | null} */
+    this._kickPromise = null;
     /** @type {'pending' | 'wam' | 'native'} */
     this.circleFxMode = "pending";
     /** @type {Record<string, { id: string, label: string, kind: string, path?: string }>} */
@@ -587,18 +655,84 @@ export class EchoScapeAudioEngine {
   /** Resume without hanging when autoplay policy blocks the promise. */
   async _safeResume(timeoutMs = 300) {
     if (!this.ctx || this.ctx.state === "running") return;
+    // A resume() before the first gesture sticks some phones in a running
+    // context that never reaches the speaker. Leave it suspended until a tap.
+    if (!this._outputUnlocked && navigator.userActivation?.isActive !== true) return;
     try {
       await Promise.race([
         this.ctx.resume(),
         new Promise((resolve) => setTimeout(resolve, timeoutMs)),
       ]);
     } catch {
-      /* ignore — pad click will retry */
+      /* ignore — the next tap retries */
     }
   }
 
   async resume() {
+    if (this._kickPromise) await this._kickPromise;
     await this._safeResume(1000);
+  }
+
+  /**
+   * Open the speaker from a user gesture.
+   * A context that is already running was resumed at launch (or started by the
+   * browser) and stays silent on phones until it is suspended and resumed.
+   * A context that is still suspended must resume on this call stack.
+   * @param {() => void} poke
+   */
+  _unlockFromGesture(poke) {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state === "closed") return;
+    if (this._outputUnlocked) {
+      if (contextNeedsResume(ctx)) {
+        void ctx.resume().then(() => {
+          if (navigator.userActivation?.isActive) poke();
+        });
+      }
+      return;
+    }
+    this._outputUnlocked = true;
+    poke();
+    if (ctx.state !== "running") {
+      // Still suspended: resume on this stack. iOS ignores a resume that
+      // happens after suspend() resolves.
+      void ctx.resume().then(() => {
+        if (navigator.userActivation?.isActive) poke();
+      });
+      return;
+    }
+    // Already running at the first gesture: the launch resume (or the browser)
+    // left the speaker closed. Suspend and resume, which is what Audio off/on does.
+    this._restartSilentBeds();
+    poke();
+    let kick = ctx
+      .suspend()
+      .catch(() => {})
+      .then(() => {
+        if (this.ctx !== ctx || ctx.state === "closed") return undefined;
+        return ctx.resume();
+      })
+      .then(() => {
+        if (navigator.userActivation?.isActive) poke();
+      });
+    kick = kick.finally(() => {
+      if (this._kickPromise === kick) this._kickPromise = null;
+    });
+    this._kickPromise = kick;
+  }
+
+  /** Media beds that are already "playing" stay silent until play() is called again. */
+  _restartSilentBeds() {
+    for (const corner of CORNERS) {
+      if (this.stems[corner]?.bedVoice || this.stems[corner]?.notes?.length) continue;
+      const el = this.stems[corner]?.el || this._pendingEls[corner];
+      if (!el || el.paused) continue;
+      try {
+        el.pause();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   /**
@@ -606,8 +740,9 @@ export class EchoScapeAudioEngine {
    * Chrome allows AudioBuffer splashes once the context is running, but it
    * blocks HTML media playback unless play() is called in the gesture itself.
    * Call this synchronously from pointerdown or keydown, before any await.
+   * @param {boolean} [fromUser] True when called from a pointer or key listener.
    */
-  beginGesture() {
+  beginGesture(fromUser = false) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if ((!this.ctx || this.ctx.state === "closed") && AC) this.ctx = new AC();
     this._watchContext(this.ctx);
@@ -624,12 +759,14 @@ export class EchoScapeAudioEngine {
         if (pending) this._playEl(pending, false);
       }
     };
-    poke();
-    if (contextNeedsResume(this.ctx)) {
-      void this.ctx.resume().then(() => {
-        if (navigator.userActivation?.isActive) poke();
-      });
+    // Only a pointer or key listener counts. userActivation can stay true after
+    // that event, and a resume from there does not open a phone speaker.
+    if (!fromUser) {
+      poke();
+      return;
     }
+    poke();
+    this._unlockFromGesture(poke);
   }
 
   /**
@@ -639,7 +776,7 @@ export class EchoScapeAudioEngine {
    */
   async recoverForeground() {
     const ctx = this.ctx;
-    if (!ctx || ctx.state === "closed") return;
+    if (!ctx || ctx.state === "closed" || !this._outputUnlocked) return;
     if (contextNeedsResume(ctx)) {
       try {
         await ctx.suspend();
@@ -1864,13 +2001,19 @@ export class EchoScapeAudioEngine {
     this._master.gain.setValueAtTime(target, t);
   }
 
-  /** True while a landing splash is still ringing. */
+  /** True while a landing splash or a rising-atom grain is still in the graph. */
   hasLiveStrikes() {
     for (const corner of CORNERS) {
       const strikes = this.stems[corner]?.strikes;
       if (!strikes) continue;
       for (let i = 0; i < strikes.length; i += 1) {
         if (!strikes[i].released) return true;
+      }
+    }
+    if (this._riseFlakes?.some((voice) => !voice.released)) return true;
+    if (this._riseVoices) {
+      for (const voice of this._riseVoices.values()) {
+        if (!voice.released) return true;
       }
     }
     return false;
@@ -2552,6 +2695,299 @@ export class EchoScapeAudioEngine {
       if (!el) continue;
       if (el.preservesPitch !== false) el.preservesPitch = false;
       if (Math.abs(el.playbackRate - next) > 0.002) el.playbackRate = next;
+    }
+  }
+
+  /**
+   * Loose, flake, or drift. Switching releases grains that are still sounding.
+   * @param {string} mode
+   */
+  setRiseMode(mode) {
+    const next = mode === "flake" || mode === "drift" ? mode : "loose";
+    if (this.riseMode === next) return;
+    this.riseMode = next;
+    this._clearRiseGrains();
+  }
+
+  /**
+   * One dry scrap of the bed per rising atom.
+   * Loose keeps the scrap playing and fades it with the drawn scale.
+   * Flake plays the scrap once, when the atom lifts.
+   * Drift keeps it playing, thins it as the atom shrinks, and glides the pitch up.
+   * These voices join the splash bus, so they do not enter the quadrant Greyhole.
+   * @param {{ id: number, corner: string, x?: number, z?: number, scale: number, t?: number, pan?: number, rate?: number }[] | null} atoms
+   */
+  syncRiseGrains(atoms) {
+    if (!this.ctx) return;
+    if (!this.running || !this._splashOut) {
+      this._clearRiseGrains();
+      return;
+    }
+    const mode = this.riseMode === "flake" || this.riseMode === "drift" ? this.riseMode : "loose";
+    const list = Array.isArray(atoms) ? atoms : [];
+    if (mode === "flake") {
+      this._clearRiseLoops();
+      this._syncRiseFlakes(list);
+      return;
+    }
+    this._riseFired.clear();
+    this._syncRiseLoops(list, mode);
+  }
+
+  _riseRate(atom, mode) {
+    const base = this._clampRate(atom?.rate);
+    if (mode !== "drift") return base;
+    const id = Number(atom?.id) || 0;
+    const detune = (((id % 13) - 6) / 6) * 0.07;
+    const glide = 1 + 0.55 * Math.min(1, Math.max(0, Number(atom?.t) || 0));
+    return this._clampRate(base * (1 + detune) * glide);
+  }
+
+  _riseCutoff(mode, scale) {
+    const size = Math.min(1, Math.max(0, Number(scale) || 0));
+    if (mode === "drift") return 700 + 2800 * size;
+    if (mode === "flake") return 1700;
+    return 2200;
+  }
+
+  _clearRiseGrains() {
+    this._clearRiseLoops();
+    this._riseFired.clear();
+    const flakes = this._riseFlakes || [];
+    while (flakes.length) this._disposeRiseVoice(flakes.pop());
+  }
+
+  _clearRiseLoops() {
+    if (!this._riseVoices) return;
+    for (const voice of this._riseVoices.values()) this._releaseRiseVoice(voice, true);
+    this._riseVoices.clear();
+  }
+
+  _disposeRiseVoice(voice) {
+    if (!voice || voice.gone) return;
+    voice.gone = true;
+    voice.released = true;
+    if (voice.timer) {
+      window.clearTimeout(voice.timer);
+      voice.timer = 0;
+    }
+    if (voice.voice) {
+      try {
+        voice.voice.onended = null;
+        voice.voice.stop();
+      } catch {
+        /* already stopped */
+      }
+    }
+    const nodes = voice.nodes || [];
+    for (let i = 0; i < nodes.length; i += 1) {
+      try {
+        nodes[i].disconnect();
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
+  _releaseRiseVoice(voice, fade) {
+    if (!voice || voice.released) return;
+    voice.released = true;
+    if (!fade || !this.ctx || !voice.gain) {
+      this._disposeRiseVoice(voice);
+      return;
+    }
+    const now = this.ctx.currentTime;
+    const gain = voice.gain.gain;
+    const current = Math.max(0.0001, gain.value || 0.0001);
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(current, now);
+    gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
+    voice.timer = window.setTimeout(() => this._disposeRiseVoice(voice), 140);
+  }
+
+  _dropFlake(voice) {
+    const list = this._riseFlakes;
+    if (list) {
+      const index = list.indexOf(voice);
+      if (index >= 0) list.splice(index, 1);
+    }
+    this._disposeRiseVoice(voice);
+  }
+
+  /**
+   * @param {{ id: number, corner: string, scale: number, pan?: number, rate?: number, t?: number, x?: number, z?: number }} atom
+   * @param {string} mode
+   * @param {number} seconds
+   * @param {boolean} loop
+   */
+  _makeRiseVoice(atom, mode, seconds, loop) {
+    const stem = this.stems?.[atom.corner];
+    const buffer = stem?.bedBuffer || this._strikeBuffers?.[atom.corner] || null;
+    if (!buffer || !this.ctx || !this._splashOut) return null;
+    const slice = riseSlice(buffer, atom, seconds);
+    const end = Math.min(buffer.duration, slice.offset + slice.duration);
+    const start = Math.max(0, Math.min(slice.offset, Math.max(0, end - 0.02)));
+    const playEnd = Math.min(buffer.duration, Math.max(start + 0.02, end));
+    const ctx = this.ctx;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.0001;
+    const body = ctx.createBiquadFilter();
+    const air = ctx.createBiquadFilter();
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.Q.value = 0.7;
+    filter.frequency.value = this._riseCutoff(mode, atom.scale);
+    const pan = ctx.createStereoPanner();
+    pan.pan.value = Math.min(1, Math.max(-1, Number(atom.pan) || 0));
+    this._copySplashShelves(stem, body, air);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = loop;
+    if (loop) {
+      source.loopStart = start;
+      source.loopEnd = Math.min(buffer.duration, playEnd);
+    }
+    source.playbackRate.value = this._riseRate(atom, mode);
+    source.connect(gain);
+    gain.connect(body);
+    body.connect(air);
+    air.connect(filter);
+    filter.connect(pan);
+    pan.connect(this._splashOut);
+    const when = ctx.currentTime;
+    const playDur = Math.max(0.01, Math.min(buffer.duration - start, playEnd - start));
+    try {
+      if (loop) source.start(when, start);
+      else source.start(when, start, playDur);
+    } catch {
+      try {
+        source.disconnect();
+      } catch {
+        /* already gone */
+      }
+      return null;
+    }
+    return {
+      id: atom.id,
+      mode,
+      corner: atom.corner,
+      voice: source,
+      gain,
+      body,
+      air,
+      filter,
+      pan,
+      nodes: [source, gain, body, air, filter, pan],
+      timer: 0,
+      released: false,
+      gone: false,
+    };
+  }
+
+  _aimRiseVoice(voice, atom, mode, count) {
+    if (!this.ctx || !voice?.gain) return;
+    const now = this.ctx.currentTime;
+    const level = Math.max(0.0001, riseVoiceLevel(atom.scale, count, mode));
+    const gain = voice.gain.gain;
+    const current = Math.max(0.0001, gain.value || 0.0001);
+    if (Math.abs(current - level) > 0.008) {
+      gain.cancelScheduledValues(now);
+      gain.setValueAtTime(current, now);
+      gain.setTargetAtTime(level, now, 0.06);
+    }
+    const rate = this._riseRate(atom, mode);
+    if (voice.voice && Math.abs(voice.voice.playbackRate.value - rate) > 0.01) {
+      const playback = voice.voice.playbackRate;
+      playback.cancelScheduledValues(now);
+      playback.setValueAtTime(playback.value, now);
+      playback.setTargetAtTime(rate, now, 0.08);
+    }
+    const panValue = Math.min(1, Math.max(-1, Number(atom.pan) || 0));
+    if (voice.pan && Math.abs(voice.pan.pan.value - panValue) > 0.02) {
+      voice.pan.pan.cancelScheduledValues(now);
+      voice.pan.pan.setValueAtTime(voice.pan.pan.value, now);
+      voice.pan.pan.setTargetAtTime(panValue, now, 0.05);
+    }
+    if (mode === "drift" && voice.filter) {
+      const hz = this._riseCutoff(mode, atom.scale);
+      if (Math.abs(voice.filter.frequency.value - hz) > 40) {
+        voice.filter.frequency.cancelScheduledValues(now);
+        voice.filter.frequency.setValueAtTime(voice.filter.frequency.value, now);
+        voice.filter.frequency.setTargetAtTime(hz, now, 0.08);
+      }
+    }
+    const stem = this.stems?.[voice.corner];
+    if (stem && voice.body && voice.air) this._copySplashShelves(stem, voice.body, voice.air);
+  }
+
+  /** @param {{ id: number, corner: string, scale: number }[]} list */
+  _syncRiseLoops(list, mode) {
+    if (!this._riseVoices) this._riseVoices = new Map();
+    const counts = riseCornerCounts(list);
+    const ranked = list.slice().sort((a, b) => (Number(b.scale) || 0) - (Number(a.scale) || 0));
+    const keep = [];
+    const fresh = [];
+    for (let i = 0; i < ranked.length; i += 1) {
+      const atom = ranked[i];
+      if (atom?.id == null) continue;
+      if (this._riseVoices.has(atom.id)) keep.push(atom);
+      else fresh.push(atom);
+    }
+    const room = Math.max(0, RISE_LOOP_CAP - keep.length);
+    const chosen = keep.concat(fresh.slice(0, room));
+    const live = new Set();
+    for (let i = 0; i < chosen.length; i += 1) {
+      const atom = chosen[i];
+      live.add(atom.id);
+      const count = counts[atom.corner] || 1;
+      let voice = this._riseVoices.get(atom.id);
+      if (!voice || voice.mode !== mode || voice.released) {
+        if (voice) this._releaseRiseVoice(voice, true);
+        voice = this._makeRiseVoice(atom, mode, mode === "drift" ? RISE_DRIFT_SEC : RISE_LOOSE_SEC, true);
+        if (!voice) continue;
+        this._riseVoices.set(atom.id, voice);
+      }
+      this._aimRiseVoice(voice, atom, mode, count);
+    }
+    for (const [id, voice] of this._riseVoices) {
+      if (live.has(id)) continue;
+      this._releaseRiseVoice(voice, true);
+      this._riseVoices.delete(id);
+    }
+  }
+
+  /** @param {{ id: number, corner: string, scale: number }[]} list */
+  _syncRiseFlakes(list) {
+    if (!this._riseFired) this._riseFired = new Set();
+    if (!this._riseFlakes) this._riseFlakes = [];
+    const counts = riseCornerCounts(list);
+    const ranked = list.slice().sort((a, b) => (Number(b.scale) || 0) - (Number(a.scale) || 0));
+    const live = new Set();
+    for (let i = 0; i < list.length; i += 1) {
+      if (list[i]?.id != null) live.add(list[i].id);
+    }
+    let room = RISE_FLAKE_CAP - this._riseFlakes.length;
+    for (let i = 0; i < ranked.length; i += 1) {
+      const atom = ranked[i];
+      if (atom?.id == null || this._riseFired.has(atom.id)) continue;
+      if (room <= 0) break;
+      const voice = this._makeRiseVoice(atom, "flake", RISE_FLAKE_SEC, false);
+      if (!voice) continue;
+      this._riseFired.add(atom.id);
+      room -= 1;
+      const level = Math.max(0.001, riseVoiceLevel(atom.scale, counts[atom.corner] || 1, "flake"));
+      const when = this.ctx.currentTime;
+      const gain = voice.gain.gain;
+      gain.cancelScheduledValues(when);
+      gain.setValueAtTime(0.001, when);
+      gain.exponentialRampToValueAtTime(level, when + 0.018);
+      gain.exponentialRampToValueAtTime(0.001, when + RISE_FLAKE_SEC);
+      this._riseFlakes.push(voice);
+      voice.voice.onended = () => this._dropFlake(voice);
+      voice.timer = window.setTimeout(() => this._dropFlake(voice), (RISE_FLAKE_SEC + 0.08) * 1000);
+    }
+    for (const id of this._riseFired) {
+      if (!live.has(id)) this._riseFired.delete(id);
     }
   }
 

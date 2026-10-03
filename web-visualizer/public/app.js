@@ -1,11 +1,11 @@
 import { notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=80";
+import { audioEngine } from "./audio-engine.js?v=82";
 import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=24";
-import * as fallingTab from "./falling-tab.js?v=73";
-import * as visualizeTab from "./visualize-tab.js?v=14";
+import * as diagnostics from "./diagnostics.js?v=25";
+import * as fallingTab from "./falling-tab.js?v=77";
+import * as visualizeTab from "./visualize-tab.js?v=15";
 
 const statusEl = document.querySelector(".status");
 const audioHealthEl = document.querySelector("[data-audio-health]");
@@ -233,7 +233,7 @@ function enqueueAudio(task) {
 
 function unlockBedsFromGesture() {
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return;
-  audioEngine.beginGesture();
+  audioEngine.beginGesture(true);
 }
 
 document.addEventListener("pointerdown", unlockBedsFromGesture, true);

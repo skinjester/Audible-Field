@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=238" />
+    <link rel="stylesheet" href="/styles.css?v=240" />
     <script type="importmap">
       {
         "imports": {
@@ -364,7 +364,7 @@
                 <span class="falling-emit-stem"><i class="falling-emit-notch"></i></span>
                 <span class="falling-emit-single"></span>
               </span>
-              <button type="button" class="falling-pill falling-touch-emit" data-falling-touch-emit aria-pressed="false" aria-label="Hold to emit atoms. Drag up for a clump, down for a single stream.">
+              <div role="button" tabindex="0" class="falling-pill falling-touch-emit" data-falling-touch-emit aria-pressed="false" aria-label="Hold to emit atoms. Drag up for a clump, down for a single stream.">
                 <span class="falling-emit-face">
                   <span class="falling-emit-fill" aria-hidden="true"></span>
                   <svg class="falling-emit-chevron" viewBox="0 0 16 8" aria-hidden="true">
@@ -375,7 +375,7 @@
                     <path d="M1.5 1.5 L8 6.5 L14.5 1.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
                 </span>
-              </button>
+              </div>
             </div>
             <p class="viz-error" data-falling-error hidden></p>
               <dialog class="falling-about-dialog" data-falling-about-dialog aria-labelledby="falling-about-title">
@@ -498,6 +498,24 @@
                     </span>
                   </div>
                 </div>
+                <div class="falling-rise-modes" data-falling-rise-modes>
+                  <p class="falling-rise-label" id="falling-rise-label">Rising atoms</p>
+                  <div class="falling-rise-options" role="radiogroup" aria-labelledby="falling-rise-label">
+                    <label class="falling-rise-option" title="A piece of the bed keeps playing, and fades as the atom shrinks.">
+                      <input type="radio" name="falling-rise-mode" value="loose" checked />
+                      Loose
+                    </label>
+                    <label class="falling-rise-option" title="One short speck of the bed when the atom lifts off.">
+                      <input type="radio" name="falling-rise-mode" value="flake" />
+                      Flake
+                    </label>
+                    <label class="falling-rise-option" title="The piece keeps playing, thins as it shrinks, and drifts upward.">
+                      <input type="radio" name="falling-rise-mode" value="drift" />
+                      Drift
+                    </label>
+                  </div>
+                  <p class="falling-rise-hint" data-falling-rise-hint>A piece of the bed keeps playing, and fades as the atom shrinks.</p>
+                </div>
               </div>
               <div class="falling-material-bar">
                 <div class="falling-material-row">
@@ -608,6 +626,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=433"></script>
+    <script type="module" src="/app.js?v=436"></script>
   </body>
 </html>

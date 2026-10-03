@@ -4,7 +4,7 @@
  * A single column stays near 7 kHz. A wide pour opens toward 20 kHz.
  * Each pile's resting height is weight on that stem: darker, a low shelf, and a soft clip.
  * Full weight is 10 atoms (2.5 world units). Taller than that stays pinned. Rising grains do not add weight.
- * Rising Diffuse grains open that bed's Greyhole send, fully by 2.5 world units, and the feedback jumps to the long diffuse tail as soon as they lift. Delay time and size stay fixed. The send is taken before the weight filters. An empty quadrant drops that tail quickly.
+ * Rising Diffuse grains open that bed's Greyhole send, fully by 2.5 world units, and the feedback jumps to the long diffuse tail as soon as they lift. The send is then scaled by how much rising mass is in the quadrant: one full-size atom is already a clear fraction, and more atoms, counted by their drawn size, fill the rest. Delay time and size stay fixed. The send is taken before the weight filters. An empty quadrant drops that tail quickly.
  * Greyhole stays off the resting stack: moving its delay with the stack was glitching playback.
  * Each connected pile plays that quadrant's sample as its own note.
  * The note is the pitch at the pile's center: an octave up at the quadrant center, the sample's own pitch at the corners.
@@ -60,6 +60,19 @@ const DECAY_ATTACK = 0.12;
 const DECAY_RELEASE = 14;
 /** Empty quadrant. Feedback and the wet return fall on this time constant. */
 const EMPTY_TAIL = 0.25;
+/**
+ * Rising mass that fills the rest of the send after the single-atom floor.
+ * Mass is the sum of drawn scales, so one full atom is 1 and a shrinking atom counts for less.
+ */
+const RISE_CROWD = 3.5;
+
+/** Send share for the rising mass. One full-size atom is already audible. A crowd approaches 1. */
+function riseCrowd(mass) {
+  if (!(mass > 0)) return 0;
+  const one = Math.min(1, mass);
+  const crowd = 1 - Math.exp(-mass / RISE_CROWD);
+  return clamp01(0.46 * one + 0.54 * crowd);
+}
 
 function footprintGain(coverage) {
   if (!(coverage > 0)) return 0;
@@ -161,6 +174,8 @@ export function fieldFrame(snap, dt) {
     const riseTip = Math.max(0, Number(quad.rise) || 0);
     const rising = riseTip > 0;
     const riseOpen = rising ? clamp01(Math.pow(riseTip / RISE_FULL, 0.55)) : 0;
+    const crowd = riseCrowd(Number(quad.riseMass) || 0);
+    const riseSend = riseOpen * crowd;
     const empty = coverage <= 0 && !rising;
     if (empty) riseLatch[id] = false;
     let feedbackTarget = 0;
@@ -197,7 +212,7 @@ export function fieldFrame(snap, dt) {
     decays[id] = follow(decays[id], decayTarget, dt, decayTau);
     halls[id] = 0;
     weights[id] = weightTarget <= 0 ? 0 : follow(weights[id], weightTarget, dt, 0.2);
-    diffuses[id] = follow(diffuses[id], riseOpen, dt, empty ? EMPTY_TAIL : rising ? 0.12 : 0.25);
+    diffuses[id] = follow(diffuses[id], riseSend, dt, empty ? EMPTY_TAIL : rising ? 0.12 : 0.25);
     wets[id] = follow(wets[id], empty ? 0 : 1, dt, empty ? EMPTY_TAIL : 0.08);
     cutoffs[id] = cutoffHz(gains[id]);
     const list = Array.isArray(snap?.piles?.[id]) ? snap.piles[id] : [];
