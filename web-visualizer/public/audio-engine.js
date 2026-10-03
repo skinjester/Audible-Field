@@ -148,9 +148,8 @@ const SPLASH_OPEN_HZ = 20000;
 
 /**
  * Where the splash low-pass starts and where it ends.
- * The bed already runs through its coverage low-pass and its pile-weight low-pass.
- * The phrase starts darker than that bed, then opens to full brightness, so the
- * restart is a brightening rather than another copy of the loop.
+ * The phrase starts at the bed's own brightness, so contact is already audible,
+ * then opens the rest of the way immediately.
  * @param {{ tone?: BiquadFilterNode, weightLp?: BiquadFilterNode }} stem
  */
 function strikeSplashCutoffs(stem) {
@@ -159,12 +158,13 @@ function strikeSplashCutoffs(stem) {
   const toneHz = Number.isFinite(tone) && tone > 0 ? tone : SPLASH_OPEN_HZ;
   const weightHz = Number.isFinite(weight) && weight > 0 ? weight : toneHz;
   const bed = Math.max(40, Math.min(SPLASH_OPEN_HZ, Math.min(toneHz, weightHz)));
-  const start = Math.max(180, Math.min(bed * 0.4, bed - 400));
-  return { start, end: SPLASH_OPEN_HZ };
+  return { start: bed, end: SPLASH_OPEN_HZ };
 }
 
 /** Phrase keeps ringing this long after the splash ring is gone. */
 const PHRASE_TAIL = 0.12;
+/** The rest of the brightness arrives with the contact, not across the phrase. */
+const PHRASE_OPEN = 0.03;
 /** Bright octave above the phrase. It dies with the ring. */
 const SPARKLE_HP_HZ = 4000;
 /** Share of the phrase peak. The high-pass throws away the body of the sample. */
@@ -2652,8 +2652,8 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * Start the level, the opening, and the pitch.
-   * The peak holds while the low-pass opens, then fades.
+   * The level and the brightness are there on the sample that contacts.
+   * A fade from silence, or a filter that opens across the phrase, lands late.
    */
   _shapeSplash(strike, stem, when, dur, peak, rate, panValue, startHz, endHz) {
     const release = this._phraseRelease(dur);
@@ -2661,16 +2661,15 @@ export class EchoScapeAudioEngine {
     const level = Math.max(0.001, peak);
     const gain = strike.gain.gain;
     gain.cancelScheduledValues(when);
-    const from = strike.live ? Math.max(0.001, gain.value || 0.001) : 0.001;
-    gain.setValueAtTime(from, when);
-    gain.exponentialRampToValueAtTime(level, when + 0.012);
+    gain.setValueAtTime(level, when);
     if (hold > 0.02) gain.setValueAtTime(level, when + hold);
     gain.exponentialRampToValueAtTime(0.001, when + dur);
 
     const cutoff = strike.filter.frequency;
     cutoff.cancelScheduledValues(when);
-    cutoff.setValueAtTime(startHz, when);
-    if (endHz > startHz) cutoff.exponentialRampToValueAtTime(endHz, when + dur);
+    cutoff.setValueAtTime(Math.max(1, startHz), when);
+    const open = Math.min(PHRASE_OPEN, Math.max(0.005, dur * 0.25));
+    if (endHz > startHz) cutoff.exponentialRampToValueAtTime(endHz, when + open);
 
     if (strike.pan) strike.pan.pan.setValueAtTime(panValue, when);
     if (strike.voice) strike.voice.playbackRate.setValueAtTime(rate, when);
@@ -2690,9 +2689,7 @@ export class EchoScapeAudioEngine {
     const level = Math.max(0.001, peak);
     const gain = strike.gain.gain;
     gain.cancelScheduledValues(when);
-    const from = Math.max(0.001, gain.value || level);
-    gain.setValueAtTime(from, when);
-    if (from < level) gain.exponentialRampToValueAtTime(level, when + Math.min(0.02, dur * 0.25));
+    gain.setValueAtTime(level, when);
     if (holdAt > when + 0.02) gain.setValueAtTime(level, holdAt);
     gain.exponentialRampToValueAtTime(0.001, until);
     if (strike.pan) strike.pan.pan.setValueAtTime(panValue, when);
@@ -2751,8 +2748,7 @@ export class EchoScapeAudioEngine {
     const level = Math.max(0.001, peak * SPARKLE_LEVEL);
     const gain = strike.sparkGain.gain;
     gain.cancelScheduledValues(when);
-    gain.setValueAtTime(0.001, when);
-    gain.exponentialRampToValueAtTime(level, when + 0.008);
+    gain.setValueAtTime(level, when);
     gain.exponentialRampToValueAtTime(0.001, when + heard);
   }
 

@@ -102,9 +102,7 @@ npm run build --prefix web-visualizer
 ## Documentation
 
 - [Falling Blocks](documentation/falling-blocks.md)
-- [Quadrant sample dropdown](documentation/quadrant-sample-dropdown.md)
 - [Web Audio Modules](documentation/web-audio-modules.md)
-- [Placing Blocks concept](documentation/placing-blocks.md)
 
 ## Acknowledgements
 

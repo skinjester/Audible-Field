@@ -1,8 +1,6 @@
 # Falling Blocks
 
-The Falling Blocks tab pours atoms onto a ground plane. Where they land, how wide the pile is, and how tall it stands drive the four stem samples. The Web Audio / WAM graph is the same one the rest of ECHOSCAPE uses.
-
-Companion design (separate track): [Placing Blocks](placing-blocks.md).
+The Falling Blocks tab pours atoms onto a ground plane. Where they land, how wide the pile is, and how tall it stands drive the four stem samples. The Web Audio / WAM graph is the same one the rest of AUDIBLE FIELD uses.
 
 ## Where it lives
 
@@ -108,7 +106,7 @@ Per quadrant, for atoms that sonify:
 | Diffuse grains rising | Greyhole send, taken before the weight filters so the tail stays bright. Feedback jumps to the long tail as soon as they lift, then releases slowly while the quadrant still has material. An empty quadrant fades that tail quickly. Pitch stays where the pile sits. |
 | Distance to the quadrant center | Playback rate. The center is an octave up. The quadrant corners stay at the sample's own pitch. Settled height and rising Diffuse grains do not change pitch. |
 | Pile position after yaw, plus where the plane sits in the view | Stereo pan of that stem. |
-| Landing | A splash ring, and one event at the pitch of the pile. Each ring gets an octave-up glint that fades with the ring. The phrase restarts the sample in phase with the bed. Its low-pass starts darker than the bed and opens toward 20 kHz, and that sweep is not restarted. The phrase ends about 0.12 s after the latest ring fades. The voice sits under the stem. A heavier landing is a little louder. |
+| Landing | A splash ring, and one event at the pitch of the pile. Each ring gets an octave-up glint that is already at full level when the ring appears and fades with it. The phrase restarts the sample in phase with the bed, at the bed's brightness, and the rest of the brightness arrives within about 30 ms. That sweep is not restarted. The phrase ends about 0.12 s after the latest ring fades. The voice sits under the stem. A heavier landing is a little louder. |
 | Zoom closer than default | Louder, with a soft clip. |
 | Zoom farther than default | Quieter, low-passed. |
 
@@ -116,7 +114,7 @@ Erode does not add coverage, height, pan, or splash. Clearing the board or turni
 
 ## Still out of scope
 
-- Click-to-place as the primary edit ([placing-blocks.md](placing-blocks.md))
+- Click-to-place as the primary edit
 - Rebuilding the browser WAM graph
 - Unreal / Steam client
 - Multiplayer

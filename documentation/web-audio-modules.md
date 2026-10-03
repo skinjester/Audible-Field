@@ -1,6 +1,6 @@
 ---
 name: Web Audio Modules catalog
-overview: Plan and catalog WAM2 plugins for EchoScape browser audio—local vendoring, face-button FX mapping, and candidates to replace native Web Audio approximations of Max VSTs.
+overview: Plan and catalog WAM2 plugins for AUDIBLE FIELD browser audio—local vendoring, face-button FX mapping, and candidates to replace native Web Audio approximations of Max VSTs.
 todos:
   - id: circle-owlshimmer
     content: Vendor OWLShimmer locally and wire Circle FX (done)
@@ -21,11 +21,11 @@ isProject: true
 
 ## Why WAMs here
 
-Native **VST / VST3** plugins cannot load in the browser Web Audio graph. EchoScape’s Max patch hosts real VSTs; the browser visualizer approximates the same routing with Web Audio nodes (and optionally **WAM2** plugins).
+Native **VST / VST3** plugins cannot load in the browser Web Audio graph. AUDIBLE FIELD’s Max patch hosts real VSTs; the browser visualizer approximates the same routing with Web Audio nodes (and optionally **WAM2** plugins).
 
 WAMs are the web-native plugin format: loadable ES modules that expose an `audioNode` for the AudioContext graph, plus optional GUI / MIDI / automation.
 
-**EchoScape policy:** everything ships **local** under `web-visualizer/public/wams/`. No runtime CDN fetches.
+**AUDIBLE FIELD policy:** everything ships **local** under `web-visualizer/public/wams/`. No runtime CDN fetches.
 
 ## Architecture (browser)
 
@@ -82,9 +82,9 @@ Burns Audio (Sequencer Party) plugins live under `burns-audio/` in the community
 3. Keep a single shared `public/wams/wimmics/utils/` (already present).
 4. Point `loadWam(ctx, "wimmics/<PluginName>/index.js")` from `wam-host.js` / `audio-engine.js`.
 5. Map DualSense stick XY → plugin param addresses (see Faust `/untitled/...` or `/PluginName/...` aliases).
-6. Update this catalog’s **EchoScape slot map** and mark status.
+6. Update this catalog’s **AUDIBLE FIELD slot map** and mark status.
 
-## Current EchoScape slot map
+## Current AUDIBLE FIELD slot map
 
 | Slot | Max (typical) | Browser today | WAM status | Stick idea |
 | --- | --- | --- | --- | --- |
@@ -103,7 +103,7 @@ Browse / audition: https://wamlist.com/
 
 **Relevance key**
 
-- **A** — Strong insert-FX fit for EchoScape wet slots or RT hall  
+- **A** — Strong insert-FX fit for AUDIBLE FIELD wet slots or RT hall  
 - **B** — Useful but secondary (amp/pedalboard/viz)  
 - **C** — Instruments / MIDI / video / utilities — not for current wet bus  
 
@@ -221,7 +221,7 @@ Native crystallizer remains the fallback if WAM load fails (`circleFxMode`: `wam
 2. **Always local** — copy into `public/wams/`; never depend on webaudiomodules.com at runtime.
 3. **Native fallback** — keep a Web Audio approximation so browser mode still works if a plugin fails.
 4. **CPU budget** — Faust/WASM reverbs are heavier than Biquad/Delay; prefer one heavy wet insert at a time (matches Max face-button exclusivity).
-5. **GUI optional** — EchoScape drives params from DualSense; plugin GUIs are for audition/debug only.
+5. **GUI optional** — AUDIBLE FIELD drives params from DualSense; plugin GUIs are for audition/debug only.
 
 ## Suggested next picks
 
