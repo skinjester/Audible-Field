@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { audioEngine } from "./audio-engine.js?v=86";
+import { audioEngine } from "./audio-engine.js?v=90";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
@@ -4491,6 +4491,12 @@ function captureAudioSnapshot(dt) {
     br: trackPiles("br", rawPiles.br),
   };
   const splash = splashAtPilePitch(splashPending, rawPiles, piles);
+  const crowdRise = {
+    tl: crowdedRiseHeight(riseAtoms, "tl"),
+    tr: crowdedRiseHeight(riseAtoms, "tr"),
+    bl: crowdedRiseHeight(riseAtoms, "bl"),
+    br: crowdedRiseHeight(riseAtoms, "br"),
+  };
   const pileRate = (list) => (list.length ? list[0].rate : 1);
   const riseRates = {
     tl: pileRateByColumn(rawPiles.tl, piles.tl),
@@ -4502,6 +4508,7 @@ function captureAudioSnapshot(dt) {
     const atom = riseAtoms[r];
     const rate = riseRates[atom.corner]?.get(atom.key);
     atom.rate = rate > 0 ? rate : 1;
+    atom.crowd = crowdRise[atom.corner] || 0;
   }
 
   audioSnap = {
@@ -4522,10 +4529,10 @@ function captureAudioSnapshot(dt) {
     weight: sumW,
     mass: count,
     quads: {
-      tl: quadAudio(fp.tl, peak.tl, crowdedRiseHeight(riseAtoms, "tl"), stackPeak.tl, pileRate(piles.tl), quadCells, riseMass.tl),
-      tr: quadAudio(fp.tr, peak.tr, crowdedRiseHeight(riseAtoms, "tr"), stackPeak.tr, pileRate(piles.tr), quadCells, riseMass.tr),
-      bl: quadAudio(fp.bl, peak.bl, crowdedRiseHeight(riseAtoms, "bl"), stackPeak.bl, pileRate(piles.bl), quadCells, riseMass.bl),
-      br: quadAudio(fp.br, peak.br, crowdedRiseHeight(riseAtoms, "br"), stackPeak.br, pileRate(piles.br), quadCells, riseMass.br),
+      tl: quadAudio(fp.tl, peak.tl, crowdRise.tl, stackPeak.tl, pileRate(piles.tl), quadCells, riseMass.tl),
+      tr: quadAudio(fp.tr, peak.tr, crowdRise.tr, stackPeak.tr, pileRate(piles.tr), quadCells, riseMass.tr),
+      bl: quadAudio(fp.bl, peak.bl, crowdRise.bl, stackPeak.bl, pileRate(piles.bl), quadCells, riseMass.bl),
+      br: quadAudio(fp.br, peak.br, crowdRise.br, stackPeak.br, pileRate(piles.br), quadCells, riseMass.br),
     },
     piles,
     rises: riseAtoms,

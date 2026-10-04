@@ -63,6 +63,8 @@ const DECAY_RELEASE = 14;
 const EMPTY_TAIL = 0.25;
 /** How the dry bed lets go after the last diffuse atom. The reverb send is after this gain, so the same fade is what the tail still hears. */
 const BED_RING = 2.6;
+/** After this, the corner's reverb, send, and held notes are shut off so the next pile does not inherit a live tank. */
+const RING_LIMIT = 3.4;
 /**
  * Rising mass that fills the rest of the send after the single-atom floor.
  * Mass is the sum of drawn scales, so one full atom is 1 and a shrinking atom counts for less.
@@ -116,6 +118,8 @@ const feedbacks = { tl: 0, tr: 0, bl: 0, br: 0 };
 const wets = { tl: 0, tr: 0, bl: 0, br: 0 };
 /** Last pile notes, kept while a diffuse tail is still fading the bed. */
 const heldNotes = { tl: [], tr: [], bl: [], br: [] };
+/** Seconds of ring left after the rise stops. 0 means that corner's reverb has been shut. */
+const ringLeft = { tl: 0, tr: 0, bl: 0, br: 0 };
 let gen = -1;
 
 function hitLife(hit) {
@@ -152,6 +156,7 @@ export function resetFieldSonify() {
     pitches[id] = 1;
     noteRates[id].clear();
     heldNotes[id] = [];
+    ringLeft[id] = 0;
     halls[id] = 0;
     weights[id] = 0;
     diffuses[id] = 0;
@@ -183,31 +188,32 @@ export function fieldFrame(snap, dt) {
     const crowd = riseCrowd(Number(quad.riseMass) || 0);
     const riseSend = riseOpen * crowd;
     const empty = coverage <= 0 && !rising;
-    if (rising) riseLatch[id] = true;
+    if (rising) ringLeft[id] = RING_LIMIT;
+    else if (ringLeft[id] > 0) ringLeft[id] = Math.max(0, ringLeft[id] - dt);
+    const tailing = rising || ringLeft[id] > 0;
+    riseLatch[id] = tailing;
     let feedbackTarget = 0;
     let feedbackTau = 0.35;
     if (rising) {
       feedbackTarget = FEEDBACK_MAX;
       feedbackTau = DECAY_ATTACK;
-    } else if (riseLatch[id]) {
+    } else if (tailing) {
       feedbackTarget = 0;
-      feedbackTau = DECAY_RELEASE;
-      if (feedbacks[id] < 0.04) riseLatch[id] = false;
+      feedbackTau = 1.15;
     } else if (empty) {
       feedbackTarget = 0;
       feedbackTau = EMPTY_TAIL;
     }
     feedbacks[id] = follow(feedbacks[id], feedbackTarget, dt, feedbackTau);
     const reverbTarget = riseOpen;
-    const tailing = rising || riseLatch[id];
     let decayTarget = reverbTarget;
     let decayTau = 0.25;
     if (rising) {
       decayTarget = 1;
       decayTau = DECAY_ATTACK;
-    } else if (riseLatch[id]) {
-      decayTarget = reverbTarget;
-      decayTau = DECAY_RELEASE;
+    } else if (tailing) {
+      decayTarget = 0;
+      decayTau = 1.15;
     } else if (empty) {
       decayTarget = 0;
       decayTau = EMPTY_TAIL;
@@ -255,6 +261,15 @@ export function fieldFrame(snap, dt) {
     if (notes[id].length) heldNotes[id] = notes[id].map((note) => ({ ...note }));
     else if (tailing && heldNotes[id].length) notes[id] = heldNotes[id];
     else heldNotes[id] = [];
+    if (!rising && ringLeft[id] <= 0 && empty) {
+      feedbacks[id] = 0;
+      wets[id] = 0;
+      diffuses[id] = 0;
+      gains[id] = 0;
+      heldNotes[id] = [];
+      notes[id] = [];
+      riseLatch[id] = false;
+    }
   }
 
   let splash = null;

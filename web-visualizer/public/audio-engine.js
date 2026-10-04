@@ -199,9 +199,9 @@ const GRAIN_HOLD_SEC = 0.025;
 /** Small lift. The bandpass is what separates the splash from the bed. */
 const GRAIN_LIFT = 1.25;
 /** Sustained rising voices. A wider cloud keeps the loudest and lets the reverb carry the rest. */
-const RISE_LOOP_CAP = 24;
+const RISE_LOOP_CAP = 8;
 /** One-shot flakes that may overlap at once. */
-const RISE_FLAKE_CAP = 40;
+const RISE_FLAKE_CAP = 16;
 /** Heard length of a flake. A bright speck, still much longer than a landing grain. */
 const RISE_FLAKE_SEC = 0.42;
 /** How often a shedding atom drops another speck. */
@@ -214,8 +214,23 @@ const RISE_LOOSE_SEC = 0.55;
 const RISE_DRIFT_SEC = 0.22;
 /** Loop length of the strand pulled a fourth below the bed. */
 const RISE_THREAD_SEC = 0.5;
-/** Loop length of the octave sheen. */
+/** Loop length of the midrange sheen. */
 const RISE_HALO_SEC = 0.24;
+/**
+ * Halo bandpass follows the same altitude curve as the diffuse send.
+ * Full open is the crowded cluster at 2.5 world units, with the 0.55 knee from grid-sonify.
+ * Low cluster sits in the low mids; a fully lifted cluster reaches the upper mids.
+ */
+const HALO_RISE_FULL = 2.5;
+const HALO_HZ_LOW = 380;
+const HALO_HZ_HIGH = 1400;
+const HALO_Q = 1.15;
+
+function haloHz(lift) {
+  const tip = Math.max(0, Number(lift) || 0);
+  const open = Math.min(1, Math.pow(tip / HALO_RISE_FULL, 0.55));
+  return HALO_HZ_LOW + (HALO_HZ_HIGH - HALO_HZ_LOW) * open;
+}
 const RISE_MODE_IDS = new Set(["loose", "flake", "drift", "thread", "shed", "halo"]);
 
 /**
@@ -2458,9 +2473,9 @@ export class EchoScapeAudioEngine {
       const askedWet = Math.min(1, Math.max(0, Number(wets?.[corner]) || 0));
       const prevFeedback = Number.isFinite(rec.feedbackHeld) ? rec.feedbackHeld : askedFeedback;
       const prevWet = Number.isFinite(rec.wetHeld) ? rec.wetHeld : askedWet;
-      let feedback = this._ringRelease(prevFeedback, askedFeedback, dt);
-      let wet = this._ringRelease(prevWet, askedWet, dt);
-      if (feedback > 0.08 && prevWet > 0.5) wet = Math.max(wet, prevWet);
+      const idle = level <= 0 && askedFeedback <= 0 && askedWet <= 0;
+      const feedback = idle ? 0 : this._ringRelease(prevFeedback, askedFeedback, dt);
+      const wet = idle ? 0 : this._ringRelease(prevWet, askedWet, dt);
       rec.feedbackHeld = feedback;
       rec.wetHeld = wet;
       if (rec.ret) writeParam(rec.ret.gain, 0.45 * wet, 1e-4);
@@ -2498,7 +2513,7 @@ export class EchoScapeAudioEngine {
    */
   _ringRelease(current, target, dt) {
     if (target >= current || !(dt > 0)) return target;
-    const a = 1 - Math.exp(-dt / 8);
+    const a = 1 - Math.exp(-dt / 0.2);
     return current + (target - current) * a;
   }
 
@@ -2961,8 +2976,8 @@ export class EchoScapeAudioEngine {
    * Flake is one bright speck when the atom lifts.
    * Thread pulls the scrap a fourth below the bed.
    * Shed drops a new speck for as long as the atom is rising.
-   * Halo holds an octave above the bed.
-   * @param {{ id: number, corner: string, x?: number, z?: number, scale: number, t?: number, pan?: number, rate?: number }[] | null} atoms
+   * Halo holds a midrange band of the bed. The band sweeps with the crowded cluster height, the same altitude that opens the reverb.
+   * @param {{ id: number, corner: string, x?: number, z?: number, scale: number, t?: number, pan?: number, rate?: number, crowd?: number }[] | null} atoms
    */
   syncRiseGrains(atoms) {
     if (!this.ctx) return;
@@ -2992,7 +3007,7 @@ export class EchoScapeAudioEngine {
   _riseRate(atom, mode) {
     const base = this._clampRate(atom?.rate);
     if (mode === "thread") return this._clampRate(base * 0.75);
-    if (mode === "halo") return this._clampRate(base * 2);
+    if (mode === "halo") return base;
     if (mode !== "drift") return base;
     const id = Number(atom?.id) || 0;
     const detune = (((id % 13) - 6) / 6) * 0.07;
@@ -3004,7 +3019,7 @@ export class EchoScapeAudioEngine {
     const size = Math.min(1, Math.max(0, Number(scale) || 0));
     if (mode === "drift") return 700 + 2800 * size;
     if (mode === "thread") return 480 + 900 * size;
-    if (mode === "halo") return 2600;
+    if (mode === "halo") return haloHz(0);
     if (mode === "flake") return 3400;
     if (mode === "shed") return 4200;
     return 1600;
@@ -3106,14 +3121,17 @@ export class EchoScapeAudioEngine {
     if (mode === "flake" || mode === "shed") {
       filter.type = "bandpass";
       filter.Q.value = mode === "shed" ? 0.85 : 0.9;
-    } else if (mode === "loose" || mode === "halo") {
+    } else if (mode === "halo") {
+      filter.type = "bandpass";
+      filter.Q.value = HALO_Q;
+    } else if (mode === "loose") {
       filter.type = "highpass";
       filter.Q.value = 0.7;
     } else {
       filter.type = "lowpass";
       filter.Q.value = 0.7;
     }
-    filter.frequency.value = this._riseCutoff(mode, atom.scale);
+    filter.frequency.value = mode === "halo" ? haloHz(atom.crowd) : this._riseCutoff(mode, atom.scale);
     const pan = ctx.createStereoPanner();
     pan.pan.value = Math.min(1, Math.max(-1, Number(atom.pan) || 0));
     this._copySplashShelves(stem, body, air);
@@ -3191,6 +3209,13 @@ export class EchoScapeAudioEngine {
         voice.filter.frequency.cancelScheduledValues(now);
         voice.filter.frequency.setValueAtTime(voice.filter.frequency.value, now);
         voice.filter.frequency.setTargetAtTime(hz, now, 0.08);
+      }
+    } else if (mode === "halo" && voice.filter) {
+      const hz = haloHz(atom.crowd);
+      if (Math.abs(voice.filter.frequency.value - hz) > 12) {
+        voice.filter.frequency.cancelScheduledValues(now);
+        voice.filter.frequency.setValueAtTime(voice.filter.frequency.value, now);
+        voice.filter.frequency.setTargetAtTime(hz, now, 0.1);
       }
     } else if (mode === "thread" && voice.filter) {
       const hz = this._riseCutoff(mode, atom.scale);

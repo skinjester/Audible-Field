@@ -1,4 +1,4 @@
-import { audioEngine } from "./audio-engine.js?v=86";
+import { audioEngine } from "./audio-engine.js?v=90";
 import {
   clearBoard,
   hideFallingBlocks,
@@ -6,8 +6,8 @@ import {
   onFieldPress,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=364";
-import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=44";
+} from "./falling-blocks.js?v=368";
+import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=45";
 import { controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
@@ -80,7 +80,7 @@ const RISE_MODES = {
   flake: "One bright speck of the bed when the atom lifts off.",
   thread: "A lower strand of the bed is pulled free and thins as the atom shrinks.",
   shed: "The atom keeps dropping short specks of the bed on the way up.",
-  halo: "An octave above the bed, a thin sheen that fades as the atom shrinks.",
+  halo: "A midrange band of the bed. The band rises with the cluster, on the same height that opens the reverb.",
 };
 
 function bindRiseModeUi() {
