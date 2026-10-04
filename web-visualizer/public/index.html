@@ -340,9 +340,13 @@
                       <div class="tabs" role="tablist" aria-label="Navigation">
                         <button type="button" role="tab" id="falling-nav-tab-mouse" aria-controls="falling-nav-mouse" aria-selected="true">Mouse</button>
                         <button type="button" role="tab" id="falling-nav-tab-touch" aria-controls="falling-nav-touch" aria-selected="false" tabindex="-1">Touch</button>
-                        <button type="button" role="tab" id="falling-nav-tab-pad" aria-controls="falling-nav-pad" aria-selected="false" tabindex="-1">Controller</button>
+                        <button type="button" role="tab" id="falling-nav-tab-pad" aria-controls="falling-nav-pad" aria-selected="false" tabindex="-1">Game Controller</button>
                       </div>
                       <div role="tabpanel" id="falling-nav-mouse" aria-labelledby="falling-nav-tab-mouse">
+                        <div>
+                          <h4>Emitter size</h4>
+                          <p>Hold <kbd>Shift</kbd> while dragging with <span class="falling-about-mouse"><svg viewBox="0 0 14 20" aria-hidden="true"><path d="M7 1.2C3.6 1.2 1.2 3.6 1.2 7.2v6c0 3.4 2.4 5.6 5.8 5.6s5.8-2.2 5.8-5.6v-6C12.8 3.6 10.4 1.2 7 1.2z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 1.6V8.2M1.6 8.2h10.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6.4 2.5C4.3 2.8 2.7 4.4 2.6 7.3h3.8z" fill="currentColor"/></svg>LMB</span> to use the smallest emitter. Without <kbd>Shift</kbd>, the emitter uses its largest size.</p>
+                        </div>
                         <div>
                           <h4>Move</h4>
                           <p>Drag with <span class="falling-about-mouse"><svg viewBox="0 0 14 20" aria-hidden="true"><path d="M7 1.2C3.6 1.2 1.2 3.6 1.2 7.2v6c0 3.4 2.4 5.6 5.8 5.6s5.8-2.2 5.8-5.6v-6C12.8 3.6 10.4 1.2 7 1.2z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 1.6V8.2M1.6 8.2h10.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7.6 2.5C9.7 2.8 11.3 4.4 11.4 7.3H7.6z" fill="currentColor"/></svg>RMB</span> to move about.</p>
@@ -353,10 +357,18 @@
                         </div>
                         <div>
                           <h4>Rotate</h4>
-                          <p>Drag with the middle mouse button to turn the view. <kbd>Shift</kbd> or <kbd>Alt</kbd> with <span class="falling-about-mouse"><svg viewBox="0 0 14 20" aria-hidden="true"><path d="M7 1.2C3.6 1.2 1.2 3.6 1.2 7.2v6c0 3.4 2.4 5.6 5.8 5.6s5.8-2.2 5.8-5.6v-6C12.8 3.6 10.4 1.2 7 1.2z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 1.6V8.2M1.6 8.2h10.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7.6 2.5C9.7 2.8 11.3 4.4 11.4 7.3H7.6z" fill="currentColor"/></svg>RMB</span> also turns it.</p>
+                          <p>Drag with the middle mouse button to turn the view. <kbd>Shift</kbd> + <span class="falling-about-mouse"><svg viewBox="0 0 14 20" aria-hidden="true"><path d="M7 1.2C3.6 1.2 1.2 3.6 1.2 7.2v6c0 3.4 2.4 5.6 5.8 5.6s5.8-2.2 5.8-5.6v-6C12.8 3.6 10.4 1.2 7 1.2z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7 1.6V8.2M1.6 8.2h10.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M7.6 2.5C9.7 2.8 11.3 4.4 11.4 7.3H7.6z" fill="currentColor"/></svg>RMB</span> also turns it.</p>
                         </div>
                       </div>
                       <div role="tabpanel" id="falling-nav-touch" aria-labelledby="falling-nav-tab-touch" hidden>
+                        <div>
+                          <h4>Emit</h4>
+                          <p>Press and hold the Emit button to pour atoms.</p>
+                        </div>
+                        <div>
+                          <h4>Emitter size</h4>
+                          <p>Drag the Emit button up or down to change the emitter size. You can adjust it while emitting.</p>
+                        </div>
                         <div>
                           <h4>Move</h4>
                           <p>Drag with one finger. The field slides under the emitter, which stays at the center of the screen.</p>
@@ -368,6 +380,10 @@
                         <div>
                           <h4>Rotate</h4>
                           <p>Twist two fingers to turn the field around the emitter.</p>
+                        </div>
+                        <div>
+                          <h4>Multitouch</h4>
+                          <p>Use these controls together. Emit while moving, rotating, or zooming the field, and select another material without stopping.</p>
                         </div>
                       </div>
                       <div role="tabpanel" id="falling-nav-pad" aria-labelledby="falling-nav-tab-pad" hidden>
@@ -382,6 +398,10 @@
                         <div>
                           <h4>Rotate</h4>
                           <p>The right stick left and right turns the view.</p>
+                        </div>
+                        <div>
+                          <h4>Emit while navigating</h4>
+                          <p>Hold either trigger to emit atoms while moving, rotating, or zooming.</p>
                         </div>
                       </div>
                     </div>
