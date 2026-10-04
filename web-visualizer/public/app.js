@@ -1,14 +1,46 @@
 import { STEM_CORNERS, notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=97";
+import { audioEngine } from "./audio-engine.js?v=100";
 import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=37";
-import * as fallingTab from "./falling-tab.js?v=99";
-import * as visualizeTab from "./visualize-tab.js?v=27";
+import * as diagnostics from "./diagnostics.js?v=39";
+import * as fallingTab from "./falling-tab.js?v=103";
+import * as visualizeTab from "./visualize-tab.js?v=30";
 
 const statusEl = document.querySelector(".status");
-const audioHealthEl = document.querySelector("[data-audio-health]");
+const audioLineEls = {
+  splashes: document.querySelector("[data-audio-line='splashes']"),
+  flow: document.querySelector("[data-audio-line='flow']"),
+  voices: document.querySelector("[data-audio-line='voices']"),
+  voiceDetail: document.querySelector("[data-audio-line='voice-detail']"),
+  wams: document.querySelector("[data-audio-line='wams']"),
+  rising: document.querySelector("[data-audio-line='rising']"),
+};
+const audioValueEls = {
+  splashes: document.querySelector("[data-audio-value='splashes']"),
+  flow: document.querySelector("[data-audio-value='flow']"),
+  voices: document.querySelector("[data-audio-value='voices']"),
+  rising: document.querySelector("[data-audio-value='rising']"),
+};
+const risingRowEl = document.querySelector("[data-audio-row='rising']");
+const sparkLineEls = {
+  splashes: document.querySelector("[data-audio-spark='splashes']"),
+  flow: document.querySelector("[data-audio-spark='flow']"),
+  voices: document.querySelector("[data-audio-spark='voices']"),
+  rising: document.querySelector("[data-audio-spark='rising']"),
+};
+const sparkFillEls = {
+  splashes: document.querySelector("[data-audio-spark-fill='splashes']"),
+  flow: document.querySelector("[data-audio-spark-fill='flow']"),
+  voices: document.querySelector("[data-audio-spark-fill='voices']"),
+  rising: document.querySelector("[data-audio-spark-fill='rising']"),
+};
+const sparkMaxEls = {
+  splashes: document.querySelector("[data-audio-spark-max='splashes']"),
+  flow: document.querySelector("[data-audio-spark-max='flow']"),
+  voices: document.querySelector("[data-audio-spark-max='voices']"),
+  rising: document.querySelector("[data-audio-spark-max='rising']"),
+};
 const audioQuadRoot = document.querySelector("[data-audio-quads]");
 const audioQuadEls = {
   tl: audioQuadRoot?.querySelector("[data-audio-quad='tl']") || null,
@@ -20,14 +52,21 @@ const AUDIO_QUADS = ["tl", "tr", "bl", "br"];
 const statusParts = {
   audio: document.querySelector("[data-status-audio]"),
   mouse: document.querySelector("[data-status-mouse]"),
+  touch: document.querySelector("[data-status-touch]"),
   pad: document.querySelector("[data-status-pad]"),
 };
 const catalogCountEls = document.querySelectorAll("[data-catalog-counts]");
 let statusText = "";
 let statusKey = "";
 let audioHealthKey = "";
+const SPARK_MS = 250;
+const SPARK_LEN = 48;
+const SPARK_FLOOR = { splashes: 8, flow: 20, voices: 32, rising: 16 };
+const sparkHistory = { splashes: [], flow: [], voices: [], rising: [] };
+let sparkAt = 0;
 let audioQuadKey = "";
 let mouseSeen = false;
+let touchSeen = false;
 const tabButtons = document.querySelectorAll("[data-tab]");
 const panels = document.querySelectorAll("[data-panel]");
 
@@ -83,12 +122,19 @@ function mouseAvailable() {
   return navigator.maxTouchPoints === 0;
 }
 
-function noteMouse(event) {
-  if (event.pointerType === "mouse" || event.pointerType === "pen") mouseSeen = true;
+function touchAvailable() {
+  if (touchSeen) return true;
+  const coarse = window.matchMedia?.("(pointer: coarse)");
+  return !!coarse?.matches;
 }
 
-window.addEventListener("pointerdown", noteMouse, true);
-window.addEventListener("pointermove", noteMouse, true);
+function notePointer(event) {
+  if (event.pointerType === "mouse" || event.pointerType === "pen") mouseSeen = true;
+  else if (event.pointerType === "touch") touchSeen = true;
+}
+
+window.addEventListener("pointerdown", notePointer, true);
+window.addEventListener("pointermove", notePointer, true);
 
 /** Text fields keep the system caret and loupe. Everything else is a control surface. */
 function isTextEntryTarget(target) {
@@ -121,20 +167,74 @@ function dualSenseAvailable() {
   return false;
 }
 
+const AUDIO_PREF_KEY = "audible-field.audio";
+
+function readAudioPref() {
+  try {
+    return localStorage.getItem(AUDIO_PREF_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function writeAudioPref(on) {
+  try {
+    localStorage.setItem(AUDIO_PREF_KEY, on ? "1" : "0");
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+function syncAudioSwitch() {
+  const button = document.querySelector("[data-audio-switch]");
+  if (!(button instanceof HTMLButtonElement)) return;
+  const on = audioEngine.isAudible();
+  button.setAttribute("aria-checked", on ? "true" : "false");
+  button.setAttribute("aria-label", on ? "Audio on" : "Audio off");
+  button.title = on ? "Turn audio off" : "Turn audio on";
+}
+
+function setGlobalAudio(on) {
+  const enabled = !!on;
+  audioEngine.setAudible(enabled);
+  writeAudioPref(enabled);
+  syncAudioSwitch();
+  refreshStatusLine();
+  if (enabled) void ensureBrowserAudio();
+}
+
+function bindAudioSwitch() {
+  const button = document.querySelector("[data-audio-switch]");
+  if (!(button instanceof HTMLButtonElement) || button.dataset.bound === "1") return;
+  button.dataset.bound = "1";
+  syncAudioSwitch();
+  button.addEventListener("click", () => {
+    setGlobalAudio(!audioEngine.isAudible());
+  });
+}
+
 function audioKindLabel() {
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return "Audio off";
   if (audioStarting) return "Loading audio";
   if (!audioEngine.running) return "Audio off";
   if (audioEngine.ctx && !audioEngine.speakerProved()) return "Tap for audio";
-  const state = audioEngine.ctx?.state;
-  if (state === "suspended") return "Audio paused";
-  if (state === "interrupted") return "Audio interrupted";
-  if (state === "closed") return "Audio closed";
-  if (state && state !== "running") return "Audio paused";
+  // The header switch suspends the context. Keep the audio type, and grey it.
+  if (audioEngine.isAudible()) {
+    const state = audioEngine.ctx?.state;
+    if (state === "suspended") return "Audio paused";
+    if (state === "interrupted") return "Audio interrupted";
+    if (state === "closed") return "Audio closed";
+    if (state && state !== "running") return "Audio paused";
+  }
   return "Browser audio";
 }
 
+function audioStatusLit() {
+  return audioKindLabel() === "Browser audio" && audioEngine.isAudible();
+}
+
 function audioShouldBeAudible() {
+  if (!audioEngine.isAudible()) return false;
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return false;
   return !!(audioEngine.running || audioEngine.ctx);
 }
@@ -179,13 +279,87 @@ function paintQuadCell(el, quad) {
   el.dataset.empty = piles === 0 && rise === 0 && !(Number(quad?.height) > 0) ? "true" : "";
 }
 
+function rememberSpark(id, value) {
+  const buf = sparkHistory[id];
+  const n = Number(value) || 0;
+  if (!buf.length) {
+    for (let i = 0; i < SPARK_LEN; i += 1) buf.push(n);
+    return;
+  }
+  buf.push(n);
+  if (buf.length > SPARK_LEN) buf.shift();
+}
+
+function paintSpark(id) {
+  const line = sparkLineEls[id];
+  const fill = sparkFillEls[id];
+  const values = sparkHistory[id];
+  if (!line || !values.length) return;
+  let max = SPARK_FLOOR[id];
+  for (let i = 0; i < values.length; i += 1) if (values[i] > max) max = values[i];
+  max = Math.ceil(max);
+  const scale = sparkMaxEls[id];
+  if (scale) {
+    const text = String(max);
+    if (scale.textContent !== text) scale.textContent = text;
+  }
+  const pts = [];
+  const last = values.length - 1;
+  for (let i = 0; i < values.length; i += 1) {
+    const x = last === 0 ? 0 : (i / last) * 100;
+    const y = 22 - (Math.max(0, values[i]) / max) * 20;
+    pts.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+  }
+  const points = pts.join(" ");
+  line.setAttribute("points", points);
+  if (fill) fill.setAttribute("points", `0,24 ${points} 100,24`);
+}
+
+function setAudioLine(id, text) {
+  const el = audioLineEls[id];
+  if (el && el.textContent !== text) el.textContent = text;
+}
+
+function setAudioValue(id, text) {
+  const el = audioValueEls[id];
+  if (el && el.textContent !== text) el.textContent = text;
+}
+
+/** "Audio voices 12  rise 6/8  piles 1" → count on the graph row, the rest underneath. */
+function splitVoiceLine(text) {
+  const parts = String(text || "").split(/\s{2,}/);
+  return {
+    count: parts[0] || "",
+    detail: parts.slice(1).join("  "),
+  };
+}
+
 function paintAudioHealth() {
-  if (audioHealthEl) {
-    const text = audioEngine.audioHealthLabel();
-    if (text !== audioHealthKey) {
-      audioHealthKey = text;
-      audioHealthEl.textContent = text;
-    }
+  const health = audioEngine.audioHealth();
+  const text = [health.lines.splashes, health.lines.flow, health.lines.voices, health.lines.wams, health.lines.rising].join("\n");
+  if (text !== audioHealthKey) {
+    audioHealthKey = text;
+    const voiceLine = splitVoiceLine(health.lines.voices);
+    setAudioValue("splashes", `${health.splashesPerSec}/s`);
+    setAudioValue("flow", `${health.flowAtomsPerSec} atoms/s`);
+    setAudioValue("voices", String(health.voices.total));
+    setAudioValue("rising", health.rising == null ? "—" : String(health.rising));
+    setAudioLine("voiceDetail", voiceLine.detail);
+    if (audioLineEls.voiceDetail) audioLineEls.voiceDetail.hidden = !voiceLine.detail;
+    setAudioLine("wams", health.lines.wams);
+    if (risingRowEl) risingRowEl.hidden = health.rising == null;
+  }
+  const now = performance.now();
+  if (!sparkHistory.splashes.length || now - sparkAt >= SPARK_MS) {
+    sparkAt = now;
+    rememberSpark("splashes", health.splashesPerSec);
+    rememberSpark("flow", health.flowAtomsPerSec);
+    rememberSpark("voices", health.voices.total);
+    rememberSpark("rising", health.rising);
+    paintSpark("splashes");
+    paintSpark("flow");
+    paintSpark("voices");
+    paintSpark("rising");
   }
   const quads = audioEngine.fieldQuads();
   const nameKey = AUDIO_QUADS.map((id) => STEM_CORNERS[id]?.label || "").join("\u0000");
@@ -209,12 +383,14 @@ function audioStatusState() {
 function statusFacts() {
   const audio = audioKindLabel();
   const mouse = mouseAvailable();
+  const touch = touchAvailable();
   const pad = dualSenseAvailable();
   return {
     audio,
     mouse,
+    touch,
     pad,
-    label: [audio, "mouse", "DualSense"].join(" · "),
+    label: [audio, "mouse", "touchscreen", "DualSense"].join(" · "),
   };
 }
 
@@ -223,16 +399,18 @@ function statusSignature() {
   return [
     audioStatusState(),
     facts.label,
-    facts.audio === "Browser audio",
+    audioStatusLit(),
     facts.mouse,
+    facts.touch,
     facts.pad,
   ].join("|");
 }
 
 function paintStatusLine() {
   const facts = statusFacts();
-  paintStatusPart(statusParts.audio, facts.audio, facts.audio === "Browser audio");
+  paintStatusPart(statusParts.audio, facts.audio, audioStatusLit());
   paintStatusPart(statusParts.mouse, "mouse", facts.mouse);
+  paintStatusPart(statusParts.touch, "touchscreen", facts.touch);
   paintStatusPart(statusParts.pad, "DualSense", facts.pad);
 }
 
@@ -296,6 +474,7 @@ function enqueueAudio(task) {
 
 function unlockBedsFromGesture(event, phase) {
   if (!event.isTrusted) return;
+  if (!audioEngine.isAudible()) return;
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return;
   audioEngine.beginGesture(true, phase);
   if (audioEngine.takeGraphRestart()) void ensureBrowserAudio();
@@ -456,6 +635,8 @@ const deps = {
 diagnostics.initDiagnostics(deps);
 fallingTab.initFallingTab(deps);
 
+if (!readAudioPref()) audioEngine.setAudible(false);
+bindAudioSwitch();
 mountUiScrolls();
 notify();
 diagnostics.updateCornerLabels();

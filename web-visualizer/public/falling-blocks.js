@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { audioEngine } from "./audio-engine.js?v=97";
+import { audioEngine } from "./audio-engine.js?v=100";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
@@ -97,14 +97,6 @@ let fpsLastAt = 0;
 let hudFpsText = "";
 let hudAtomsText = "";
 let hudTrisText = "";
-/** @type {HTMLOListElement | null} */
-let lifeLogEl = null;
-let lifeLogCount = 0;
-/** @type {Map<string, { el: HTMLElement, text: string }>} */
-const readoutSlots = new Map();
-const CORNER_IDS = ["tl", "tr", "bl", "br"];
-const DOING_VERBS = ["fall", "slide", "rest", "shrink", "rise"];
-const LIFE_LOG_MAX = 8;
 
 let running = false;
 let rafId = 0;
@@ -616,128 +608,6 @@ function sampleEmitLife() {
 
 function resetEmitLife() {
   emitLifePhase = 0;
-}
-
-function bindLifeLog() {
-  lifeLogEl = document.querySelector("[data-falling-life-list]");
-  bindReadout();
-  bindLifeWave();
-}
-
-const LIFE_WAVE = { left: 36, right: 216, top: 8, bottom: 42 };
-let lifeWaveDot = null;
-let lifeWaveKey = "";
-
-function lifeWaveXY(phase) {
-  const s = -Math.cos(phase * Math.PI * 2);
-  const t = (s + 1) * 0.5;
-  return {
-    x: LIFE_WAVE.left + phase * (LIFE_WAVE.right - LIFE_WAVE.left),
-    y: LIFE_WAVE.bottom - t * (LIFE_WAVE.bottom - LIFE_WAVE.top),
-  };
-}
-
-function bindLifeWave() {
-  const wave = document.querySelector("[data-life-wave]");
-  lifeWaveDot = document.querySelector("[data-life-wave-dot]");
-  const maxEl = document.querySelector("[data-life-max]");
-  const minEl = document.querySelector("[data-life-min]");
-  if (maxEl) maxEl.textContent = EMIT_LIFE_MAX.toFixed(1);
-  if (minEl) minEl.textContent = EMIT_LIFE_MIN.toFixed(1);
-  if (wave) {
-    const parts = [];
-    const steps = 48;
-    for (let i = 0; i <= steps; i += 1) {
-      const p = lifeWaveXY(i / steps);
-      parts.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`);
-    }
-    wave.setAttribute("points", parts.join(" "));
-  }
-  lifeWaveKey = "";
-  paintLifeWave();
-}
-
-function paintLifeWave() {
-  if (!lifeWaveDot) return;
-  const sampling = emitting ? "1" : "0";
-  const key = `${emitLifePhase.toFixed(4)}:${sampling}`;
-  if (key === lifeWaveKey) return;
-  lifeWaveKey = key;
-  const p = lifeWaveXY(emitLifePhase);
-  lifeWaveDot.setAttribute("cx", p.x.toFixed(1));
-  lifeWaveDot.setAttribute("cy", p.y.toFixed(1));
-  if (emitting) lifeWaveDot.setAttribute("data-sampling", "");
-  else lifeWaveDot.removeAttribute("data-sampling");
-}
-
-function bindReadout() {
-  readoutSlots.clear();
-  for (const el of document.querySelectorAll("[data-readout]")) {
-    const key = el.getAttribute("data-readout");
-    if (!key) continue;
-    readoutSlots.set(key, { el, text: el.textContent || "" });
-    if ((el.textContent || "") === "—") el.setAttribute("data-empty", "");
-  }
-}
-
-function setReadout(key, text) {
-  const slot = readoutSlots.get(key);
-  if (!slot || slot.text === text) return;
-  slot.text = text;
-  slot.el.textContent = text;
-  if (text === "—") slot.el.setAttribute("data-empty", "");
-  else slot.el.removeAttribute("data-empty");
-}
-
-/** Paint corner measures and activity counts from the latest audio snapshot. */
-function paintReadout() {
-  paintLifeWave();
-  if (readoutSlots.size === 0) return;
-  const snap = audioSnap || GRID_SNAP_IDLE;
-  for (let q = 0; q < CORNER_IDS.length; q += 1) {
-    const id = CORNER_IDS[q];
-    const quad = snap.quads?.[id] || {};
-    const cells = quad.cells | 0;
-    const peak = Number(quad.peak) || 0;
-    setReadout(`${id}-area`, cells > 0 ? String(cells) : "—");
-    setReadout(`${id}-height`, peak > 0.05 ? peak.toFixed(2) : "—");
-    const doing = snap.activity?.[id] || {};
-    for (let v = 0; v < DOING_VERBS.length; v += 1) {
-      const verb = DOING_VERBS[v];
-      const n = doing[verb] | 0;
-      setReadout(`${id}-${verb}`, n > 0 ? String(n) : "—");
-    }
-  }
-}
-
-function emptyActivity() {
-  return {
-    tl: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
-    tr: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
-    bl: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
-    br: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
-  };
-}
-
-function clearLifeLog() {
-  lifeLogCount = 0;
-  lifeLogEl?.replaceChildren();
-}
-
-/** Append one emitted atom to the upper-right lifespan list. */
-function recordEmittedLife(seconds) {
-  lifeLogCount += 1;
-  if (!lifeLogEl) return;
-  const row = document.createElement("li");
-  const index = document.createElement("span");
-  index.textContent = String(lifeLogCount);
-  const life = document.createElement("span");
-  life.textContent = `${Number(seconds).toFixed(1)}s`;
-  row.append(index, life);
-  lifeLogEl.appendChild(row);
-  while (lifeLogEl.childElementCount > LIFE_LOG_MAX) {
-    lifeLogEl.firstElementChild?.remove();
-  }
 }
 
 function getLife(x, y, z) {
@@ -2044,7 +1914,6 @@ export function clearBoard() {
   if (emitSizes) emitSizes.fill(0);
   if (lifeSpans) lifeSpans.fill(0);
   resetEmitLife();
-  clearLifeLog();
   if (shuffleCounts) shuffleCounts.fill(0);
   if (shuffleOriginX) shuffleOriginX.fill(0);
   if (shuffleOriginZ) shuffleOriginZ.fill(0);
@@ -2362,7 +2231,6 @@ function pourBrush(ix, iz) {
       if (materialSonifies(matIndex)) {
         const life = sampleEmitLife();
         setLife(x, y, z, life);
-        recordEmittedLife(life);
       }
       placed += 1;
     }
@@ -3275,7 +3143,6 @@ function setHudText(el, prev, text) {
 }
 
 function updateHud(now) {
-  paintReadout();
   if (!fpsEl || !atomsEl || !trisEl) return;
   fpsFrames += 1;
   if (!fpsLastAt) fpsLastAt = now;
@@ -3581,7 +3448,6 @@ function initScene(nextCanvas) {
   atomsEl = document.querySelector("[data-falling-atoms]");
   trisEl = document.querySelector("[data-falling-tris]");
   gpuEl = document.querySelector("[data-falling-gpu]");
-  bindLifeLog();
   fpsFrames = 0;
   fpsLastAt = 0;
 
@@ -4381,7 +4247,6 @@ function captureAudioSnapshot(dt) {
   const stackPeak = { tl: 0, tr: 0, bl: 0, br: 0 };
   const panSum = { tl: 0, tr: 0, bl: 0, br: 0 };
   const pileCols = { tl: [], tr: [], bl: [], br: [] };
-  const activity = emptyActivity();
   /** Drawn scale of every grain that is currently rising. One full-size atom is 1. */
   const riseMass = { tl: 0, tr: 0, bl: 0, br: 0 };
   /** @type {{ id: number, corner: string, x: number, z: number, key: number, scale: number, t: number, pan: number, rate?: number }[]} */
@@ -4433,10 +4298,8 @@ function captureAudioSnapshot(dt) {
       const ax = i % GRID_MAX;
       const az = ((i / GRID_MAX) | 0) % GRID_MAX;
       const aid = ax < mid ? (az < mid ? "tl" : "bl") : az < mid ? "tr" : "br";
-      const bucket = activity[aid];
       const risingNow = (riseT?.[i] || 0) > 0;
       if (risingNow) {
-        bucket.rise += 1;
         const t = Math.min(1, riseT[i]);
         const visual = Math.max(0.02, 1 - t);
         const poured = cellAtomSize(i) / ATOM_SIZE;
@@ -4459,10 +4322,7 @@ function captureAudioSnapshot(dt) {
           tip,
           pan: Math.min(1, Math.max(-1, screenPan(wx, wz, yaw) + viewPan)),
         });
-      } else if (!resting) bucket.fall += 1;
-      else if (shrinkFlags?.[i] === 1) bucket.shrink += 1;
-      else if ((flowDx?.[i] || 0) !== 0 || (flowDz?.[i] || 0) !== 0) bucket.slide += 1;
-      else bucket.rest += 1;
+      }
       const w = activityWeight(resting, onFloor, sameAbove, dying);
       const x = posX[i];
       const z = posZ[i];
@@ -4554,7 +4414,6 @@ function captureAudioSnapshot(dt) {
     },
     piles,
     rises: riseAtoms,
-    activity,
     pans: {
       tl: fp.tl > 0 ? Math.min(1, Math.max(-1, panSum.tl / fp.tl + viewPan)) : 0,
       tr: fp.tr > 0 ? Math.min(1, Math.max(-1, panSum.tr / fp.tr + viewPan)) : 0,
@@ -4594,12 +4453,6 @@ const GRID_SNAP_IDLE = {
   },
   piles: { tl: [], tr: [], bl: [], br: [] },
   rises: [],
-  activity: {
-    tl: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
-    tr: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
-    bl: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
-    br: { fall: 0, slide: 0, rest: 0, shrink: 0, rise: 0 },
-  },
   pans: { tl: 0, tr: 0, bl: 0, br: 0 },
   splash: { tl: [], tr: [], bl: [], br: [] },
   view: {
@@ -4630,7 +4483,6 @@ export async function showFallingBlocks(nextCanvas, isCurrent = () => true) {
       atomsEl = document.querySelector("[data-falling-atoms]");
       trisEl = document.querySelector("[data-falling-tris]");
       gpuEl = document.querySelector("[data-falling-gpu]");
-      bindLifeLog();
       fpsFrames = 0;
       fpsLastAt = 0;
     }

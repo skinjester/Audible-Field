@@ -139,6 +139,75 @@ h1 {
   line-height: 1.15;
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.audio-switch {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  border: 1px solid var(--line);
+  background: #000;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 4px 6px 4px 10px;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  line-height: 1;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.audio-switch:hover,
+.audio-switch:focus-visible {
+  color: var(--ink);
+  border-color: rgba(255, 255, 255, 0.28);
+  outline: none;
+}
+
+.audio-switch[aria-checked="true"] {
+  color: var(--live);
+  border-color: var(--live-line);
+}
+
+.audio-switch-track {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: #2a2a2a;
+  flex: 0 0 auto;
+}
+
+.audio-switch[aria-checked="true"] .audio-switch-track {
+  background: color-mix(in srgb, var(--live) 42%, #000);
+}
+
+.audio-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--off);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.audio-switch[aria-checked="true"] .audio-switch-knob {
+  transform: translateX(12px);
+  background: var(--live);
+}
+
 .dot {
   width: 8px;
   height: 8px;
@@ -1107,9 +1176,15 @@ dd {
 
 .fx-dial-track,
 .fx-dial-span,
-.fx-dial-needle,
-.fx-dial-thumb {
+.fx-dial-needle {
   pointer-events: none;
+}
+
+.fx-dial-span-hit {
+  stroke: transparent;
+  stroke-width: 10;
+  stroke-linecap: round;
+  cursor: ns-resize;
 }
 
 .fx-dial-track {
@@ -1139,6 +1214,7 @@ dd {
   fill: var(--card);
   stroke: var(--ink);
   stroke-width: 1.5;
+  cursor: ns-resize;
 }
 
 .fx-dial-label,
@@ -1814,9 +1890,77 @@ dd {
   line-height: 1.35;
 }
 
-.falling-audio-summary {
-  margin: 0;
-  white-space: pre-line;
+.falling-overall {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) 13em max-content;
+  column-gap: 10px;
+  row-gap: 3px;
+  align-items: center;
+  width: 32em;
+}
+
+.falling-overall-row,
+.falling-voice-block {
+  display: contents;
+}
+
+.falling-overall-row[hidden] {
+  display: none;
+}
+
+.falling-audio-value {
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.falling-overall-wams {
+  grid-column: 1 / -1;
+}
+
+.falling-voice-detail {
+  grid-column: 3;
+  font-size: 9px;
+  line-height: 1.2;
+  color: rgba(255, 255, 255, 0.62);
+  white-space: nowrap;
+}
+
+.falling-voice-detail[hidden] {
+  display: none;
+}
+
+.falling-spark {
+  width: 100%;
+  height: 16px;
+  color: rgba(255, 255, 255, 0.9);
+  overflow: visible;
+}
+
+.falling-spark-max {
+  align-self: start;
+  min-width: 1.6em;
+  font-size: 8px;
+  line-height: 1;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.falling-spark polyline {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.25;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.falling-spark-fill {
+  fill: rgba(255, 255, 255, 0.16);
+  stroke: none;
 }
 
 .falling-quad-grid {
@@ -2380,143 +2524,6 @@ body:not(.has-dualsense) .pad-glyph {
   bottom: 12px;
 }
 
-.falling-readout {
-  position: static;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 12px;
-  margin: 0;
-  color: rgba(240, 240, 240, 0.95);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
-  line-height: 1.45;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
-  pointer-events: none;
-}
-
-.falling-readout table {
-  width: 34ch;
-  table-layout: fixed;
-  border-collapse: collapse;
-  font-variant-numeric: tabular-nums;
-}
-
-.falling-readout col.falling-readout-label {
-  width: 8ch;
-}
-
-.falling-readout col.falling-readout-val {
-  width: 6.5ch;
-}
-
-.falling-readout th,
-.falling-readout td {
-  box-sizing: border-box;
-  padding: 0 0 0 0.75ch;
-  font-weight: 400;
-  text-align: right;
-  white-space: nowrap;
-  overflow: hidden;
-}
-
-.falling-readout thead th {
-  padding-bottom: 2px;
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  opacity: 0.7;
-}
-
-.falling-readout tbody th {
-  padding-left: 0;
-  text-align: left;
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  opacity: 0.7;
-}
-
-.falling-readout [data-empty] {
-  opacity: 0.35;
-}
-
-.falling-life-wave {
-  width: 34ch;
-  height: 52px;
-  flex: 0 0 auto;
-}
-
-.falling-life-wave svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-
-.falling-life-wave text {
-  fill: currentColor;
-  font-family: inherit;
-  font-size: 10px;
-  opacity: 0.7;
-}
-
-.falling-life-wave polyline {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  opacity: 0.8;
-}
-
-.falling-life-wave circle {
-  fill: rgba(255, 255, 255, 0.35);
-}
-
-.falling-life-wave circle[data-sampling] {
-  fill: #fff;
-}
-
-.falling-life-log {
-  width: 34ch;
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-.falling-life-log li,
-.falling-life-log-head {
-  display: grid;
-  grid-template-columns: 8ch 6.5ch 6.5ch 6.5ch 6.5ch;
-  font-size: 11px;
-}
-
-.falling-life-log li span:first-child,
-.falling-life-log-head span:first-child {
-  grid-column: 4;
-  text-align: right;
-}
-
-.falling-life-log li span:last-child,
-.falling-life-log-head span:last-child {
-  grid-column: 5;
-  text-align: right;
-}
-
-.falling-life-log-head {
-  margin-bottom: 2px;
-  opacity: 0.7;
-}
-
-.falling-life-log-head span {
-  font-size: 10px;
-}
-
-.falling-life-log ol {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  overflow: visible;
-  font-variant-numeric: tabular-nums;
-}
-
 .falling-palette-row {
   display: flex;
   align-items: center;
@@ -2667,13 +2674,6 @@ body:not(.has-dualsense) .pad-glyph {
   .fx-plugin-row {
     margin-bottom: 4px;
   }
-}
-
-@media (max-width: 980px) {
-  .falling-readout {
-    display: none;
-  }
-
 }
 
 @media (max-width: 720px) {

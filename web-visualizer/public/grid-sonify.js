@@ -234,7 +234,8 @@ export function fieldFrame(snap, dt) {
     if (!(tailing && !rising)) {
       diffuses[id] = follow(diffuses[id], riseSend, dt, empty ? EMPTY_TAIL : rising ? DECAY_ATTACK : 0.25);
     }
-    const wetOpen = !empty || tailing;
+    // Resting piles keep the bed. They do not keep Greyhole open.
+    const wetOpen = tailing;
     wets[id] = follow(wets[id], wetOpen ? 1 : 0, dt, wetOpen ? 0.08 : EMPTY_TAIL);
     cutoffs[id] = cutoffHz(gains[id]);
     const list = Array.isArray(snap?.piles?.[id]) ? snap.piles[id] : [];
@@ -266,14 +267,19 @@ export function fieldFrame(snap, dt) {
     if (notes[id].length) heldNotes[id] = notes[id].map((note) => ({ ...note }));
     else if (tailing && heldNotes[id].length) notes[id] = heldNotes[id];
     else heldNotes[id] = [];
-    if (!rising && ringLeft[id] <= 0 && empty) {
-      feedbacks[id] = 0;
-      wets[id] = 0;
-      diffuses[id] = 0;
-      gains[id] = 0;
-      heldNotes[id] = [];
-      notes[id] = [];
-      riseLatch[id] = false;
+    if (!rising && ringLeft[id] <= 0) {
+      const settled = feedbacks[id] < 0.02 && diffuses[id] < 0.02 && wets[id] < 0.02;
+      if (empty || settled) {
+        feedbacks[id] = 0;
+        wets[id] = 0;
+        diffuses[id] = 0;
+      }
+      if (empty) {
+        gains[id] = 0;
+        heldNotes[id] = [];
+        notes[id] = [];
+        riseLatch[id] = false;
+      }
     }
   }
 

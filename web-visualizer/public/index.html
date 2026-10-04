@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=254" />
+    <link rel="stylesheet" href="/styles.css?v=264" />
     <script type="importmap">
       {
         "imports": {
@@ -23,9 +23,25 @@
             <span class="status-sep" aria-hidden="true">•</span>
             <span data-status-mouse>mouse</span>
             <span class="status-sep" aria-hidden="true">•</span>
+            <span data-status-touch class="is-off">touchscreen</span>
+            <span class="status-sep" aria-hidden="true">•</span>
             <span data-status-pad class="is-off">DualSense</span>
           </p>
-          <h1>Audible Field</h1>
+          <div class="title-row">
+            <h1>Audible Field</h1>
+            <button
+              type="button"
+              class="audio-switch"
+              data-audio-switch
+              role="switch"
+              aria-checked="true"
+              aria-label="Audio on"
+              title="Turn audio off"
+            >
+              <span class="audio-switch-name">Audio</span>
+              <span class="audio-switch-track" aria-hidden="true"><span class="audio-switch-knob"></span></span>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -444,7 +460,36 @@
                     </span>
                     <span class="falling-frame-gpu" data-falling-gpu></span>
                     <div class="falling-frame-audio">
-                      <p class="falling-audio-summary" data-audio-health>—</p>
+                      <section class="falling-overall" aria-label="Audio">
+                        <div class="falling-overall-row">
+                          <span data-audio-line="splashes">Splashes</span>
+                          <span class="falling-audio-value" data-audio-value="splashes">—/s</span>
+                          <svg class="falling-spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polygon class="falling-spark-fill" data-audio-spark-fill="splashes"></polygon><polyline data-audio-spark="splashes"></polyline></svg>
+                          <span class="falling-spark-max" data-audio-spark-max="splashes"></span>
+                        </div>
+                        <div class="falling-overall-row">
+                          <span data-audio-line="flow">Flow</span>
+                          <span class="falling-audio-value" data-audio-value="flow">— atoms/s</span>
+                          <svg class="falling-spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polygon class="falling-spark-fill" data-audio-spark-fill="flow"></polygon><polyline data-audio-spark="flow"></polyline></svg>
+                          <span class="falling-spark-max" data-audio-spark-max="flow"></span>
+                        </div>
+                        <div class="falling-overall-row" data-audio-row="rising" hidden>
+                          <span data-audio-line="rising">Rising</span>
+                          <span class="falling-audio-value" data-audio-value="rising">—</span>
+                          <svg class="falling-spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polygon class="falling-spark-fill" data-audio-spark-fill="rising"></polygon><polyline data-audio-spark="rising"></polyline></svg>
+                          <span class="falling-spark-max" data-audio-spark-max="rising"></span>
+                        </div>
+                        <div class="falling-voice-block">
+                          <span data-audio-line="voices">Audio voices</span>
+                          <span class="falling-audio-value" data-audio-value="voices">—</span>
+                          <svg class="falling-spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polygon class="falling-spark-fill" data-audio-spark-fill="voices"></polygon><polyline data-audio-spark="voices"></polyline></svg>
+                          <span class="falling-spark-max" data-audio-spark-max="voices"></span>
+                          <span class="falling-voice-detail" data-audio-line="voice-detail" hidden></span>
+                        </div>
+                        <div class="falling-overall-wams">
+                          <span data-audio-line="wams">WAMs off</span>
+                        </div>
+                      </section>
                       <div class="falling-quad-grid" data-audio-quads>
                         <div class="falling-quad" data-audio-quad="tl"></div>
                         <div class="falling-quad" data-audio-quad="tr"></div>
@@ -515,103 +560,6 @@
                   <p class="falling-rise-hint" data-falling-rise-hint>The piece keeps playing, thins as it shrinks, and drifts upward.</p>
                 </div>
               </div>
-            <aside class="falling-readout" data-falling-readout>
-              <table class="falling-measures" aria-label="Corner measures">
-                <colgroup>
-                  <col class="falling-readout-label" />
-                  <col class="falling-readout-val" span="4" />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th scope="col"></th>
-                    <th scope="col" title="Top left">TL</th>
-                    <th scope="col" title="Top right">TR</th>
-                    <th scope="col" title="Bottom left">BL</th>
-                    <th scope="col" title="Bottom right">BR</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <th scope="row" title="Occupied ground cells">area</th>
-                    <td data-readout="tl-area">—</td>
-                    <td data-readout="tr-area">—</td>
-                    <td data-readout="bl-area">—</td>
-                    <td data-readout="br-area">—</td>
-                  </tr>
-                  <tr>
-                    <th scope="row" title="Tallest stack, world units">height</th>
-                    <td data-readout="tl-height">—</td>
-                    <td data-readout="tr-height">—</td>
-                    <td data-readout="bl-height">—</td>
-                    <td data-readout="br-height">—</td>
-                  </tr>
-                </tbody>
-              </table>
-              <table class="falling-doing" aria-label="What atoms are doing">
-                <colgroup>
-                  <col class="falling-readout-label" />
-                  <col class="falling-readout-val" span="4" />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th scope="col"></th>
-                    <th scope="col" title="Top left">TL</th>
-                    <th scope="col" title="Top right">TR</th>
-                    <th scope="col" title="Bottom left">BL</th>
-                    <th scope="col" title="Bottom right">BR</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <th scope="row" title="In the air">fall</th>
-                    <td data-readout="tl-fall">—</td>
-                    <td data-readout="tr-fall">—</td>
-                    <td data-readout="bl-fall">—</td>
-                    <td data-readout="br-fall">—</td>
-                  </tr>
-                  <tr>
-                    <th scope="row" title="Stepping sideways">slide</th>
-                    <td data-readout="tl-slide">—</td>
-                    <td data-readout="tr-slide">—</td>
-                    <td data-readout="bl-slide">—</td>
-                    <td data-readout="br-slide">—</td>
-                  </tr>
-                  <tr>
-                    <th scope="row" title="Sitting still">rest</th>
-                    <td data-readout="tl-rest">—</td>
-                    <td data-readout="tr-rest">—</td>
-                    <td data-readout="bl-rest">—</td>
-                    <td data-readout="br-rest">—</td>
-                  </tr>
-                  <tr>
-                    <th scope="row" title="Dissolving">shrink</th>
-                    <td data-readout="tl-shrink">—</td>
-                    <td data-readout="tr-shrink">—</td>
-                    <td data-readout="bl-shrink">—</td>
-                    <td data-readout="br-shrink">—</td>
-                  </tr>
-                  <tr>
-                    <th scope="row" title="Lifting and fading">rise</th>
-                    <td data-readout="tl-rise">—</td>
-                    <td data-readout="tr-rise">—</td>
-                    <td data-readout="bl-rise">—</td>
-                    <td data-readout="br-rise">—</td>
-                  </tr>
-                </tbody>
-              </table>
-              <div class="falling-life-wave" aria-label="Master lifetime oscillator, 0.1 to 5 seconds">
-                <svg viewBox="0 0 220 48" role="img">
-                  <text data-life-max x="0" y="12">5.0</text>
-                  <text data-life-min x="0" y="46">0.1</text>
-                  <polyline data-life-wave />
-                  <circle data-life-wave-dot r="5" cx="34" cy="42" />
-                </svg>
-              </div>
-              <div class="falling-life-log" data-falling-life-log aria-label="Emitted atom lifespans">
-                <div class="falling-life-log-head"><span>atom</span><span>life</span></div>
-                <ol data-falling-life-list></ol>
-              </div>
-            </aside>
               </div>
               <div class="falling-material-bar">
                 <div class="falling-material-row">
@@ -625,6 +573,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=461"></script>
+    <script type="module" src="/app.js?v=470"></script>
   </body>
 </html>

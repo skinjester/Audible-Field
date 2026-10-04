@@ -28,7 +28,7 @@ import {
   listWamParams,
   createParamModel,
   applyWamControls,
-} from "./wam-host.js?v=12";
+} from "./wam-host.js?v=13";
 import {
   NATIVE_FX,
   DEFAULT_STICK_SCALE,
@@ -447,6 +447,10 @@ export class EchoScapeAudioEngine {
     this._pendingEls = {};
     this.fx = {};
     this.activeFx = "cross";
+    /** Header switch. Closed means nothing reaches the speakers. */
+    this._audible = true;
+    /** Gain after the camera stage, before the speakers. */
+    this._gate = null;
     /** True while the master trim is at its open level. Falling Blocks closes it on an empty grid. */
     this._outputAudible = true;
     /** Last requested master trim, as a fraction of the open level. */
@@ -710,6 +714,52 @@ export class EchoScapeAudioEngine {
     return this._speakerProved;
   }
 
+  /** Header switch. False silences every voice without tearing down the graph. */
+  isAudible() {
+    return this._audible;
+  }
+
+  /**
+   * Open or close the speakers. Mixer, field, and camera keep running.
+   * @param {boolean} on
+   */
+  setAudible(on) {
+    this._audible = !!on;
+    this._applyAudibleGate();
+    this._applyElementAudible();
+    const epoch = (this._muteEpoch = (this._muteEpoch || 0) + 1);
+    if (this._audible) return;
+    void this.suspendPlayback().then(() => {
+      if (epoch === this._muteEpoch && !this._audible) return;
+      if (this._audible) void this.ensurePlaying();
+    });
+  }
+
+  _applyAudibleGate() {
+    const gate = this._gate;
+    if (!gate) return;
+    const value = this._audible ? 1 : 0;
+    if (!this.ctx || !this._speakerProved) {
+      gate.gain.value = value;
+      return;
+    }
+    const t = this.ctx.currentTime;
+    gate.gain.cancelScheduledValues(t);
+    gate.gain.setValueAtTime(value, t);
+  }
+
+  /** Desktop beds also leave the media element. Keep that path on the same switch. */
+  _applyElementAudible() {
+    const muted = !this._audible;
+    const touch = isCoarseTouch();
+    for (const corner of CORNERS) {
+      const el = this.stems[corner]?.el || this._pendingEls[corner];
+      if (!el) continue;
+      el.muted = muted;
+      if (!touch) el.volume = this._audible ? 1 : 0;
+    }
+  }
+
   /** The next real press must open the speaker again. */
   forgetSpeakerProof() {
     this._speakerProved = false;
@@ -725,6 +775,7 @@ export class EchoScapeAudioEngine {
 
   /** Resume without hanging when autoplay policy blocks the promise. */
   async _safeResume(timeoutMs = 300) {
+    if (!this._audible) return;
     if (!this.ctx || this.ctx.state === "running") return;
     // Startup must not resume. A resume before the finger spends the gesture.
     if (!this._speakerProved) return;
@@ -817,6 +868,7 @@ export class EchoScapeAudioEngine {
 
   /** Ask the context to run, and start the proof buffer, on this call stack. */
   _unlockOnPress() {
+    if (!this._audible) return;
     this._maybeReplaceContext();
     const ctx = this.ctx;
     if (!ctx || ctx.state === "closed") return;
@@ -833,6 +885,7 @@ export class EchoScapeAudioEngine {
    * A running context that still has no proof is suspended for the next press.
    */
   _unlockOnLift() {
+    if (!this._audible) return;
     const ctx = this.ctx;
     if (!ctx || ctx.state === "closed" || this._speakerProved) return;
     if (this._proofPending) return;
@@ -1102,10 +1155,31 @@ export class EchoScapeAudioEngine {
    */
   audioHealth() {
     const now = performance.now();
+    const voices = this._voiceDetail();
+    const wams = this._engagedWamNames();
+    const rising = this._fieldDebug ? this._fieldDebug.rising : null;
+    const splashesPerSec = this._eventRate(this._splashMarks, now);
+    const flowAtomsPerSec = this._eventRate(this._flowMarks, now);
+    const voiceBits = [
+      `Audio voices ${voices.total}`,
+      `rise ${voices.rise}/${voices.riseCap}`,
+    ];
+    if (voices.piles > 0) voiceBits.push(`piles ${voices.piles}`);
+    else if (voices.beds > 0) voiceBits.push(`beds ${voices.beds}`);
+    if (voices.splash > 0) voiceBits.push(`splash ${voices.splash}`);
     return {
-      splashesPerSec: this._eventRate(this._splashMarks, now),
-      flowAtomsPerSec: this._eventRate(this._flowMarks, now),
-      voices: this._liveVoiceCount(),
+      splashesPerSec,
+      flowAtomsPerSec,
+      voices,
+      wams,
+      rising,
+      lines: {
+        splashes: `Splashes ${splashesPerSec}/s`,
+        flow: `Flow ${flowAtomsPerSec} atoms/s`,
+        voices: voiceBits.join("  "),
+        wams: wams.length ? `WAMs ${wams.join(", ")}` : "WAMs off",
+        rising: rising == null ? "" : `Rising ${rising}`,
+      },
     };
   }
 
@@ -1130,22 +1204,8 @@ export class EchoScapeAudioEngine {
   /** Splashes, flow, rising grains, voice caps, engaged WAMs, and one line per quadrant. */
   audioHealthLabel() {
     const health = this.audioHealth();
-    const voices = this._voiceDetail();
-    const wams = this._engagedWamNames();
-    const voiceBits = [
-      `Audio voices ${voices.total}`,
-      `rise ${voices.rise}/${voices.riseCap}`,
-    ];
-    if (voices.piles > 0) voiceBits.push(`piles ${voices.piles}`);
-    else if (voices.beds > 0) voiceBits.push(`beds ${voices.beds}`);
-    if (voices.splash > 0) voiceBits.push(`splash ${voices.splash}`);
-    const lines = [
-      `Splashes ${health.splashesPerSec}/s`,
-      `Flow ${health.flowAtomsPerSec} atoms/s`,
-      voiceBits.join("  "),
-      wams.length ? `WAMs ${wams.join(", ")}` : "WAMs off",
-    ];
-    if (this._fieldDebug) lines.push(`Rising ${this._fieldDebug.rising}`);
+    const lines = [health.lines.splashes, health.lines.flow, health.lines.voices, health.lines.wams];
+    if (health.lines.rising) lines.push(health.lines.rising);
     return lines.join("\n");
   }
 
@@ -1178,9 +1238,9 @@ export class EchoScapeAudioEngine {
 
   _playEl(el, audible) {
     if (!el) return;
-    el.muted = false;
+    el.muted = !this._audible;
     // The ringer switch mutes element output. Phones hear the buffer voice only.
-    if (audible && !isCoarseTouch()) el.volume = 1;
+    if (audible && this._audible && !isCoarseTouch()) el.volume = 1;
     if (!el.paused) return;
     const pending = el.play();
     if (pending && typeof pending.catch === "function") pending.catch(() => {});
@@ -1232,8 +1292,8 @@ export class EchoScapeAudioEngine {
     const plays = CORNERS.map(async (corner) => {
       const stem = this.stems[corner];
       if (!stem?.el || stem.bedVoice || stem.notes?.length) return;
-      stem.el.muted = false;
-      if (!isCoarseTouch()) stem.el.volume = 1;
+      stem.el.muted = !this._audible;
+      if (this._audible && !isCoarseTouch()) stem.el.volume = 1;
       if (stem.el.paused) {
         await stem.el.play();
       }
@@ -1302,6 +1362,7 @@ export class EchoScapeAudioEngine {
     this._driveWet = null;
     this._driveSum = null;
     this._viewLevel = null;
+    this._gate = null;
     this.ready = false;
     this.running = false;
     this._l1Held = false;
@@ -2314,10 +2375,10 @@ export class EchoScapeAudioEngine {
     };
     this._primeStrikeBuffer(corner, url);
 
-    if (!isCoarseTouch()) el.volume = 1;
+    if (this._audible && !isCoarseTouch()) el.volume = 1;
     if (opts.resume !== false && (this.running || navigator.userActivation?.isActive)) {
       try {
-        el.muted = false;
+        el.muted = !this._audible;
         if (el.paused) await el.play();
       } catch (err) {
         console.warn("[EchoScape audio] stem play failed:", err?.message || err);
@@ -2483,6 +2544,8 @@ export class EchoScapeAudioEngine {
 
     this._viewLevel = ctx.createGain();
     this._viewLevel.gain.value = 1;
+    this._gate = ctx.createGain();
+    this._gate.gain.value = this._audible ? 1 : 0;
 
     this._master.connect(this._brightDry);
     this._master.connect(this._viewLp);
@@ -2497,7 +2560,8 @@ export class EchoScapeAudioEngine {
     this._driveDry.connect(this._driveSum);
     this._driveWet.connect(this._driveSum);
     this._driveSum.connect(this._viewLevel);
-    this._viewLevel.connect(ctx.destination);
+    this._viewLevel.connect(this._gate);
+    this._gate.connect(ctx.destination);
   }
 
   /**

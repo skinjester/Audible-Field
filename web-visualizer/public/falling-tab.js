@@ -1,4 +1,4 @@
-import { audioEngine } from "./audio-engine.js?v=97";
+import { audioEngine } from "./audio-engine.js?v=100";
 import {
   clearBoard,
   hideFallingBlocks,
@@ -6,8 +6,8 @@ import {
   onFieldPress,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=374";
-import { fieldDebug, fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=53";
+} from "./falling-blocks.js?v=378";
+import { fieldDebug, fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=54";
 import { STEM_CORNERS, controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
