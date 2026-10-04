@@ -1126,19 +1126,7 @@ dd {
 
 .fx-dial-hit {
   fill: transparent;
-  cursor: move;
-}
-
-.fx-dial-svg[data-drag="width"] .fx-dial-hit {
-  cursor: ew-resize;
-}
-
-.fx-dial-svg[data-drag="low"] [data-thumb="low"],
-.fx-dial-svg[data-drag="high"] [data-thumb="high"],
-.fx-dial-svg[data-drag="slide"] .fx-dial-thumb,
-.fx-dial-svg[data-drag="width"] .fx-dial-thumb {
-  stroke: var(--live);
-  stroke-width: 2;
+  cursor: ns-resize;
 }
 
 .fx-dial-needle {
@@ -1843,10 +1831,72 @@ dd {
 }
 
 .falling-quad {
-  white-space: pre;
   overflow: hidden;
   line-height: 1.35;
   padding: 8px 12px;
+}
+
+.falling-quad-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.falling-quad-meta {
+  opacity: 0.8;
+}
+
+.falling-pilebar {
+  display: flex;
+  gap: 2px;
+  height: 7px;
+  margin: 6px 0 8px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.falling-pilebar > span {
+  display: block;
+  min-width: 2px;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.falling-meters {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.falling-meter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.falling-meter-track {
+  display: flex;
+  align-items: flex-end;
+  width: 10px;
+  height: 28px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.falling-meter-fill {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.falling-meter-value,
+.falling-meter-label {
+  font-size: 9px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.falling-meter-label {
+  opacity: 0.65;
 }
 
 .falling-quad:nth-child(odd) {

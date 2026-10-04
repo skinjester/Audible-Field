@@ -1,11 +1,11 @@
-import { notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=96";
+import { STEM_CORNERS, notify, tickMixer } from "./mixer-core.js?v=67";
+import { audioEngine } from "./audio-engine.js?v=97";
 import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=36";
-import * as fallingTab from "./falling-tab.js?v=96";
-import * as visualizeTab from "./visualize-tab.js?v=26";
+import * as diagnostics from "./diagnostics.js?v=37";
+import * as fallingTab from "./falling-tab.js?v=99";
+import * as visualizeTab from "./visualize-tab.js?v=27";
 
 const statusEl = document.querySelector(".status");
 const audioHealthEl = document.querySelector("[data-audio-health]");
@@ -139,6 +139,46 @@ function audioShouldBeAudible() {
   return !!(audioEngine.running || audioEngine.ctx);
 }
 
+function escDebug(text) {
+  return String(text).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]);
+}
+
+function quadSignature(quad) {
+  if (!quad) return "";
+  const meters = quad.meters || {};
+  return [
+    quad.name,
+    quad.piles,
+    quad.cells,
+    (quad.cols || []).join(","),
+    quad.rise,
+    Number(quad.height).toFixed(2),
+    Number(quad.mass).toFixed(2),
+    Number(meters.send).toFixed(2),
+    Number(meters.fb).toFixed(2),
+    Number(meters.h).toFixed(2),
+    Number(meters.mass).toFixed(2),
+  ].join(":");
+}
+
+function paintQuadCell(el, quad) {
+  const name = quad?.name || "—";
+  const piles = Math.max(0, Number(quad?.piles) || 0);
+  const cells = Math.max(0, Number(quad?.cells) || 0);
+  const rise = Math.max(0, Number(quad?.rise) || 0);
+  const cols = Array.isArray(quad?.cols) ? quad.cols : [];
+  const meters = quad?.meters || {};
+  const bars = cols
+    .map((n) => `<span style="flex:${Math.max(1, Number(n) || 1)} 1 0"></span>`)
+    .join("");
+  const meter = (key, value, label) => {
+    const level = Math.max(0, Math.min(1, Number(meters[key]) || 0));
+    return `<div class="falling-meter"><div class="falling-meter-track"><div class="falling-meter-fill" style="height:${(level * 100).toFixed(1)}%"></div></div><span class="falling-meter-value">${escDebug(value)}</span><span class="falling-meter-label">${label}</span></div>`;
+  };
+  el.innerHTML = `<div class="falling-quad-name">${escDebug(name)}</div><div class="falling-quad-meta">${quad ? `${piles} piles · ${cells} cols · ${rise} rise` : "—"}</div><div class="falling-pilebar">${bars}</div><div class="falling-meters">${meter("h", Number(quad?.height || 0).toFixed(1), "h")}${meter("mass", Number(quad?.mass || 0).toFixed(1), "mass")}${meter("send", Number(quad?.send || 0).toFixed(2), "send")}${meter("fb", Number(quad?.feedback || 0).toFixed(2), "fb")}</div>`;
+  el.dataset.empty = piles === 0 && rise === 0 && !(Number(quad?.height) > 0) ? "true" : "";
+}
+
 function paintAudioHealth() {
   if (audioHealthEl) {
     const text = audioEngine.audioHealthLabel();
@@ -148,15 +188,15 @@ function paintAudioHealth() {
     }
   }
   const quads = audioEngine.fieldQuads();
-  const key = quads ? AUDIO_QUADS.map((id) => quads[id] || "").join("\u0000") : "";
+  const nameKey = AUDIO_QUADS.map((id) => STEM_CORNERS[id]?.label || "").join("\u0000");
+  const key = `${quads ? AUDIO_QUADS.map((id) => quadSignature(quads[id])).join("\u0000") : ""}\u0001${nameKey}`;
   if (key === audioQuadKey) return;
   audioQuadKey = key;
   for (const id of AUDIO_QUADS) {
     const el = audioQuadEls[id];
     if (!el) continue;
-    const body = quads?.[id] || `${id.toUpperCase()}\n—`;
-    el.textContent = body;
-    el.dataset.empty = body.includes("\npiles 0\n") && body.includes("\nrise 0 @ 0.0u\n") ? "true" : "";
+    const quad = quads?.[id];
+    paintQuadCell(el, quad || { name: STEM_CORNERS[id]?.label || id.toUpperCase() });
   }
 }
 

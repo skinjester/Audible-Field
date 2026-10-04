@@ -13,11 +13,11 @@ import {
   state,
   STEM_CORNERS,
 } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=96";
+import { audioEngine } from "./audio-engine.js?v=97";
 import { DualsenseHid } from "./dualsense-hid.js?v=5";
 import { openStemDropdown } from "./sample-picker.js?v=18";
 import { openFxDropdown } from "./fx-picker.js?v=5";
-import { paramSentValue } from "./wam-host.js?v=11";
+import { paramSentValue } from "./wam-host.js?v=12";
 
 const root = document.querySelector('[data-panel="diagnostics"]');
 const pad = root?.querySelector("[data-pad]");
@@ -182,20 +182,12 @@ function paintParamSent() {
     const param = model.params.find((p) => p.id === row.dataset.fxParam);
     if (!param) continue;
     if (param.type === "float") {
-      const armed = model.axes?.[param.id] === "x" || model.axes?.[param.id] === "y";
-      const nextArmed = armed ? "true" : "false";
-      if (row.dataset.armed !== nextArmed) row.dataset.armed = nextArmed;
       const dial = row.querySelector("[data-fx-dial]");
-      const range = model.ranges?.[param.id];
-      if (dial && range) paintDial(dial, param, range, paramSentValue(param, model, stickX, stickY));
+      if (dial) paintDial(dial, param, paramSentValue(param, model, stickX, stickY));
     }
     const sent = row.querySelector("[data-fx-sent]");
     if (!sent) continue;
-    const range = model.ranges?.[param.id];
-    const text =
-      param.type === "float" && row.dataset.editing === "true" && range
-        ? `${fmtParam(range.low)}–${fmtParam(range.high)}`
-        : sentText(param, model, stickX, stickY);
+    const text = sentText(param, model, stickX, stickY);
     if (sent.textContent !== text) sent.textContent = text;
   }
 }
@@ -247,110 +239,45 @@ function dialUnit(value, param) {
   return (Number(value) - param.min) / span;
 }
 
-function paintDial(host, param, range, sent) {
-  const lowT = dialUnit(range.low, param);
-  const highT = dialUnit(range.high, param);
-  const sentT = dialUnit(sent, param);
-  const arc = dialArc(lowT, highT);
+function paintDial(host, param, value) {
+  const valueT = dialUnit(value, param);
+  const originT = param.min < 0 && param.max > 0 ? dialUnit(0, param) : 0;
+  const arc = dialArc(Math.min(originT, valueT), Math.max(originT, valueT));
   const track = host.querySelector("[data-track]");
   const span = host.querySelector("[data-span]");
-  const spanHit = host.querySelector("[data-span-hit]");
   const needle = host.querySelector("[data-needle]");
   if (track && !track.getAttribute("d")) track.setAttribute("d", dialArc(0, 1));
   if (span) span.setAttribute("d", arc);
-  if (spanHit) spanHit.setAttribute("d", arc);
-  const inner = dialPoint(sentT, 7);
-  const outer = dialPoint(sentT, 12.5);
+  const inner = dialPoint(valueT, 6);
+  const outer = dialPoint(valueT, 13);
   if (needle) {
     needle.setAttribute("x1", inner.x.toFixed(2));
     needle.setAttribute("y1", inner.y.toFixed(2));
     needle.setAttribute("x2", outer.x.toFixed(2));
     needle.setAttribute("y2", outer.y.toFixed(2));
   }
-  placeDialThumb(host.querySelector('[data-thumb="low"]'), lowT, range.low);
-  placeDialThumb(host.querySelector('[data-thumb="high"]'), highT, range.high);
-}
-
-function placeDialThumb(thumb, t, value) {
-  if (!thumb) return;
-  const point = dialPoint(t);
-  thumb.setAttribute("cx", point.x.toFixed(2));
-  thumb.setAttribute("cy", point.y.toFixed(2));
-  thumb.setAttribute("aria-valuenow", String(value));
-}
-
-function dialClientPoint(svg, event) {
-  const rect = svg.getBoundingClientRect();
-  const width = rect.width || 1;
-  const height = rect.height || 1;
-  return {
-    x: ((event.clientX - rect.left) / width) * 44,
-    y: ((event.clientY - rect.top) / height) * 44,
-  };
-}
-
-function pointDist(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
+  host.querySelector(".fx-dial-svg")?.setAttribute("aria-valuenow", String(value));
 }
 
 function bindDial(host, slot, param) {
   const svg = host.querySelector(".fx-dial-svg");
-  const row = host.closest(".fx-dial");
   if (!svg) return;
   let drag = null;
-  const current = () => audioEngine.getFxParamModel(slot)?.ranges?.[param.id];
+  const current = () => paramSentValue(param, audioEngine.getFxParamModel(slot), 0, 0);
 
-  const clampWindow = (low, high) => {
-    const width = high - low;
-    let nextLow = low;
-    let nextHigh = high;
-    if (nextLow < param.min) {
-      nextLow = param.min;
-      nextHigh = param.min + width;
-    }
-    if (nextHigh > param.max) {
-      nextHigh = param.max;
-      nextLow = param.max - width;
-    }
-    return { low: nextLow, high: nextHigh };
-  };
-
-  const applyWidth = (low, high, delta) => {
-    const center = (low + high) / 2;
-    const maxWidth = param.max - param.min;
-    const width = Math.min(maxWidth, Math.max(0, high - low + delta));
-    return clampWindow(center - width / 2, center + width / 2);
-  };
-
-  const write = (low, high, persist) => {
-    audioEngine.setFxParamRange(slot, param.id, low, high, { persist });
+  const write = (value, persist) => {
+    audioEngine.setFxParamValue(slot, param.id, value, { persist });
     paintParamSent();
   };
 
   svg.addEventListener("pointerdown", (event) => {
     if (event.button != null && event.button !== 0) return;
-    const range = current();
-    if (!range) return;
-    const point = dialClientPoint(svg, event);
-    const lowPoint = dialPoint(dialUnit(range.low, param));
-    const highPoint = dialPoint(dialUnit(range.high, param));
-    const nearLow = pointDist(point, lowPoint);
-    const nearHigh = pointDist(point, highPoint);
-    const capsApart = pointDist(lowPoint, highPoint);
-    let prefer = null;
-    if (capsApart > 14 && Math.min(nearLow, nearHigh) < 16) {
-      prefer = nearLow <= nearHigh ? "low" : "high";
-    }
     drag = {
       pointerId: event.pointerId,
-      originX: event.clientX,
       originY: event.clientY,
-      low: range.low,
-      high: range.high,
-      prefer,
-      kind: null,
+      value: current(),
+      fine: event.shiftKey ? 0.1 : 1,
     };
-    if (row) row.dataset.editing = "true";
     event.preventDefault();
     event.stopPropagation();
     try {
@@ -362,37 +289,16 @@ function bindDial(host, slot, param) {
 
   svg.addEventListener("pointermove", (event) => {
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const dx = event.clientX - drag.originX;
-    const dy = drag.originY - event.clientY;
-    if (!drag.kind) {
-      if (Math.hypot(dx, dy) < 4) return;
-      drag.kind = drag.prefer || (Math.abs(dx) > Math.abs(dy) ? "width" : "slide");
-      svg.dataset.drag = drag.kind;
-    }
     const span = param.max - param.min || 1;
-    const fine = event.shiftKey ? 0.2 : 1;
-    const delta = ((drag.kind === "width" ? dx : dy) / DIAL_DRAG_PX) * span * fine;
-    if (drag.kind === "low") {
-      write(Math.min(Math.max(param.min, drag.low + delta), drag.high), drag.high, false);
-    } else if (drag.kind === "high") {
-      write(drag.low, Math.max(Math.min(param.max, drag.high + delta), drag.low), false);
-    } else if (drag.kind === "width") {
-      const next = applyWidth(drag.low, drag.high, delta);
-      write(next.low, next.high, false);
-    } else {
-      const next = clampWindow(drag.low + delta, drag.high + delta);
-      write(next.low, next.high, false);
-    }
+    const delta = ((drag.originY - event.clientY) / DIAL_DRAG_PX) * span * drag.fine;
+    write(drag.value + delta, false);
   });
 
   const end = (event) => {
     if (!drag || (event && drag.pointerId !== event.pointerId)) return;
+    const value = current();
     drag = null;
-    delete svg.dataset.drag;
-    if (row) delete row.dataset.editing;
-    const range = current();
-    if (range) write(range.low, range.high, true);
-    else paintParamSent();
+    write(value, true);
   };
   svg.addEventListener("pointerup", end);
   svg.addEventListener("pointercancel", end);
@@ -401,31 +307,15 @@ function bindDial(host, slot, param) {
     event.preventDefault();
     event.stopPropagation();
     drag = null;
-    delete svg.dataset.drag;
-    if (row) delete row.dataset.editing;
-    write(param.min, param.max, true);
+    write(param.def, true);
   });
 
   svg.addEventListener("keydown", (event) => {
-    const dir =
-      event.key === "ArrowUp" || event.key === "ArrowRight"
-        ? 1
-        : event.key === "ArrowDown" || event.key === "ArrowLeft"
-          ? -1
-          : 0;
+    const dir = event.key === "ArrowUp" || event.key === "ArrowRight" ? 1 : event.key === "ArrowDown" || event.key === "ArrowLeft" ? -1 : 0;
     if (!dir) return;
     event.preventDefault();
-    const range = current();
-    if (!range) return;
-    const step = (param.discreteStep > 0 ? param.discreteStep : (param.max - param.min) / 40) * (event.shiftKey ? 0.2 : 1);
-    const horizontal = event.key === "ArrowLeft" || event.key === "ArrowRight";
-    if (horizontal) {
-      const next = applyWidth(range.low, range.high, dir * step);
-      write(next.low, next.high, true);
-    } else {
-      const next = clampWindow(range.low + dir * step, range.high + dir * step);
-      write(next.low, next.high, true);
-    }
+    const step = (param.discreteStep > 0 ? param.discreteStep : (param.max - param.min) / 100) * (event.shiftKey ? 0.1 : 1);
+    write(current() + dir * step, true);
   });
 }
 
@@ -439,91 +329,33 @@ function buildDialFace(param) {
   const face = document.createElement("div");
   face.className = "fx-dial-face";
   face.dataset.fxDial = "";
-  face.title = "Drag up or down to move the range. Drag sideways to widen or narrow it. Double-click to reset.";
+  face.title = "Drag up or down. Shift for fine control. Double-click to reset.";
   const svg = svgEl("svg", {
     class: "fx-dial-svg",
     viewBox: "0 0 44 44",
     tabindex: "0",
-    role: "group",
-    "aria-label": `${param.label} range`,
-  });
-  svg.setAttribute(
-    "title",
-    "Drag up or down to move the range. Drag sideways to widen or narrow it. Double-click to reset."
-  );
-  const low = svgEl("circle", {
-    class: "fx-dial-thumb",
-    "data-thumb": "low",
-    r: "5.5",
-    "aria-hidden": "true",
-  });
-  const high = svgEl("circle", {
-    class: "fx-dial-thumb",
-    "data-thumb": "high",
-    r: "5.5",
-    "aria-hidden": "true",
+    role: "slider",
+    "aria-label": param.label,
+    "aria-valuemin": String(param.min),
+    "aria-valuemax": String(param.max),
   });
   svg.append(
     svgEl("path", { class: "fx-dial-track", "data-track": "", fill: "none" }),
     svgEl("path", { class: "fx-dial-span", "data-span": "", fill: "none" }),
     svgEl("line", { class: "fx-dial-needle", "data-needle": "" }),
-    low,
-    high,
     svgEl("circle", { class: "fx-dial-hit", "data-hit": "", cx: "22", cy: "22", r: "21" })
   );
   face.append(svg);
   return face;
 }
 
-function syncAxisButtons(row, axis) {
-  for (const button of row.querySelectorAll("[data-fx-axis]")) {
-    button.setAttribute("aria-pressed", button.dataset.fxAxis === axis ? "true" : "false");
-  }
-}
-
-function buildAxisButtons(slot, param, model, row) {
-  const axes = document.createElement("div");
-  axes.className = "fx-dial-axes";
-  for (const axis of ["x", "y"]) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "fx-axis-sw";
-    button.dataset.fxAxis = axis;
-    button.textContent = axis.toUpperCase();
-    button.setAttribute("aria-pressed", model.axes?.[param.id] === axis ? "true" : "false");
-    button.setAttribute("aria-label", `Assign ${param.label} to stick ${axis.toUpperCase()}`);
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const live = audioEngine.getFxParamModel(slot);
-      const current = live?.axes?.[param.id] || null;
-      const next = current === axis ? null : axis;
-      audioEngine.setFxParamAxis(slot, param.id, next);
-      syncAxisButtons(row, next);
-      row.dataset.armed = next ? "true" : "false";
-      paintStickSummaries();
-      paintParamSent();
-    });
-    axes.append(button);
-  }
-  return axes;
-}
-
 function buildDial(slot, param, model, labelText) {
   const row = document.createElement("div");
   row.className = "fx-dial";
   row.dataset.fxParam = param.id;
-  const armed = model.axes?.[param.id] === "x" || model.axes?.[param.id] === "y";
-  row.dataset.armed = armed ? "true" : "false";
 
   const face = buildDialFace(param);
-  const bounds = model.ranges?.[param.id] || { low: param.min, high: param.max };
-  paintDial(
-    face,
-    param,
-    bounds,
-    paramSentValue(param, model, Number(controller.rawX) || 0, Number(controller.rawY) || 0)
-  );
+  paintDial(face, param, paramSentValue(param, model, 0, 0));
   bindDial(face, slot, param);
 
   const label = document.createElement("p");
@@ -534,9 +366,9 @@ function buildDial(slot, param, model, labelText) {
   const sent = document.createElement("p");
   sent.className = "fx-dial-sent";
   sent.dataset.fxSent = "";
-  sent.textContent = sentText(param, model, Number(controller.rawX) || 0, Number(controller.rawY) || 0);
+  sent.textContent = sentText(param, model, 0, 0);
 
-  row.append(face, label, sent, buildAxisButtons(slot, param, model, row));
+  row.append(face, label, sent);
   return row;
 }
 

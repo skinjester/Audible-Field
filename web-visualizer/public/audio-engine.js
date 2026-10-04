@@ -28,7 +28,7 @@ import {
   listWamParams,
   createParamModel,
   applyWamControls,
-} from "./wam-host.js?v=11";
+} from "./wam-host.js?v=12";
 import {
   NATIVE_FX,
   DEFAULT_STICK_SCALE,
@@ -2004,6 +2004,23 @@ export class EchoScapeAudioEngine {
 
   getFxParamModel(button) {
     return this._fxParamState?.[button] || null;
+  }
+
+  /**
+   * @param {string} button
+   * @param {string} id
+   * @param {number} value
+   * @param {{ persist?: boolean }} [opts]
+   */
+  setFxParamValue(button, id, value, opts = {}) {
+    const model = this._fxParamState?.[button];
+    const param = model?.params?.find((p) => p.id === id);
+    if (!param || param.type !== "float") return;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return;
+    model.switches[id] = Math.min(param.max, Math.max(param.min, n));
+    this._applyFxParams(button);
+    if (opts.persist !== false) this._persistFxPrefs();
   }
 
   /**

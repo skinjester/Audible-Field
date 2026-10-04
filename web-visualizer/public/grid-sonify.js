@@ -313,28 +313,25 @@ export function fieldFrame(snap, dt) {
   };
 }
 
-function fixed2(n) {
-  return (Math.round((Number(n) || 0) * 100) / 100).toFixed(2);
-}
-
 /**
  * Quadrant cells for the 2×2 behavior readout.
  * Pile count is the split: one connected mass is one note, a gap is another.
- * Footprint is occupied columns. A split lists each pile's columns.
- * Rise height is the crowded cluster that opens Greyhole, in world units.
- * Send and feedback are the values handed to that reverb.
+ * `cols` is each pile's columns, drawn as one split bar.
+ * Height, mass, send, and feedback are meter levels. Height is full at
+ * RISE_FULL. Mass is the crowd term that opens the send.
  * @param {object} snap
  * @param {object} shadow
- * @returns {{ rising: number, quads: Record<string, string> }}
+ * @param {Record<string, string>} [names] sample assigned to each corner
+ * @returns {{ rising: number, quads: Record<string, object> }}
  */
-export function fieldDebug(snap, shadow) {
+export function fieldDebug(snap, shadow, names) {
   const rises = Array.isArray(snap?.rises) ? snap.rises : [];
   const rising = { tl: 0, tr: 0, bl: 0, br: 0 };
   for (let i = 0; i < rises.length; i += 1) {
     const id = rises[i]?.corner;
     if (rising[id] != null) rising[id] += 1;
   }
-  /** @type {Record<string, string>} */
+  /** @type {Record<string, object>} */
   const quads = {};
   for (const id of CORNERS) {
     const quad = snap?.quads?.[id] || {};
@@ -342,29 +339,38 @@ export function fieldDebug(snap, shadow) {
     const notes = Array.isArray(shadow?.notes?.[id]) ? shadow.notes[id] : [];
     const piles = notes.length;
     const riseN = rising[id];
-    const send = Number(shadow?.diffuses?.[id]) || 0;
-    const feedback = Number(shadow?.feedbacks?.[id]) || 0;
-    const name = id.toUpperCase();
+    const send = clamp01(Number(shadow?.diffuses?.[id]) || 0);
+    const feedback = clamp01(Number(shadow?.feedbacks?.[id]) || 0);
+    const name = names?.[id] || id.toUpperCase();
     const height = Math.max(0, Number(quad.rise) || 0);
     const mass = Math.max(0, Number(quad.riseMass) || 0);
-    let cols = String(cells);
+    /** @type {number[]} */
+    const cols = [];
     if (piles > 1 && cells > 0) {
-      const parts = [];
       for (let i = 0; i < notes.length; i += 1) {
         const share = Number(notes[i]?.share) || 0;
-        parts.push(String(Math.max(1, Math.round(share * cells))));
+        cols.push(Math.max(1, Math.round(share * cells)));
       }
-      cols = parts.join(", ");
+    } else if (cells > 0) {
+      cols.push(cells);
     }
-    quads[id] = [
+    quads[id] = {
       name,
-      `piles ${piles}`,
-      `cols ${cols}`,
-      `rise ${riseN} @ ${height.toFixed(1)}u`,
-      `mass ${mass.toFixed(1)}`,
-      `send ${fixed2(send)}`,
-      `fb ${fixed2(feedback)}`,
-    ].join("\n");
+      piles,
+      cells,
+      cols,
+      rise: riseN,
+      height,
+      mass,
+      send,
+      feedback,
+      meters: {
+        h: clamp01(height / RISE_FULL),
+        mass: mass > 0 ? 1 - Math.exp(-mass / RISE_CROWD) : 0,
+        send,
+        fb: feedback,
+      },
+    };
   }
   return { rising: rises.length, quads };
 }

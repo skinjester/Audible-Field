@@ -572,10 +572,10 @@ export function createParamModel(params, saved, path) {
     const axis = saved?.axes?.[param.id];
     axes[param.id] = param.type === "float" && (axis === "x" || axis === "y") ? axis : null;
     const stored = Number(saved?.switches?.[param.id]);
-    switches[param.id] =
-      param.type === "boolean" || param.type === "choice"
-        ? quantizeParam(Number.isFinite(stored) ? stored : neutralParamValue(param), param)
-        : neutralParamValue(param);
+    switches[param.id] = quantizeParam(
+      Number.isFinite(stored) ? stored : neutralParamValue(param),
+      param
+    );
   }
   return {
     path: path ? String(path) : "",
@@ -594,22 +594,12 @@ export function createParamModel(params, saved, path) {
  */
 export function paramSentValue(param, model, stickX, stickY) {
   if (!param) return 0;
-  if (param.type === "boolean" || param.type === "choice") {
-    const stored = Number(model?.switches?.[param.id]);
-    return quantizeParam(Number.isFinite(stored) ? stored : neutralParamValue(param), param);
-  }
-  const axis = model?.axes?.[param.id];
-  if (axis === "x" || axis === "y") {
-    const range = model?.ranges?.[param.id] || { low: param.min, high: param.max };
-    const stick = axis === "x" ? stickX : stickY;
-    return quantizeParam(valueFromStickRange(range.low, range.high, stick), param);
-  }
-  return quantizeParam(neutralParamValue(param), param);
+  const stored = Number(model?.switches?.[param.id]);
+  return quantizeParam(Number.isFinite(stored) ? stored : neutralParamValue(param), param);
 }
 
 /**
- * Write every parameter: stick window for armed floats, neutral for the rest,
- * and the switch or menu value for booleans and choices.
+ * Write every parameter from its knob, switch, or menu value.
  * @param {{ setParamValue?: Function }} audioNode
  * @param {ReturnType<typeof createParamModel> | null} model
  * @param {number} stickX

@@ -1,4 +1,4 @@
-import { audioEngine } from "./audio-engine.js?v=96";
+import { audioEngine } from "./audio-engine.js?v=97";
 import {
   clearBoard,
   hideFallingBlocks,
@@ -6,9 +6,9 @@ import {
   onFieldPress,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=373";
-import { fieldDebug, fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=51";
-import { controller, setActiveFx } from "./mixer-core.js?v=67";
+} from "./falling-blocks.js?v=374";
+import { fieldDebug, fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=53";
+import { STEM_CORNERS, controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
 const PLAYFIELD_FACE = new Set(["circle", "square", "cross"]);
@@ -189,7 +189,9 @@ export function tick(frame) {
   }
   const snap = readGridSnapshot();
   const shadow = fieldFrame(snap, frame?.dt || 0);
-  audioEngine.setFieldDebug(fieldDebug(snap, shadow));
+  const sampleNames = {};
+  for (const id of QUAD_IDS) sampleNames[id] = STEM_CORNERS[id]?.label || id.toUpperCase();
+  audioEngine.setFieldDebug(fieldDebug(snap, shadow, sampleNames));
   audioEngine.sync({ x: 0.5, y: 0.5 }, shadow.controller, { stems: false });
   audioEngine.setStemGains(shadow.gains, shadow.pans, shadow.cutoffs);
   audioEngine.setStemPitch(shadow.notes);
