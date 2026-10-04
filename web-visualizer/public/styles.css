@@ -1068,7 +1068,7 @@ dd {
 
 .fx-dial-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
   gap: 10px 6px;
 }
 
@@ -1085,42 +1085,60 @@ dd {
 }
 
 .fx-dial-face {
-  width: 44px;
-  height: 44px;
+  width: 52px;
+  height: 52px;
 }
 
 .fx-dial-svg {
   display: block;
-  width: 44px;
-  height: 44px;
+  width: 52px;
+  height: 52px;
   overflow: visible;
   touch-action: none;
   user-select: none;
+  outline: none;
+}
+
+.fx-dial-svg:focus-visible {
+  outline: 2px solid var(--live);
+  outline-offset: 2px;
+  border-radius: 50%;
 }
 
 .fx-dial-track,
 .fx-dial-span,
-.fx-dial-needle {
+.fx-dial-needle,
+.fx-dial-thumb {
   pointer-events: none;
 }
 
 .fx-dial-track {
   stroke: var(--line);
-  stroke-width: 3;
+  stroke-width: 4;
   stroke-linecap: round;
 }
 
 .fx-dial-span {
   stroke: color-mix(in srgb, var(--live) 72%, var(--line));
-  stroke-width: 3;
+  stroke-width: 4;
   stroke-linecap: round;
 }
 
-.fx-dial-span-hit {
-  stroke: transparent;
-  stroke-width: 12;
-  stroke-linecap: round;
-  cursor: grab;
+.fx-dial-hit {
+  fill: transparent;
+  cursor: move;
+}
+
+.fx-dial-svg[data-drag="width"] .fx-dial-hit {
+  cursor: ew-resize;
+}
+
+.fx-dial-svg[data-drag="low"] [data-thumb="low"],
+.fx-dial-svg[data-drag="high"] [data-thumb="high"],
+.fx-dial-svg[data-drag="slide"] .fx-dial-thumb,
+.fx-dial-svg[data-drag="width"] .fx-dial-thumb {
+  stroke: var(--live);
+  stroke-width: 2;
 }
 
 .fx-dial-needle {
@@ -1132,17 +1150,7 @@ dd {
 .fx-dial-thumb {
   fill: var(--card);
   stroke: var(--ink);
-  stroke-width: 1;
-  cursor: ns-resize;
-}
-
-.fx-dial-thumb:focus {
-  outline: none;
-}
-
-.fx-dial-thumb:focus-visible {
-  stroke: var(--live);
-  stroke-width: 2;
+  stroke-width: 1.5;
 }
 
 .fx-dial-label,

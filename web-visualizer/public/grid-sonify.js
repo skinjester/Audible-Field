@@ -4,7 +4,7 @@
  * A single column stays near 7 kHz. A wide pour opens toward 20 kHz.
  * Each pile's resting height is weight on that stem: darker, a low shelf, and a soft clip.
  * Full weight is 10 atoms (2.5 world units). Taller than that stays pinned. Rising grains do not add weight.
- * Rising Diffuse grains open that bed's Greyhole send. The altitude is the average height of the cluster that holds the most of them, fully open by 2.5 world units, so one grain above that cluster does not open the mix by itself. Feedback jumps to the long diffuse tail as soon as they lift. The send is then scaled by how much rising mass is in the quadrant: one full-size atom is already a clear fraction, and more atoms, counted by their drawn size, fill the rest. Delay time and size stay fixed. The send is taken before the weight filters. After the last grain is gone the tail keeps ringing; only a quadrant that was not holding that tail drops quickly.
+ * Rising Diffuse grains open that bed's Greyhole send. The altitude is the average height of the cluster that holds the most of them, fully open by 2.5 world units, so one grain above that cluster does not open the mix by itself. Feedback follows that same climb and reaches the long tail only as the cluster gets there. The send is then scaled by how much rising mass is in the quadrant: one full-size atom is already a clear fraction, and more atoms, counted by their drawn size, fill the rest. Delay time and size stay fixed. The send is taken before the weight filters. After the last grain is gone the tail keeps ringing; only a quadrant that was not holding that tail drops quickly.
  * Greyhole stays off the resting stack: moving its delay with the stack was glitching playback.
  * Each connected pile plays that quadrant's sample as its own note.
  * The note is the pitch at the pile's center: an octave up at the quadrant center, the sample's own pitch at the corners.
@@ -50,13 +50,18 @@ const STACK_FIELD_U = 12;
 /**
  * Drawn altitude (world units) that fully opens the Diffuse Greyhole send.
  * This is the average height of the busiest rising cluster, not the single highest grain.
- * The first lift already raises it; 2.5 is full, the same range as the main-branch rise.
+ * Send and feedback stay in proportion to that height. 2.5 is full.
  */
 const RISE_FULL = 2.5;
-/** Greyhole feedback for a rising Diffuse tail. Just under runaway, same as the main branch. */
+/**
+ * 1 keeps the diffuse open even with the climb.
+ * Below 1 the mix gets ahead of the grains.
+ */
+const RISE_CURVE = 1;
+/** Greyhole feedback at a fully risen cluster. Just under runaway, same as the main branch. */
 const FEEDBACK_MAX = 0.98;
-/** How fast the long tail engages once grains start rising. */
-const DECAY_ATTACK = 0.12;
+/** How quickly the send and feedback catch the climb. The target itself moves with the grains. */
+const DECAY_ATTACK = 0.45;
 /** How long the long tail keeps ringing after the rise is gone, including after the last atom despawns. */
 const DECAY_RELEASE = 14;
 /** Quadrant that was not holding a diffuse tail. Feedback and the wet return fall on this time constant. */
@@ -112,7 +117,7 @@ const halls = { tl: 0, tr: 0, bl: 0, br: 0 };
 const weights = { tl: 0, tr: 0, bl: 0, br: 0 };
 /** 0..1 Greyhole send from rising Diffuse grains. The resting stack does not open it. */
 const diffuses = { tl: 0, tr: 0, bl: 0, br: 0 };
-/** Greyhole feedback for that rise. Hits the long tail immediately, then rings after the grains land. */
+/** Greyhole feedback for that rise. Grows with the climb, then rings after the grains land. */
 const feedbacks = { tl: 0, tr: 0, bl: 0, br: 0 };
 /** 0..1 Greyhole wet return. Stays open while a diffuse tail is still ringing. */
 const wets = { tl: 0, tr: 0, bl: 0, br: 0 };
@@ -184,7 +189,7 @@ export function fieldFrame(snap, dt) {
     const weightTarget = coverage <= 0 ? 0 : pileWeight(stackWorld);
     const riseTip = Math.max(0, Number(quad.rise) || 0);
     const rising = riseTip > 0;
-    const riseOpen = rising ? clamp01(Math.pow(riseTip / RISE_FULL, 0.55)) : 0;
+    const riseOpen = rising ? clamp01(Math.pow(riseTip / RISE_FULL, RISE_CURVE)) : 0;
     const crowd = riseCrowd(Number(quad.riseMass) || 0);
     const riseSend = riseOpen * crowd;
     const empty = coverage <= 0 && !rising;
@@ -195,7 +200,7 @@ export function fieldFrame(snap, dt) {
     let feedbackTarget = 0;
     let feedbackTau = 0.35;
     if (rising) {
-      feedbackTarget = FEEDBACK_MAX;
+      feedbackTarget = FEEDBACK_MAX * riseOpen;
       feedbackTau = DECAY_ATTACK;
     } else if (tailing) {
       feedbackTarget = 0;
@@ -227,7 +232,7 @@ export function fieldFrame(snap, dt) {
     halls[id] = 0;
     weights[id] = weightTarget <= 0 ? 0 : follow(weights[id], weightTarget, dt, 0.2);
     if (!(tailing && !rising)) {
-      diffuses[id] = follow(diffuses[id], riseSend, dt, empty ? EMPTY_TAIL : rising ? 0.12 : 0.25);
+      diffuses[id] = follow(diffuses[id], riseSend, dt, empty ? EMPTY_TAIL : rising ? DECAY_ATTACK : 0.25);
     }
     const wetOpen = !empty || tailing;
     wets[id] = follow(wets[id], wetOpen ? 1 : 0, dt, wetOpen ? 0.08 : EMPTY_TAIL);

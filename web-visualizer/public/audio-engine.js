@@ -218,7 +218,7 @@ const RISE_THREAD_SEC = 0.5;
 const RISE_HALO_SEC = 0.24;
 /**
  * Halo bandpass follows the same altitude curve as the diffuse send.
- * Full open is the crowded cluster at 2.5 world units, with the 0.55 knee from grid-sonify.
+ * Full open is the crowded cluster at 2.5 world units, linear with that height.
  * Low cluster sits in the low mids; a fully lifted cluster reaches the upper mids.
  */
 const HALO_RISE_FULL = 2.5;
@@ -228,7 +228,7 @@ const HALO_Q = 1.15;
 
 function haloHz(lift) {
   const tip = Math.max(0, Number(lift) || 0);
-  const open = Math.min(1, Math.pow(tip / HALO_RISE_FULL, 0.55));
+  const open = Math.min(1, tip / HALO_RISE_FULL);
   return HALO_HZ_LOW + (HALO_HZ_HIGH - HALO_HZ_LOW) * open;
 }
 const RISE_MODE_IDS = new Set(["loose", "flake", "drift", "thread", "shed", "halo"]);
