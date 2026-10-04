@@ -293,12 +293,12 @@ const RISE_MODE_IDS = new Set(["loose", "flake", "drift", "thread", "shed", "hal
 function riseVoiceLevel(scale, count, mode) {
   const body = Math.sqrt(Math.max(0.05, Math.min(1.5, Number(scale) || 0)));
   const share = 1 / Math.pow(Math.max(1, count), 0.28);
-  let base = 0.85;
-  if (mode === "drift") base = 0.2;
-  else if (mode === "flake") base = 1.05;
-  else if (mode === "shed") base = 0.78;
-  else if (mode === "thread") base = 0.72;
-  else if (mode === "halo") base = 0.5;
+  let base = 1.15;
+  if (mode === "drift") base = 0.27;
+  else if (mode === "flake") base = 1.42;
+  else if (mode === "shed") base = 1.05;
+  else if (mode === "thread") base = 0.97;
+  else if (mode === "halo") base = 0.68;
   return base * body * share;
 }
 
