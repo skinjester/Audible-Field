@@ -6,8 +6,8 @@ import {
   onFieldPress,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=380";
-import { fieldDebug, fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=54";
+} from "./falling-blocks.js?v=381";
+import { fieldDebug, fieldFrame, resetFieldSonify, setDiffuseReverb } from "./grid-sonify.js?v=55";
 import { STEM_CORNERS, controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
@@ -128,6 +128,34 @@ function bindRiseModeUi() {
   if (hint) hint.textContent = RISE_MODES[initial];
 }
 
+const DIFFUSE_REVERB_KEY = "echoscape.diffuseReverb";
+
+function bindDiffuseReverbUi() {
+  const button = document.querySelector("[data-falling-diffuse-reverb]");
+  if (!(button instanceof HTMLButtonElement) || button.dataset.bound === "1") return;
+  button.dataset.bound = "1";
+  const apply = (on) => {
+    button.setAttribute("aria-checked", on ? "true" : "false");
+    button.title = on ? "Turn reverb off" : "Turn reverb on";
+    setDiffuseReverb(on);
+    try {
+      sessionStorage.setItem(DIFFUSE_REVERB_KEY, on ? "1" : "0");
+    } catch {
+      /* private mode */
+    }
+  };
+  let stored = "1";
+  try {
+    stored = sessionStorage.getItem(DIFFUSE_REVERB_KEY) || "1";
+  } catch {
+    /* private mode */
+  }
+  apply(stored !== "0");
+  onFieldPress(button, () => {
+    apply(button.getAttribute("aria-checked") !== "true");
+  });
+}
+
 function bindFallingAudioUi() {
   const button = document.querySelector("[data-falling-audio]");
   if (!(button instanceof HTMLButtonElement) || button.dataset.bound === "1") return;
@@ -142,6 +170,7 @@ export function initFallingTab(nextDeps) {
   deps = nextDeps;
   bindFallingAudioUi();
   bindRiseModeUi();
+  bindDiffuseReverbUi();
   onFallingAudioToggle(() => {
     void setFallingAudioEnabled(!fallingAudioEnabled);
   });

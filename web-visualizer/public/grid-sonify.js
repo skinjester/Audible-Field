@@ -70,6 +70,12 @@ const EMPTY_TAIL = 0.25;
 const BED_RING = 2.6;
 /** After this, the corner's reverb, send, and held notes are shut off so the next pile does not inherit a live tank. */
 const RING_LIMIT = 3.4;
+/** Settings switch. Off closes the Diffuse Greyhole send, feedback, and wet return. */
+let diffuseReverb = true;
+
+export function setDiffuseReverb(enabled) {
+  diffuseReverb = !!enabled;
+}
 /**
  * Rising mass that fills the rest of the send after the single-atom floor.
  * Mass is the sum of drawn scales, so one full atom is 1 and a shrinking atom counts for less.
@@ -199,7 +205,10 @@ export function fieldFrame(snap, dt) {
     riseLatch[id] = tailing;
     let feedbackTarget = 0;
     let feedbackTau = 0.35;
-    if (rising) {
+    if (!diffuseReverb) {
+      feedbackTarget = 0;
+      feedbackTau = EMPTY_TAIL;
+    } else if (rising) {
       feedbackTarget = FEEDBACK_MAX * riseOpen;
       feedbackTau = DECAY_ATTACK;
     } else if (tailing) {
@@ -231,12 +240,18 @@ export function fieldFrame(snap, dt) {
     decays[id] = follow(decays[id], decayTarget, dt, decayTau);
     halls[id] = 0;
     weights[id] = weightTarget <= 0 ? 0 : follow(weights[id], weightTarget, dt, 0.2);
-    if (!(tailing && !rising)) {
+    if (!diffuseReverb) {
+      diffuses[id] = 0;
+      feedbacks[id] = 0;
+      wets[id] = 0;
+    } else if (!(tailing && !rising)) {
       diffuses[id] = follow(diffuses[id], riseSend, dt, empty ? EMPTY_TAIL : rising ? DECAY_ATTACK : 0.25);
     }
     // Resting piles keep the bed. They do not keep Greyhole open.
-    const wetOpen = tailing;
-    wets[id] = follow(wets[id], wetOpen ? 1 : 0, dt, wetOpen ? 0.08 : EMPTY_TAIL);
+    if (diffuseReverb) {
+      const wetOpen = tailing;
+      wets[id] = follow(wets[id], wetOpen ? 1 : 0, dt, wetOpen ? 0.08 : EMPTY_TAIL);
+    }
     cutoffs[id] = cutoffHz(gains[id]);
     const list = Array.isArray(snap?.piles?.[id]) ? snap.piles[id] : [];
     const live = new Set();

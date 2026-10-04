@@ -11,10 +11,21 @@ import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
  * denser grid (Sand1-style room to paint).
  */
 const ATOM_SIZE = 0.25;
+/**
+ * Lightest RT pull emits atoms at this fraction of the grid pitch.
+ * Full pull reaches full size. The same curve widens the brush.
+ * A single stream (LT, Shift) always uses this size.
+ */
+const ATOM_SCALE_MIN = 0.5;
 /** Max emitter height above the ground plane (world units). */
 const EMIT_HEIGHT_MAX_U = 12;
-/** Tall enough for the emitter to sit at EMIT_HEIGHT_MAX_U. */
-const MAX_Y = Math.ceil(EMIT_HEIGHT_MAX_U / ATOM_SIZE - 0.5) + 1;
+/**
+ * Shortest atom. Column slots are counted in these, not in full-pitch cells,
+ * so a single stream can stack up to the emitter instead of stopping halfway.
+ */
+const ATOM_MIN_EXTENT = ATOM_SIZE * ATOM_SCALE_MIN;
+/** Enough rows for a column of the shortest atoms to reach the emitter. */
+const MAX_Y = Math.ceil(EMIT_HEIGHT_MAX_U / ATOM_MIN_EXTENT - 0.5) + 1;
 /** Fixed ground / aim span (world units). */
 const PLAYFIELD_SPAN = 16;
 const PLAYFIELD_HALF = PLAYFIELD_SPAN / 2;
@@ -55,11 +66,6 @@ const BRUSH_MAX = 11;
  * RT opens the wide field only on a deep pull. LT is always a single stream.
  */
 const BRUSH_RT_GAMMA = 2.6;
-/**
- * Lightest RT pull emits atoms at this fraction of the grid pitch.
- * Full pull reaches full size. The same curve widens the brush.
- */
-const ATOM_SCALE_MIN = 0.5;
 const EMIT_INTERVAL = 1 / 40;
 const EMIT_CHANCE = 0.4;
 /** Atoms wait until the emitter footprint has stopped changing for this long. */
@@ -2101,10 +2107,29 @@ export function onFallingAudioToggle(fn) {
   audioToggleHandler = fn;
 }
 
-/** Discrete spawn row for the fixed emit height. */
+/**
+ * Spawn row for this emitter height. Counted in shortest-atom steps so a
+ * column of small blocks has a slot for every step up to the plane.
+ */
 function emitY() {
-  const row = Math.round(emitHeightU / atomSize - 0.5);
+  const row = Math.round(emitHeightU / ATOM_MIN_EXTENT - 0.5);
   return Math.min(MAX_Y - 1, Math.max(0, row));
+}
+
+/** Drawn height of the atom the brush is about to drop. */
+function pourAtomExtent() {
+  return emitScale < 1 - 1e-4 ? atomSize * emitScale : atomSize;
+}
+
+/** Top of the flush stack already in this column, world units. */
+function columnPackedTop(x, z) {
+  let top = 0;
+  for (let y = 0; y < MAX_Y; y += 1) {
+    const mat = getCell(x, y, z);
+    if (mat <= 0) continue;
+    top += atomExtent(x, y, z, mat);
+  }
+  return top;
 }
 
 function emitWorldY() {
@@ -2241,7 +2266,11 @@ function pourBrush(ix, iz) {
       const z = iz + dz;
       if (!inEmitXZ(x, z) || !inBounds(x, y, z)) continue;
       if (getCell(x, y, z) !== 0) continue;
+      // The plane is the ceiling. Full-pitch slots used to fill first, so a
+      // half-size stream stopped at about half the emitter height.
+      if (columnPackedTop(x, z) + pourAtomExtent() > emitHeightU + 1e-3) continue;
       setCell(x, y, z, matIndex);
+      if (posY) posY[idx(x, y, z)] = emitWorldY();
       if (emitScale < 1 - 1e-4) setCellEmitSize(x, y, z, atomSize * emitScale);
       if (materialSonifies(matIndex)) {
         const life = sampleEmitLife();

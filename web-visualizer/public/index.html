@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=268" />
+    <link rel="stylesheet" href="/styles.css?v=270" />
     <script type="importmap">
       {
         "imports": {
@@ -336,16 +336,6 @@
                     <p>
                       Each quadrant is mapped to a sound. Pour atoms into one quadrant or across several to mix them. Wider piles get louder and brighter. Taller piles increase reverb and decay.
                     </p>
-                    <div class="falling-about-triggers">
-                      <p>
-                        <span class="falling-about-pad" role="img" aria-label="Right trigger"><span class="pad-glyph" aria-hidden="true">&#x0109;</span></span>
-                        emits a pressure-sensitive stream of atoms.
-                      </p>
-                      <p>
-                        <span class="falling-about-pad" role="img" aria-label="Left trigger"><span class="pad-glyph" aria-hidden="true">&#x0108;</span></span>
-                        emits a single stream.
-                      </p>
-                    </div>
                   </section>
                   <section class="falling-about-how">
                     <h3>Navigation</h3>
@@ -517,7 +507,21 @@
                   Emit Clump
                 </span>
                 <div class="falling-rise-modes" data-falling-rise-modes>
-                  <p class="falling-rise-label" id="falling-rise-label">Rising atoms</p>
+                  <div class="falling-rise-head">
+                    <p class="falling-rise-label" id="falling-rise-label">Diffusion algorithm</p>
+                    <button
+                      type="button"
+                      class="audio-switch falling-diffuse-reverb"
+                      data-falling-diffuse-reverb
+                      role="switch"
+                      aria-checked="true"
+                      aria-label="Reverb"
+                      title="Turn reverb off"
+                    >
+                      <span class="audio-switch-name">Reverb</span>
+                      <span class="audio-switch-track" aria-hidden="true"><span class="audio-switch-knob"></span></span>
+                    </button>
+                  </div>
                   <div class="falling-rise-options" role="radiogroup" aria-labelledby="falling-rise-label">
                     <label class="falling-rise-option" title="The piece keeps playing, thins as it shrinks, and drifts upward.">
                       <input type="radio" name="falling-rise-mode" value="drift" checked />
@@ -564,6 +568,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=474"></script>
+    <script type="module" src="/app.js?v=476"></script>
   </body>
 </html>

@@ -2165,6 +2165,13 @@ dd {
   color: var(--muted);
 }
 
+.falling-rise-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .falling-rise-label,
 .falling-rise-hint {
   margin: 0;
@@ -2180,6 +2187,7 @@ dd {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  margin-top: 10px;
 }
 
 .falling-rise-option {
@@ -2216,6 +2224,13 @@ dd {
 .falling-rise-hint {
   font-size: 12px;
   line-height: 1.35;
+}
+
+.falling-diffuse-reverb {
+  flex: 0 0 auto;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 3px 5px 3px 10px;
 }
 
 .falling-about-dialog {
@@ -2309,8 +2324,7 @@ dd {
   line-height: 1.55;
 }
 
-.falling-about-how > p + p,
-.falling-about-how > .falling-about-triggers + p {
+.falling-about-how > p + p {
   margin-top: 12px;
 }
 
@@ -2327,38 +2341,6 @@ dd {
   font-weight: 600;
   line-height: 1.4;
   vertical-align: 1px;
-}
-
-.falling-about-triggers {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-body:not(.has-dualsense) .falling-about-triggers {
-  display: none;
-}
-
-.falling-about-triggers p {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.falling-about-pad {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 16px;
-}
-
-.falling-about-pad .pad-glyph {
-  font-size: 24px;
-  line-height: 1;
-  color: var(--ink);
 }
 
 .falling-about-mouse {
