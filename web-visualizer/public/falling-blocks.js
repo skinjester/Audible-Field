@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { audioEngine } from "./audio-engine.js?v=90";
+import { audioEngine } from "./audio-engine.js?v=95";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
@@ -902,6 +902,14 @@ function materialSonifies(matIndex) {
   const id = catalog?.idByIndex[matIndex];
   const def = id ? catalog.byId.get(id) : null;
   return !def || def.sonify !== false;
+}
+
+/** Diffuse grains and liquids. A sideways step is flow; a straight fall is not. */
+function materialSpreads(matIndex) {
+  const id = catalog?.idByIndex[matIndex];
+  const def = id ? catalog.byId.get(id) : null;
+  if (!def) return false;
+  return def.id === "diffuse" || def.surface === "liquid";
 }
 
 function countSonifying() {
@@ -2045,6 +2053,7 @@ export function clearBoard() {
   occupied.clear();
   audioSplash = 0;
   audioSplashAt.length = 0;
+  audioEngine.clearFieldActivity();
 
   for (const splash of splashes) {
     surface?.remove(splash.mesh);
@@ -3092,8 +3101,13 @@ function runRules() {
     cell.wx = anchor.wx;
     cell.wz = anchor.wz;
   }
+  let flowAtoms = 0;
   for (let m = 0; m < moves.length; m += 1) {
-    if (moves[m].to.y < moves[m].from.y && materialSonifies(moves[m].mat)) audioFall += 1;
+    const move = moves[m];
+    if (move.to.y < move.from.y && materialSonifies(move.mat)) audioFall += 1;
+    if (materialSpreads(move.mat) && (move.to.x !== move.from.x || move.to.z !== move.from.z)) {
+      flowAtoms += 1;
+    }
   }
   const culledShuffle = applyPostMoves(gridApi, moves, catalog);
   const vacuumed = applyVacuum(gridApi, collectOccupied(), catalog);
@@ -3101,6 +3115,7 @@ function runRules() {
 
   consumeOutOfBounds();
   reconcileMeshes();
+  let splashEvents = 0;
   for (const cell of splashCells) {
     const wx = cell.wx;
     const wz = cell.wz;
@@ -3109,7 +3124,9 @@ function runRules() {
     // height so the floor plane itself is not treated as outside the sim.
     const wy = (cell.y + 0.5) * cellPitch;
     if (!isDrawnInSim(wx, wy, wz, cellPitch * 0.5)) continue;
+    // One landing is one splash, counted here, before any voice starts.
     audioSplash += 1;
+    splashEvents += 1;
     audioSplashAt.push({
       x: cell.x,
       z: cell.z,
@@ -3117,6 +3134,7 @@ function runRules() {
     });
     spawnSplash(cell.x, cell.z, wx, wz);
   }
+  if (splashEvents || flowAtoms) audioEngine.noteFieldEvents(splashEvents, flowAtoms);
   return culledShuffle || vacuumed || converted;
 }
 

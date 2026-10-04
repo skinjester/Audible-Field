@@ -1,14 +1,22 @@
 import { notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=90";
+import { audioEngine } from "./audio-engine.js?v=95";
 import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=30";
-import * as fallingTab from "./falling-tab.js?v=89";
-import * as visualizeTab from "./visualize-tab.js?v=20";
+import * as diagnostics from "./diagnostics.js?v=35";
+import * as fallingTab from "./falling-tab.js?v=96";
+import * as visualizeTab from "./visualize-tab.js?v=25";
 
 const statusEl = document.querySelector(".status");
 const audioHealthEl = document.querySelector("[data-audio-health]");
+const audioQuadRoot = document.querySelector("[data-audio-quads]");
+const audioQuadEls = {
+  tl: audioQuadRoot?.querySelector("[data-audio-quad='tl']") || null,
+  tr: audioQuadRoot?.querySelector("[data-audio-quad='tr']") || null,
+  bl: audioQuadRoot?.querySelector("[data-audio-quad='bl']") || null,
+  br: audioQuadRoot?.querySelector("[data-audio-quad='br']") || null,
+};
+const AUDIO_QUADS = ["tl", "tr", "bl", "br"];
 const statusParts = {
   audio: document.querySelector("[data-status-audio]"),
   mouse: document.querySelector("[data-status-mouse]"),
@@ -18,6 +26,7 @@ const catalogCountEls = document.querySelectorAll("[data-catalog-counts]");
 let statusText = "";
 let statusKey = "";
 let audioHealthKey = "";
+let audioQuadKey = "";
 let mouseSeen = false;
 const tabButtons = document.querySelectorAll("[data-tab]");
 const panels = document.querySelectorAll("[data-panel]");
@@ -131,11 +140,24 @@ function audioShouldBeAudible() {
 }
 
 function paintAudioHealth() {
-  if (!audioHealthEl) return;
-  const text = audioEngine.audioHealthLabel();
-  if (text === audioHealthKey) return;
-  audioHealthKey = text;
-  audioHealthEl.textContent = text;
+  if (audioHealthEl) {
+    const text = audioEngine.audioHealthLabel();
+    if (text !== audioHealthKey) {
+      audioHealthKey = text;
+      audioHealthEl.textContent = text;
+    }
+  }
+  const quads = audioEngine.fieldQuads();
+  const key = quads ? AUDIO_QUADS.map((id) => quads[id] || "").join("\u0000") : "";
+  if (key === audioQuadKey) return;
+  audioQuadKey = key;
+  for (const id of AUDIO_QUADS) {
+    const el = audioQuadEls[id];
+    if (!el) continue;
+    const body = quads?.[id] || `${id.toUpperCase()}\n—`;
+    el.textContent = body;
+    el.dataset.empty = body.includes("\npiles 0\n") && body.includes("\nrise 0 @ 0.0u\n") ? "true" : "";
+  }
 }
 
 function audioStatusState() {

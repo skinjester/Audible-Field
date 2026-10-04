@@ -1,4 +1,4 @@
-import { audioEngine } from "./audio-engine.js?v=90";
+import { audioEngine } from "./audio-engine.js?v=95";
 import {
   clearBoard,
   hideFallingBlocks,
@@ -6,8 +6,8 @@ import {
   onFieldPress,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=368";
-import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=45";
+} from "./falling-blocks.js?v=373";
+import { fieldDebug, fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=50";
 import { controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
@@ -170,6 +170,7 @@ export function hide() {
   showGen += 1;
   hideFallingBlocks();
   audioEngine.syncRiseGrains(null);
+  audioEngine.setFieldDebug(null);
   if (!deps) return;
   void deps.enqueueAudio(async () => {
     if (deps.getActiveTab() === "falling-blocks") return;
@@ -182,9 +183,13 @@ export function hide() {
 
 export function tick(frame) {
   if (!deps) return;
-  if (!(audioEngine.running && fallingAudioEnabled)) return;
+  if (!(audioEngine.running && fallingAudioEnabled)) {
+    audioEngine.setFieldDebug(null);
+    return;
+  }
   const snap = readGridSnapshot();
   const shadow = fieldFrame(snap, frame?.dt || 0);
+  audioEngine.setFieldDebug(fieldDebug(snap, shadow));
   audioEngine.sync({ x: 0.5, y: 0.5 }, shadow.controller, { stems: false });
   audioEngine.setStemGains(shadow.gains, shadow.pans, shadow.cutoffs);
   audioEngine.setStemPitch(shadow.notes);

@@ -307,3 +307,59 @@ export function fieldFrame(snap, dt) {
     controller: DRY_BEDS,
   };
 }
+
+function fixed2(n) {
+  return (Math.round((Number(n) || 0) * 100) / 100).toFixed(2);
+}
+
+/**
+ * Quadrant cells for the 2×2 behavior readout.
+ * Pile count is the split: one connected mass is one note, a gap is another.
+ * Footprint is occupied columns. A split lists each pile's columns.
+ * Rise height is the crowded cluster that opens Greyhole, in world units.
+ * Send and feedback are the values handed to that reverb.
+ * @param {object} snap
+ * @param {object} shadow
+ * @returns {{ rising: number, quads: Record<string, string> }}
+ */
+export function fieldDebug(snap, shadow) {
+  const rises = Array.isArray(snap?.rises) ? snap.rises : [];
+  const rising = { tl: 0, tr: 0, bl: 0, br: 0 };
+  for (let i = 0; i < rises.length; i += 1) {
+    const id = rises[i]?.corner;
+    if (rising[id] != null) rising[id] += 1;
+  }
+  /** @type {Record<string, string>} */
+  const quads = {};
+  for (const id of CORNERS) {
+    const quad = snap?.quads?.[id] || {};
+    const cells = Math.max(0, Number(quad.cells) || 0);
+    const notes = Array.isArray(shadow?.notes?.[id]) ? shadow.notes[id] : [];
+    const piles = notes.length;
+    const riseN = rising[id];
+    const send = Number(shadow?.diffuses?.[id]) || 0;
+    const feedback = Number(shadow?.feedbacks?.[id]) || 0;
+    const name = id.toUpperCase();
+    const height = Math.max(0, Number(quad.rise) || 0);
+    const mass = Math.max(0, Number(quad.riseMass) || 0);
+    let cols = String(cells);
+    if (piles > 1 && cells > 0) {
+      const parts = [];
+      for (let i = 0; i < notes.length; i += 1) {
+        const share = Number(notes[i]?.share) || 0;
+        parts.push(String(Math.max(1, Math.round(share * cells))));
+      }
+      cols = parts.join(", ");
+    }
+    quads[id] = [
+      name,
+      `piles ${piles}`,
+      `cols ${cols}`,
+      `rise ${riseN} @ ${height.toFixed(1)}u`,
+      `mass ${mass.toFixed(1)}`,
+      `send ${fixed2(send)}`,
+      `fb ${fixed2(feedback)}`,
+    ].join("\n");
+  }
+  return { rising: rises.length, quads };
+}

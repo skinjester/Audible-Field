@@ -13,11 +13,11 @@ import {
   state,
   STEM_CORNERS,
 } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=90";
+import { audioEngine } from "./audio-engine.js?v=95";
 import { DualsenseHid } from "./dualsense-hid.js?v=5";
 import { openStemDropdown } from "./sample-picker.js?v=18";
 import { openFxDropdown } from "./fx-picker.js?v=5";
-import { paramSentValue } from "./wam-host.js?v=10";
+import { paramSentValue } from "./wam-host.js?v=11";
 
 const root = document.querySelector('[data-panel="diagnostics"]');
 const pad = root?.querySelector("[data-pad]");
@@ -185,6 +185,9 @@ function paintParamSent() {
       const armed = model.axes?.[param.id] === "x" || model.axes?.[param.id] === "y";
       const nextArmed = armed ? "true" : "false";
       if (row.dataset.armed !== nextArmed) row.dataset.armed = nextArmed;
+      const dial = row.querySelector("[data-fx-dial]");
+      const range = model.ranges?.[param.id];
+      if (dial && range) paintDial(dial, param, range, paramSentValue(param, model, stickX, stickY));
     }
     const sent = row.querySelector("[data-fx-sent]");
     if (!sent) continue;
@@ -203,92 +206,131 @@ function sentText(param, model, stickX, stickY) {
   return fmtParam(value);
 }
 
-function paintRange(track, param, range) {
-  const span = param.max - param.min || 1;
-  const lowPct = ((range.low - param.min) / span) * 100;
-  const highPct = ((range.high - param.min) / span) * 100;
-  const midPct = (lowPct + highPct) / 2;
-  const fill = track.querySelector("[data-span]");
-  const mid = track.querySelector("[data-mid]");
-  const lowThumb = track.querySelector('[data-thumb="low"]');
-  const highThumb = track.querySelector('[data-thumb="high"]');
-  if (fill) {
-    fill.style.left = `${lowPct}%`;
-    fill.style.width = `${Math.max(0, highPct - lowPct)}%`;
-  }
-  if (mid) mid.style.left = `${midPct}%`;
-  if (lowThumb) lowThumb.style.left = `${lowPct}%`;
-  if (highThumb) highThumb.style.left = `${highPct}%`;
+const DIAL = { cx: 22, cy: 22, r: 16, start: Math.PI * 0.75, sweep: Math.PI * 1.5 };
+const DIAL_DRAG_PX = 160;
+const SVG_NS = "http://www.w3.org/2000/svg";
+const BAND_ID = /^(highpass|lowshelf|peaking|highshelf|lowpass)_(\d+)_(Q|detune|frequency|gain)$/;
+const BAND_PROPS = ["frequency", "gain", "Q"];
+const BAND_PROP_LABEL = { frequency: "Freq", gain: "Gain", Q: "Q", detune: "Detune" };
+const BAND_KIND_LABEL = {
+  highpass: "Highpass",
+  lowshelf: "Low shelf",
+  highshelf: "High shelf",
+  lowpass: "Lowpass",
+};
+const PEAKING_LABEL = { 2: "Low-mid", 3: "High-mid", 4: "Presence" };
+
+function dialPoint(t, radius = DIAL.r) {
+  const u = Math.min(1, Math.max(0, t));
+  const theta = DIAL.start + u * DIAL.sweep;
+  return {
+    x: DIAL.cx + radius * Math.cos(theta),
+    y: DIAL.cy + radius * Math.sin(theta),
+  };
 }
 
-function bindRange(host, slot, param) {
-  const track = host.querySelector(".fx-range-track");
-  if (!track) return;
+function dialArc(t0, t1) {
+  const delta = t1 - t0;
+  if (delta < 0.0008) return "";
+  const a = dialPoint(t0);
+  const b = dialPoint(t1);
+  const large = delta * DIAL.sweep > Math.PI ? 1 : 0;
+  return `M ${a.x.toFixed(2)} ${a.y.toFixed(2)} A ${DIAL.r} ${DIAL.r} 0 ${large} 1 ${b.x.toFixed(2)} ${b.y.toFixed(2)}`;
+}
+
+function dialUnit(value, param) {
+  const span = param.max - param.min || 1;
+  return (Number(value) - param.min) / span;
+}
+
+function paintDial(host, param, range, sent) {
+  const lowT = dialUnit(range.low, param);
+  const highT = dialUnit(range.high, param);
+  const sentT = dialUnit(sent, param);
+  const arc = dialArc(lowT, highT);
+  const track = host.querySelector("[data-track]");
+  const span = host.querySelector("[data-span]");
+  const spanHit = host.querySelector("[data-span-hit]");
+  const needle = host.querySelector("[data-needle]");
+  if (track && !track.getAttribute("d")) track.setAttribute("d", dialArc(0, 1));
+  if (span) span.setAttribute("d", arc);
+  if (spanHit) spanHit.setAttribute("d", arc);
+  const inner = dialPoint(sentT, 7);
+  const outer = dialPoint(sentT, 12.5);
+  if (needle) {
+    needle.setAttribute("x1", inner.x.toFixed(2));
+    needle.setAttribute("y1", inner.y.toFixed(2));
+    needle.setAttribute("x2", outer.x.toFixed(2));
+    needle.setAttribute("y2", outer.y.toFixed(2));
+  }
+  placeDialThumb(host.querySelector('[data-thumb="low"]'), lowT, range.low);
+  placeDialThumb(host.querySelector('[data-thumb="high"]'), highT, range.high);
+}
+
+function placeDialThumb(thumb, t, value) {
+  if (!thumb) return;
+  const point = dialPoint(t);
+  thumb.setAttribute("cx", point.x.toFixed(2));
+  thumb.setAttribute("cy", point.y.toFixed(2));
+  thumb.setAttribute("aria-valuenow", String(value));
+}
+
+function bindDial(host, slot, param) {
+  const svg = host.querySelector(".fx-dial-svg");
+  if (!svg) return;
   let drag = null;
-
-  const valueAt = (clientX) => {
-    const rect = track.getBoundingClientRect();
-    const t = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
-    const u = Math.min(1, Math.max(0, t));
-    return param.min + u * (param.max - param.min);
-  };
-
   const current = () => audioEngine.getFxParamModel(slot)?.ranges?.[param.id];
 
-  track.addEventListener("pointerdown", (event) => {
+  const applyShift = (low, high, delta) => {
+    const width = high - low;
+    let nextLow = low + delta;
+    let nextHigh = high + delta;
+    if (nextLow < param.min) {
+      nextLow = param.min;
+      nextHigh = param.min + width;
+    }
+    if (nextHigh > param.max) {
+      nextHigh = param.max;
+      nextLow = param.max - width;
+    }
+    return { low: nextLow, high: nextHigh };
+  };
+
+  svg.addEventListener("pointerdown", (event) => {
     const thumb = event.target.closest("[data-thumb]");
-    const onSpan = event.target.closest("[data-span]");
+    const onSpan = event.target.closest("[data-span-hit]");
     const range = current();
-    if (!range) return;
-    if (thumb) drag = { kind: thumb.dataset.thumb, pointerId: event.pointerId };
-    else if (onSpan) {
-      drag = {
-        kind: "span",
-        pointerId: event.pointerId,
-        originX: event.clientX,
-        low: range.low,
-        high: range.high,
-      };
-    } else return;
+    if (!range || (!thumb && !onSpan)) return;
+    drag = {
+      kind: thumb ? thumb.dataset.thumb : "span",
+      pointerId: event.pointerId,
+      originY: event.clientY,
+      low: range.low,
+      high: range.high,
+    };
     event.preventDefault();
     event.stopPropagation();
     try {
-      track.setPointerCapture(event.pointerId);
+      svg.setPointerCapture(event.pointerId);
     } catch {
       /* ignore */
     }
   });
 
-  track.addEventListener("pointermove", (event) => {
+  svg.addEventListener("pointermove", (event) => {
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const range = current();
-    if (!range) return;
+    const span = param.max - param.min || 1;
+    const delta = ((drag.originY - event.clientY) / DIAL_DRAG_PX) * span;
     if (drag.kind === "low") {
-      audioEngine.setFxParamRange(slot, param.id, Math.min(valueAt(event.clientX), range.high), range.high, {
-        persist: false,
-      });
+      const low = Math.min(Math.max(param.min, drag.low + delta), drag.high);
+      audioEngine.setFxParamRange(slot, param.id, low, drag.high, { persist: false });
     } else if (drag.kind === "high") {
-      audioEngine.setFxParamRange(slot, param.id, range.low, Math.max(valueAt(event.clientX), range.low), {
-        persist: false,
-      });
-    } else if (drag.kind === "span") {
-      const rect = track.getBoundingClientRect();
-      const dx = rect.width > 0 ? ((event.clientX - drag.originX) / rect.width) * (param.max - param.min) : 0;
-      const width = drag.high - drag.low;
-      let low = drag.low + dx;
-      let high = drag.high + dx;
-      if (low < param.min) {
-        low = param.min;
-        high = param.min + width;
-      }
-      if (high > param.max) {
-        high = param.max;
-        low = param.max - width;
-      }
-      audioEngine.setFxParamRange(slot, param.id, low, high, { persist: false });
+      const high = Math.max(Math.min(param.max, drag.high + delta), drag.low);
+      audioEngine.setFxParamRange(slot, param.id, drag.low, high, { persist: false });
+    } else {
+      const next = applyShift(drag.low, drag.high, delta);
+      audioEngine.setFxParamRange(slot, param.id, next.low, next.high, { persist: false });
     }
-    const next = current();
-    if (next) paintRange(track, param, next);
     paintParamSent();
   });
 
@@ -298,8 +340,75 @@ function bindRange(host, slot, param) {
     const range = current();
     if (range) audioEngine.setFxParamRange(slot, param.id, range.low, range.high, { persist: true });
   };
-  track.addEventListener("pointerup", end);
-  track.addEventListener("pointercancel", end);
+  svg.addEventListener("pointerup", end);
+  svg.addEventListener("pointercancel", end);
+
+  svg.addEventListener("keydown", (event) => {
+    const thumb = event.target.closest("[data-thumb]");
+    if (!thumb) return;
+    const dir =
+      event.key === "ArrowUp" || event.key === "ArrowRight"
+        ? 1
+        : event.key === "ArrowDown" || event.key === "ArrowLeft"
+          ? -1
+          : 0;
+    if (!dir) return;
+    event.preventDefault();
+    const range = current();
+    if (!range) return;
+    const nudge = param.discreteStep > 0 ? param.discreteStep : (param.max - param.min) / 50;
+    if (thumb.dataset.thumb === "low") {
+      const low = Math.min(range.high, Math.max(param.min, range.low + dir * nudge));
+      audioEngine.setFxParamRange(slot, param.id, low, range.high, { persist: true });
+    } else {
+      const high = Math.max(range.low, Math.min(param.max, range.high + dir * nudge));
+      audioEngine.setFxParamRange(slot, param.id, range.low, high, { persist: true });
+    }
+    paintParamSent();
+  });
+}
+
+function svgEl(name, attrs) {
+  const el = document.createElementNS(SVG_NS, name);
+  for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
+  return el;
+}
+
+function buildDialFace(param) {
+  const face = document.createElement("div");
+  face.className = "fx-dial-face";
+  face.dataset.fxDial = "";
+  const svg = svgEl("svg", { class: "fx-dial-svg", viewBox: "0 0 44 44" });
+  const low = svgEl("circle", {
+    class: "fx-dial-thumb",
+    "data-thumb": "low",
+    r: "4.5",
+    role: "slider",
+    tabindex: "0",
+    "aria-label": `${param.label} low`,
+    "aria-valuemin": String(param.min),
+    "aria-valuemax": String(param.max),
+  });
+  const high = svgEl("circle", {
+    class: "fx-dial-thumb",
+    "data-thumb": "high",
+    r: "4.5",
+    role: "slider",
+    tabindex: "0",
+    "aria-label": `${param.label} high`,
+    "aria-valuemin": String(param.min),
+    "aria-valuemax": String(param.max),
+  });
+  svg.append(
+    svgEl("path", { class: "fx-dial-track", "data-track": "", fill: "none" }),
+    svgEl("path", { class: "fx-dial-span", "data-span": "", fill: "none" }),
+    svgEl("path", { class: "fx-dial-span-hit", "data-span-hit": "", fill: "none" }),
+    svgEl("line", { class: "fx-dial-needle", "data-needle": "" }),
+    low,
+    high
+  );
+  face.append(svg);
+  return face;
 }
 
 function syncAxisButtons(row, axis) {
@@ -308,124 +417,187 @@ function syncAxisButtons(row, axis) {
   }
 }
 
-function buildParamRow(slot, param, model) {
-  const row = document.createElement("div");
-  row.className = "fx-param";
-  row.dataset.fxParam = param.id;
-  const armed = model.axes?.[param.id] === "x" || model.axes?.[param.id] === "y";
-  row.dataset.armed = param.type !== "float" || armed ? "true" : "false";
-
-  const label = document.createElement("p");
-  label.className = "fx-param-label";
-  label.textContent = param.label;
-  label.title = param.label;
-  row.append(label);
-
-  if (param.type === "float") {
-    const range = document.createElement("div");
-    range.className = "fx-range";
-    const track = document.createElement("div");
-    track.className = "fx-range-track";
-    const fill = document.createElement("div");
-    fill.className = "fx-range-span";
-    fill.dataset.span = "";
-    const mid = document.createElement("div");
-    mid.className = "fx-range-mid";
-    mid.dataset.mid = "";
-    const lowThumb = document.createElement("button");
-    lowThumb.type = "button";
-    lowThumb.className = "fx-range-thumb";
-    lowThumb.dataset.thumb = "low";
-    lowThumb.setAttribute("aria-label", `${param.label} low`);
-    const highThumb = document.createElement("button");
-    highThumb.type = "button";
-    highThumb.className = "fx-range-thumb";
-    highThumb.dataset.thumb = "high";
-    highThumb.setAttribute("aria-label", `${param.label} high`);
-    track.append(fill, mid, lowThumb, highThumb);
-    range.append(track);
-    row.append(range);
-    const bounds = model.ranges?.[param.id] || { low: param.min, high: param.max };
-    paintRange(range, param, bounds);
-    bindRange(range, slot, param);
-  } else if (param.type === "choice") {
-    const select = document.createElement("select");
-    select.className = "fx-choice";
-    const choices = param.choices.length
-      ? param.choices
-      : Array.from({ length: Math.round(param.max - param.min) + 1 }, (_, i) => String(param.min + i));
-    choices.forEach((choice, index) => {
-      const option = document.createElement("option");
-      option.value = String(param.min + index);
-      option.textContent = choice;
-      select.append(option);
-    });
-    select.value = String(model.switches?.[param.id] ?? param.def);
-    select.addEventListener("change", () => {
-      audioEngine.setFxParamSwitch(slot, param.id, Number(select.value));
-      paintParamSent();
-    });
-    select.addEventListener("pointerdown", (event) => event.stopPropagation());
-    row.append(select);
-  } else {
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "fx-bool";
-    const on = (model.switches?.[param.id] ?? 0) >= 0.5;
-    toggle.setAttribute("aria-pressed", on ? "true" : "false");
-    toggle.textContent = on ? "On" : "Off";
-    toggle.addEventListener("click", (event) => {
+function buildAxisButtons(slot, param, model, row) {
+  const axes = document.createElement("div");
+  axes.className = "fx-dial-axes";
+  for (const axis of ["x", "y"]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "fx-axis-sw";
+    button.dataset.fxAxis = axis;
+    button.textContent = axis.toUpperCase();
+    button.setAttribute("aria-pressed", model.axes?.[param.id] === axis ? "true" : "false");
+    button.setAttribute("aria-label", `Assign ${param.label} to stick ${axis.toUpperCase()}`);
+    button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const next = toggle.getAttribute("aria-pressed") !== "true";
-      toggle.setAttribute("aria-pressed", next ? "true" : "false");
-      toggle.textContent = next ? "On" : "Off";
-      audioEngine.setFxParamSwitch(slot, param.id, next ? 1 : 0);
+      const live = audioEngine.getFxParamModel(slot);
+      const current = live?.axes?.[param.id] || null;
+      const next = current === axis ? null : axis;
+      audioEngine.setFxParamAxis(slot, param.id, next);
+      syncAxisButtons(row, next);
+      row.dataset.armed = next ? "true" : "false";
+      paintStickSummaries();
       paintParamSent();
     });
-    row.append(toggle);
+    axes.append(button);
   }
+  return axes;
+}
+
+function buildDial(slot, param, model, labelText) {
+  const row = document.createElement("div");
+  row.className = "fx-dial";
+  row.dataset.fxParam = param.id;
+  const armed = model.axes?.[param.id] === "x" || model.axes?.[param.id] === "y";
+  row.dataset.armed = armed ? "true" : "false";
+
+  const face = buildDialFace(param);
+  const bounds = model.ranges?.[param.id] || { low: param.min, high: param.max };
+  paintDial(
+    face,
+    param,
+    bounds,
+    paramSentValue(param, model, Number(controller.rawX) || 0, Number(controller.rawY) || 0)
+  );
+  bindDial(face, slot, param);
+
+  const label = document.createElement("p");
+  label.className = "fx-dial-label";
+  label.textContent = labelText || param.label;
+  label.title = param.label;
 
   const sent = document.createElement("p");
-  sent.className = "fx-param-sent";
+  sent.className = "fx-dial-sent";
   sent.dataset.fxSent = "";
-  sent.textContent = sentText(
-    param,
-    model,
-    Number(controller.rawX) || 0,
-    Number(controller.rawY) || 0
-  );
-  row.append(sent);
+  sent.textContent = sentText(param, model, Number(controller.rawX) || 0, Number(controller.rawY) || 0);
 
-  if (param.type === "float") {
-    const axes = document.createElement("div");
-    axes.className = "fx-param-axes";
-    for (const axis of ["x", "y"]) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "fx-axis-sw";
-      button.dataset.fxAxis = axis;
-      button.textContent = axis.toUpperCase();
-      button.setAttribute("aria-pressed", model.axes?.[param.id] === axis ? "true" : "false");
-      button.setAttribute("aria-label", `Assign ${param.label} to stick ${axis.toUpperCase()}`);
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const live = audioEngine.getFxParamModel(slot);
-        const current = live?.axes?.[param.id] || null;
-        const next = current === axis ? null : axis;
-        audioEngine.setFxParamAxis(slot, param.id, next);
-        syncAxisButtons(row, next);
-        row.dataset.armed = next ? "true" : "false";
-        paintStickSummaries();
-        paintParamSent();
-      });
-      axes.append(button);
-    }
-    row.append(axes);
-  }
-
+  row.append(face, label, sent, buildAxisButtons(slot, param, model, row));
   return row;
+}
+
+function buildSwitch(slot, param, model) {
+  const row = document.createElement("div");
+  row.className = "fx-switch";
+  row.dataset.fxParam = param.id;
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "fx-switch-ctl";
+  toggle.setAttribute("role", "switch");
+  const on = (model.switches?.[param.id] ?? 0) >= 0.5;
+  toggle.setAttribute("aria-pressed", on ? "true" : "false");
+  toggle.setAttribute("aria-label", param.label);
+  toggle.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const next = toggle.getAttribute("aria-pressed") !== "true";
+    toggle.setAttribute("aria-pressed", next ? "true" : "false");
+    audioEngine.setFxParamSwitch(slot, param.id, next ? 1 : 0);
+    paintParamSent();
+  });
+
+  const label = document.createElement("span");
+  label.className = "fx-switch-label";
+  label.textContent = param.label;
+  label.title = param.label;
+  row.append(toggle, label);
+  return row;
+}
+
+function buildChoice(slot, param, model) {
+  const row = document.createElement("div");
+  row.className = "fx-choice-row";
+  row.dataset.fxParam = param.id;
+
+  const label = document.createElement("p");
+  label.className = "fx-dial-label";
+  label.textContent = param.label;
+  label.title = param.label;
+
+  const select = document.createElement("select");
+  select.className = "fx-choice";
+  const choices = param.choices.length
+    ? param.choices
+    : Array.from({ length: Math.round(param.max - param.min) + 1 }, (_, i) => String(param.min + i));
+  choices.forEach((choice, index) => {
+    const option = document.createElement("option");
+    option.value = String(param.min + index);
+    option.textContent = choice;
+    select.append(option);
+  });
+  select.value = String(model.switches?.[param.id] ?? param.def);
+  select.addEventListener("change", () => {
+    audioEngine.setFxParamSwitch(slot, param.id, Number(select.value));
+    paintParamSent();
+  });
+  select.addEventListener("pointerdown", (event) => event.stopPropagation());
+
+  const sent = document.createElement("p");
+  sent.className = "fx-dial-sent";
+  sent.dataset.fxSent = "";
+  sent.textContent = sentText(param, model, Number(controller.rawX) || 0, Number(controller.rawY) || 0);
+  row.append(label, select, sent);
+  return row;
+}
+
+function bandTitle(group) {
+  if (group.kind === "peaking") return PEAKING_LABEL[group.index] || `Peaking ${group.index}`;
+  return BAND_KIND_LABEL[group.kind] || group.kind;
+}
+
+function splitBands(params) {
+  const groups = new Map();
+  const rest = [];
+  for (const param of params) {
+    const match = param.id.match(BAND_ID);
+    if (!match) {
+      rest.push(param);
+      continue;
+    }
+    const key = `${match[1]}_${match[2]}`;
+    if (!groups.has(key)) groups.set(key, { kind: match[1], index: Number(match[2]), props: {} });
+    groups.get(key).props[match[3]] = param;
+  }
+  return {
+    groups: [...groups.values()].sort((a, b) => a.index - b.index),
+    rest,
+  };
+}
+
+function appendDialGrid(host, slot, params, model, labelFor) {
+  if (!params.length) return;
+  const grid = document.createElement("div");
+  grid.className = "fx-dial-grid";
+  for (const param of params) grid.append(buildDial(slot, param, model, labelFor?.(param)));
+  host.append(grid);
+}
+
+function appendBand(host, slot, group, model) {
+  const section = document.createElement("section");
+  section.className = "fx-band";
+  const title = document.createElement("h4");
+  title.className = "fx-band-name";
+  title.textContent = bandTitle(group);
+  section.append(title);
+  appendDialGrid(
+    section,
+    slot,
+    BAND_PROPS.map((prop) => group.props[prop]).filter(Boolean),
+    model,
+    (param) => BAND_PROP_LABEL[param.id.split("_").pop()] || param.label
+  );
+  const detune = group.props.detune;
+  if (detune) {
+    const fine = document.createElement("details");
+    fine.className = "fx-band-fine";
+    const summary = document.createElement("summary");
+    summary.textContent = "Fine";
+    fine.append(summary);
+    appendDialGrid(fine, slot, [detune], model, () => BAND_PROP_LABEL.detune);
+    section.append(fine);
+  }
+  host.append(section);
 }
 
 function ensureParamList() {
@@ -456,7 +628,20 @@ function ensureParamList() {
     host.append(empty);
     return;
   }
-  for (const param of model.params) host.append(buildParamRow(slot, param, model));
+
+  const booleans = model.params.filter((param) => param.type === "boolean");
+  const choices = model.params.filter((param) => param.type === "choice");
+  const floats = model.params.filter((param) => param.type === "float");
+  if (booleans.length) {
+    const row = document.createElement("div");
+    row.className = "fx-switch-row";
+    for (const param of booleans) row.append(buildSwitch(slot, param, model));
+    host.append(row);
+  }
+  for (const param of choices) host.append(buildChoice(slot, param, model));
+  const { groups, rest } = splitBands(floats);
+  appendDialGrid(host, slot, rest, model);
+  for (const group of groups) appendBand(host, slot, group, model);
 }
 
 export function syncFxLabelsFromEngine() {

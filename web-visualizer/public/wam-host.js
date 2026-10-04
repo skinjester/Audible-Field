@@ -324,7 +324,7 @@ export function neutralParamValue(param) {
   if (!param) return 0;
   if (isBypassParam(param)) return 0;
   if (isEnabledParam(param)) return clampNum(1, param.min, param.max);
-  if (param.type === "boolean") return 0;
+  if (param.type === "boolean") return clampNum(Number.isFinite(param.def) ? param.def : 0, param.min, param.max);
   if (param.type === "choice") return clampNum(param.def, param.min, param.max);
   if (!param.authored) return clampNum(param.def, param.min, param.max);
   if (param.min <= 0 && param.max >= 0) return 0;
@@ -347,12 +347,27 @@ function quantizeParam(value, param) {
  * @param {{ id: string, label?: string, type?: string, min: number, max: number, def: number, choices?: string[], discreteStep?: number, authored?: boolean }} raw
  * @param {{ id: string, min: number, max: number } | null} [mapEntry]
  */
+function isTwoStateSpan(min, max, step) {
+  if (!(step >= 1) || !Number.isFinite(min) || !Number.isFinite(max)) return false;
+  if (Math.abs(min) > 1e-4 || Math.abs(max - 1) > 1e-4) return false;
+  return Math.abs(max - min - step) < 1e-4;
+}
+
+function faustMetaHas(item, key) {
+  if (!Array.isArray(item?.meta)) return false;
+  return item.meta.some((entry) => entry && typeof entry === "object" && key in entry);
+}
+
 export function finalizeListedParam(raw, mapEntry) {
-  const type = raw.type === "boolean" || raw.type === "choice" ? raw.type : "float";
+  let type = raw.type === "boolean" || raw.type === "choice" ? raw.type : "float";
   let min = Number(raw.min);
   let max = Number(raw.max);
   let def = Number(raw.def);
   let authored = raw.authored !== false;
+  const step = Number(raw.discreteStep) > 0 ? Number(raw.discreteStep) : 0;
+  if (type === "float" && (isBypassParam(raw) || isEnabledParam(raw) || isTwoStateSpan(min, max, step))) {
+    type = "boolean";
+  }
   if (type === "boolean") {
     min = 0;
     max = 1;
@@ -387,7 +402,7 @@ export function finalizeListedParam(raw, mapEntry) {
     max,
     def,
     choices: Array.isArray(raw.choices) ? raw.choices.map(String) : [],
-    discreteStep: Number(raw.discreteStep) > 0 ? Number(raw.discreteStep) : 0,
+    discreteStep: step,
     authored,
   };
 }
@@ -430,9 +445,17 @@ async function readSdkParamInfo(audioNode, moduleInstance) {
   return out;
 }
 
+function faustUiList(audioNode) {
+  const lists = [audioNode?.descriptor, audioNode?._output?.descriptor];
+  for (const desc of lists) {
+    if (!Array.isArray(desc)) continue;
+    if (desc.some((item) => item && item.address != null && item.type)) return desc;
+  }
+  return [];
+}
+
 function readFaustParams(audioNode) {
-  const desc = audioNode?.descriptor;
-  if (!Array.isArray(desc)) return [];
+  const desc = faustUiList(audioNode);
   const out = [];
   for (const item of desc) {
     if (!item || item.address == null) continue;
@@ -458,16 +481,18 @@ function readFaustParams(audioNode) {
     if (kind !== "vslider" && kind !== "hslider" && kind !== "nentry") continue;
     const min = Number(item.min);
     const max = Number(item.max);
+    const step = Number(item.step) > 0 ? Number(item.step) : 0;
     if (!Number.isFinite(min) || !Number.isFinite(max) || !(max > min)) continue;
+    const twoState = faustMetaHas(item, "boolean") || isTwoStateSpan(min, max, step);
     out.push({
       id,
       label,
-      type: "float",
-      min,
-      max,
-      def: Number.isFinite(init) ? init : min,
+      type: twoState ? "boolean" : "float",
+      min: twoState ? 0 : min,
+      max: twoState ? 1 : max,
+      def: twoState ? (Number.isFinite(init) && init >= 0.5 ? 1 : 0) : Number.isFinite(init) ? init : min,
       choices: [],
-      discreteStep: Number(item.step) > 0 ? Number(item.step) : 0,
+      discreteStep: twoState ? 1 : step,
       authored: true,
     });
   }
@@ -475,9 +500,41 @@ function readFaustParams(audioNode) {
 }
 
 /**
+ * Faust UI order, with each item rewritten onto the SDK id when the group
+ * prefix differs (`/stonephaser/Color` vs `/untitled/Color`). SDK-only params
+ * stay at the end.
+ * @param {object[]} sdk
+ * @param {object[]} faust
+ */
+function mergeListedParams(sdk, faust) {
+  if (!faust.length) return sdk;
+  const sdkById = new Map(sdk.map((param) => [param.id, param]));
+  const sdkByLeaf = new Map();
+  for (const param of sdk) {
+    const key = leafName(param.id, param.id);
+    sdkByLeaf.set(key, sdkByLeaf.has(key) ? null : param);
+  }
+  const used = new Set();
+  const merged = [];
+  for (const item of faust) {
+    const sdkParam = sdkById.get(item.id) || sdkByLeaf.get(leafName(item.id, item.id));
+    if (sdkParam && !used.has(sdkParam)) {
+      used.add(sdkParam);
+      merged.push({ ...item, id: sdkParam.id, label: sdkParam.label || item.label });
+    } else if (!sdkParam) {
+      merged.push(item);
+    }
+  }
+  for (const param of sdk) {
+    if (!used.has(param)) merged.push(param);
+  }
+  return merged;
+}
+
+/**
  * Every parameter a loaded WAM reports. Faust descriptor entries win on id
  * so a checkbox is not turned into an extreme float slider.
- * @param {{ getParameterInfo?: Function, descriptor?: unknown }} audioNode
+ * @param {{ getParameterInfo?: Function, descriptor?: unknown, _output?: { descriptor?: unknown } }} audioNode
  * @param {{ getParameterInfo?: Function }} [moduleInstance]
  * @param {string} [pluginPath]
  */
@@ -486,24 +543,7 @@ export async function listWamParams(audioNode, moduleInstance, pluginPath) {
   const faust = readFaustParams(audioNode);
   const map = getWamStickMap(pluginPath);
   const mapById = new Map((map?.params || []).map((p) => [p.id, p]));
-  /** @type {Map<string, object>} */
-  const byId = new Map();
-  for (const p of sdk) byId.set(p.id, p);
-  for (const p of faust) byId.set(p.id, p);
-  const order = [];
-  const seen = new Set();
-  const push = (p) => {
-    if (!p || seen.has(p.id)) return;
-    seen.add(p.id);
-    order.push(p);
-  };
-  if (faust.length) {
-    for (const p of faust) push(byId.get(p.id));
-    for (const p of sdk) push(byId.get(p.id));
-  } else {
-    for (const p of sdk) push(p);
-  }
-  return order.map((p) => finalizeListedParam(p, mapById.get(p.id) || null));
+  return mergeListedParams(sdk, faust).map((p) => finalizeListedParam(p, mapById.get(p.id) || null));
 }
 
 /**

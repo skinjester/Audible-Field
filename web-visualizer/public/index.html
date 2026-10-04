@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=247" />
+    <link rel="stylesheet" href="/styles.css?v=251" />
     <script type="importmap">
       {
         "imports": {
@@ -443,8 +443,19 @@
                       <span data-falling-fps>--</span> fps · <span data-falling-atoms>--</span> atoms · <span data-falling-tris>--</span> polys
                     </span>
                     <span class="falling-frame-gpu" data-falling-gpu></span>
-                    <span class="falling-frame-audio" data-audio-health>—</span>
-                    <span class="falling-frame-catalog" data-catalog-counts>… WAMs · … samples</span>
+                    <div class="falling-frame-audio">
+                      <p class="falling-audio-summary" data-audio-health>—</p>
+                      <div class="falling-quad-grid" data-audio-quads>
+                        <div class="falling-quad" data-audio-quad="tl">TL
+—</div>
+                        <div class="falling-quad" data-audio-quad="tr">TR
+—</div>
+                        <div class="falling-quad" data-audio-quad="bl">BL
+—</div>
+                        <div class="falling-quad" data-audio-quad="br">BR
+—</div>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <button type="button" class="falling-icon-btn falling-settings" data-falling-settings aria-label="Settings" aria-expanded="false" aria-controls="falling-settings-panel">
@@ -618,6 +629,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=449"></script>
+    <script type="module" src="/app.js?v=457"></script>
   </body>
 </html>

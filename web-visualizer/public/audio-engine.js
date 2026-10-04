@@ -28,7 +28,7 @@ import {
   listWamParams,
   createParamModel,
   applyWamControls,
-} from "./wam-host.js?v=10";
+} from "./wam-host.js?v=11";
 import {
   NATIVE_FX,
   DEFAULT_STICK_SCALE,
@@ -491,6 +491,15 @@ export class EchoScapeAudioEngine {
     this._riseShedAt = new Map();
     /** @type {object[]} */
     this._riseFlakes = [];
+    /** Splash landings in the last second. One landing, however many voices it starts. */
+    /** @type {{ t: number, n: number }[]} */
+    this._splashMarks = [];
+    /** Diffuse or liquid atoms that stepped sideways in the last second. */
+    /** @type {{ t: number, n: number }[]} */
+    this._flowMarks = [];
+    /** Quadrant cells from the field sonifier. Null until a frame supplies them. */
+    /** @type {{ rising: number, quads: Record<string, string> } | null} */
+    this._fieldDebug = null;
     /** Last impact start per corner and pile, in context time. */
     this._impactAt = null;
     /** @type {AudioBuffer | null} */
@@ -945,54 +954,199 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * Snapshot for the header and Diagnostics readout.
-   * WAM count is plugins in the graph, not the catalog total.
+   * Landings and sideways diffuse steps from the simulation.
+   * A splash is one landing, even when that landing starts several voices.
+   * @param {number} splashes
+   * @param {number} flowAtoms
    */
-  audioHealth() {
-    /** @type {Record<string, string>} */
-    const beds = {};
-    /** @type {Record<string, number>} */
-    const strikes = {};
-    let bedsPlaying = 0;
-    let strikeTotal = 0;
+  noteFieldEvents(splashes, flowAtoms) {
+    const now = performance.now();
+    const splashN = splashes | 0;
+    const flowN = flowAtoms | 0;
+    if (splashN > 0) this._splashMarks.push({ t: now, n: splashN });
+    if (flowN > 0) this._flowMarks.push({ t: now, n: flowN });
+  }
+
+  /** Drop the one-second behavior window, for a cleared board. */
+  clearFieldActivity() {
+    this._splashMarks.length = 0;
+    this._flowMarks.length = 0;
+  }
+
+  /**
+   * @param {{ t: number, n: number }[]} marks
+   * @param {number} now
+   */
+  _eventRate(marks, now) {
+    const cutoff = now - 1000;
+    let drop = 0;
+    while (drop < marks.length && marks[drop].t < cutoff) drop += 1;
+    if (drop > 0) marks.splice(0, drop);
+    let n = 0;
+    for (let i = 0; i < marks.length; i += 1) n += marks[i].n;
+    return n;
+  }
+
+  /**
+   * Buffer sources and playing bed elements the graph is asking the browser to run.
+   * A phrase landing's spark is its own source. A tap of a bed that is already counted is not.
+   */
+  _liveVoiceCount() {
+    let n = 0;
     for (const corner of CORNERS) {
-      const el = this.stems[corner]?.el || this._pendingEls[corner] || null;
-      const bed = this.stems[corner]?.bedVoice || this.stems[corner]?.notes?.length
-        ? "playing"
-        : !el
-          ? "missing"
-          : el.paused
-            ? "paused"
-            : "playing";
-      beds[corner] = bed;
-      if (bed === "playing") bedsPlaying += 1;
-      const count = this.stems[corner]?.strikes?.length || 0;
-      strikes[corner] = count;
-      strikeTotal += count;
+      const stem = this.stems[corner];
+      if (!stem) continue;
+      if (stem.bedVoice) n += 1;
+      else if (stem.el && !stem.el.paused) n += 1;
+      const notes = stem.notes;
+      if (notes) {
+        for (let i = 0; i < notes.length; i += 1) {
+          if (notes[i].voice) n += 1;
+        }
+      }
+      const strikes = stem.strikes;
+      if (strikes) {
+        for (let i = 0; i < strikes.length; i += 1) {
+          const strike = strikes[i];
+          if (strike.released) continue;
+          if (strike.voice) n += 1;
+          if (strike.sparkVoice) n += 1;
+        }
+      }
     }
+    if (this._riseVoices) {
+      for (const voice of this._riseVoices.values()) {
+        if (voice && !voice.released && voice.voice) n += 1;
+      }
+    }
+    const flakes = this._riseFlakes;
+    if (flakes) {
+      for (let i = 0; i < flakes.length; i += 1) {
+        const flake = flakes[i];
+        if (flake && !flake.released && flake.voice) n += 1;
+      }
+    }
+    return n;
+  }
+
+  /**
+   * How the live sources break down, and the cap on rising-atom voices.
+   * Drift, loose, thread, and halo keep the loudest 8 loops.
+   * Flake and shed share a cap of 16 overlapping one-shots.
+   */
+  _voiceDetail() {
+    let beds = 0;
+    let piles = 0;
+    let splash = 0;
+    let rise = 0;
+    let flakes = 0;
+    for (const corner of CORNERS) {
+      const stem = this.stems[corner];
+      if (!stem) continue;
+      if (stem.bedVoice) beds += 1;
+      else if (stem.el && !stem.el.paused) beds += 1;
+      const notes = stem.notes;
+      if (notes) {
+        for (let i = 0; i < notes.length; i += 1) {
+          if (notes[i].voice) piles += 1;
+        }
+      }
+      const strikes = stem.strikes;
+      if (strikes) {
+        for (let i = 0; i < strikes.length; i += 1) {
+          const strike = strikes[i];
+          if (strike.released) continue;
+          if (strike.voice) splash += 1;
+          if (strike.sparkVoice) splash += 1;
+        }
+      }
+    }
+    if (this._riseVoices) {
+      for (const voice of this._riseVoices.values()) {
+        if (voice && !voice.released && voice.voice) rise += 1;
+      }
+    }
+    if (this._riseFlakes) {
+      for (let i = 0; i < this._riseFlakes.length; i += 1) {
+        const flake = this._riseFlakes[i];
+        if (flake && !flake.released && flake.voice) flakes += 1;
+      }
+    }
+    const flakeMode = this.riseMode === "flake" || this.riseMode === "shed";
     return {
-      state: this.ctx?.state || "none",
-      sampleRate: this.ctx?.sampleRate || 0,
+      total: this._liveVoiceCount(),
       beds,
-      bedsPlaying,
-      strikes,
-      strikeTotal,
-      wams: this.loadedWamCount(),
+      piles,
+      splash,
+      rise: flakeMode ? flakes : rise,
+      riseCap: flakeMode ? RISE_FLAKE_CAP : RISE_LOOP_CAP,
     };
   }
 
-  /** One line: rate, context, beds, strike voices, loaded WAMs. */
+  /**
+   * @param {{ rising: number, quads: Record<string, string> } | null} debug
+   */
+  setFieldDebug(debug) {
+    this._fieldDebug = debug && debug.quads ? debug : null;
+  }
+
+  /** Texts for the TL TR / BL BR grid. Null when the field is not driving audio. */
+  fieldQuads() {
+    return this._fieldDebug?.quads || null;
+  }
+
+  /**
+   * Snapshot for the header and Diagnostics readout.
+   * Splashes and flow are simulation events over the last second.
+   * Voices are sources currently in the graph.
+   */
+  audioHealth() {
+    const now = performance.now();
+    return {
+      splashesPerSec: this._eventRate(this._splashMarks, now),
+      flowAtomsPerSec: this._eventRate(this._flowMarks, now),
+      voices: this._liveVoiceCount(),
+    };
+  }
+
+  /**
+   * Plugins that are in the audible path.
+   * A face WAM counts only while its button is selected. Greyhole counts while a diffuse tail is open.
+   */
+  _engagedWamNames() {
+    const names = [];
+    const face = this.activeFx;
+    if (face && face !== "cross") {
+      const assigned = this.fxAssignment?.[face];
+      if (assigned?.kind === "wam" && this._fxWam?.[face]) {
+        const label = String(assigned.label || "").trim();
+        if (label) names.push(label);
+      }
+    }
+    if (this.diffuseTailOpen()) names.push("Greyhole");
+    return names;
+  }
+
+  /** Splashes, flow, rising grains, voice caps, engaged WAMs, and one line per quadrant. */
   audioHealthLabel() {
     const health = this.audioHealth();
-    const khz = health.sampleRate ? `${Math.round(health.sampleRate / 1000)} kHz` : "—";
-    const strikes = CORNERS.map((corner) => health.strikes[corner]).join(" ");
-    const quiet = CORNERS.filter((corner) => health.beds[corner] !== "playing");
-    const beds = !quiet.length
-      ? "beds 4/4"
-      : quiet.every((corner) => health.beds[corner] === "missing")
-        ? `beds ${health.bedsPlaying}/4`
-        : `beds ${health.bedsPlaying}/4 ${quiet.map((corner) => `${corner} ${health.beds[corner]}`).join(" ")}`;
-    return `${khz} · ${health.state} · ${beds} · strikes ${strikes} · WAMs ${health.wams}`;
+    const voices = this._voiceDetail();
+    const wams = this._engagedWamNames();
+    const voiceBits = [
+      `Audio voices ${voices.total}`,
+      `rise ${voices.rise}/${voices.riseCap}`,
+    ];
+    if (voices.piles > 0) voiceBits.push(`piles ${voices.piles}`);
+    else if (voices.beds > 0) voiceBits.push(`beds ${voices.beds}`);
+    if (voices.splash > 0) voiceBits.push(`splash ${voices.splash}`);
+    const lines = [
+      `Splashes ${health.splashesPerSec}/s`,
+      `Flow ${health.flowAtomsPerSec} atoms/s`,
+      voiceBits.join("  "),
+      wams.length ? `WAMs ${wams.join(", ")}` : "WAMs off",
+    ];
+    if (this._fieldDebug) lines.push(`Rising ${this._fieldDebug.rising}`);
+    return lines.join("\n");
   }
 
   async ensurePlaying() {
