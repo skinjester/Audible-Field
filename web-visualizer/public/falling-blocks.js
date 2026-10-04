@@ -1,7 +1,7 @@
 import * as THREE from "three";
-import { audioEngine } from "./audio-engine.js?v=101";
+import { audioEngine } from "./audio-engine.js?v=102";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
-import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
+import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=77";
 import { inputBindings } from "./input-bindings.js?v=15";
 import { fallingInput } from "./falling-input.js?v=62";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
@@ -217,6 +217,10 @@ let shuffleOriginZ = null;
 let flowDx = null;
 /** @type {Int8Array | null} */
 let flowDz = null;
+/** Stable per-grain id copied when a cell moves. 0 means unassigned. */
+/** @type {Uint32Array | null} */
+let audioIds = null;
+let nextAudioId = 1;
 /** Packed cell indices that currently hold material. */
 const occupied = new Set();
 /** @type {Map<number, THREE.InstancedMesh>} */
@@ -645,6 +649,7 @@ function clearEffectCell(i) {
   if (shrinkT) shrinkT[i] = 0;
   if (riseT) riseT[i] = 0;
   if (riseElapsed) riseElapsed[i] = 0;
+  if (audioIds) audioIds[i] = 0;
 }
 
 function getEffectClock(x, y, z, channel) {
@@ -894,6 +899,28 @@ function setFlowDz(x, y, z, value) {
   flowDz[idx(x, y, z)] = value | 0;
 }
 
+function getAudioId(x, y, z) {
+  if (!audioIds || !inBounds(x, y, z)) return 0;
+  return audioIds[idx(x, y, z)] || 0;
+}
+
+function setAudioId(x, y, z, value) {
+  if (!audioIds || !inBounds(x, y, z)) return;
+  const id = Number(value) || 0;
+  audioIds[idx(x, y, z)] = id > 0 ? id >>> 0 : 0;
+}
+
+/** Stable id for one grain. A slide keeps it, so the rising voice is not rebuilt. */
+function grainAudioId(i) {
+  if (!audioIds) return i + 1;
+  const existing = audioIds[i];
+  if (existing) return existing;
+  const id = nextAudioId++;
+  if (nextAudioId > 0x7ffffffe) nextAudioId = 1;
+  audioIds[i] = id;
+  return id;
+}
+
 const gridApi = {
   get: getCell,
   set: setCell,
@@ -941,6 +968,8 @@ const gridApi = {
   setFlowDx,
   getFlowDz,
   setFlowDz,
+  getAudioId,
+  setAudioId,
 };
 
 function cellAtomSize(cellIndex) {
@@ -3507,6 +3536,8 @@ function initScene(nextCanvas) {
   shuffleOriginZ = new Uint16Array(GRID_MAX * GRID_MAX * MAX_Y);
   flowDx = new Int8Array(GRID_MAX * GRID_MAX * MAX_Y);
   flowDz = new Int8Array(GRID_MAX * GRID_MAX * MAX_Y);
+  audioIds = new Uint32Array(GRID_MAX * GRID_MAX * MAX_Y);
+  nextAudioId = 1;
   const gridN = GRID_MAX * GRID_MAX * MAX_Y;
   landedSlot = new Int32Array(gridN);
   landedSlot.fill(-1);
@@ -4356,7 +4387,7 @@ function captureAudioSnapshot(dt) {
         const yCenter = posY[i] > 0 ? posY[i] : half;
         const tip = yCenter + half + riseOffset(decoded.x, decoded.y, decoded.z);
         riseAtoms.push({
-          id: i,
+          id: grainAudioId(i),
           corner: aid,
           x: ax,
           z: az,

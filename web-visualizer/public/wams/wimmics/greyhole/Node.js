@@ -869,12 +869,52 @@ let greyholeProcessorString = `
                 const paramArray = parameters[path];
                 this.setParamValue(path, paramArray[0]);
             }
+
+            // A dry quadrant used to keep this diffuser network running for the
+            // whole session. Bypass skips it. Delay time is left untouched.
+            var bypassNow = this.getParamValue("/greyhole/bypass");
+            if (bypassNow >= 0.5) {
+                if (output) {
+                    for (var b = 0; b < output.length; b++) {
+                        if (output[b]) output[b].fill(0);
+                    }
+                }
+                return true;
+            }
         
           	// Compute
             try {
                 this.factory.compute(this.dsp, NUM_FRAMES, this.ins, this.outs);
             } catch(e) {
                 console.log("ERROR in compute (" + e + ")");
+            }
+
+            // A long high-feedback tail can poison the delay lines. Reset once
+            // rather than playing that garbage for the rest of the session.
+            var nonFinite = false;
+            if (this.numOut > 0 && this.dspOutChannnels) {
+                for (var oc = 0; oc < this.numOut; oc++) {
+                    var channel = this.dspOutChannnels[oc];
+                    if (!channel) continue;
+                    var tail = channel[channel.length - 1];
+                    if (tail !== tail || tail === Infinity || tail === -Infinity) {
+                        nonFinite = true;
+                        break;
+                    }
+                }
+            }
+            if (nonFinite) {
+                try {
+                    this.factory.init(this.dsp, sampleRate);
+                } catch (resetErr) {
+                    /* leave the block silent */
+                }
+                if (output) {
+                    for (var zc = 0; zc < output.length; zc++) {
+                        if (output[zc]) output[zc].fill(0);
+                    }
+                }
+                return true;
             }
             
             // Update bargraph

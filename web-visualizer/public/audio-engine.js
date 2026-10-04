@@ -48,12 +48,16 @@ function clamp01(n) {
 }
 
 /**
- * Last value written through writeParam.
+ * Last value written through writeParam or glideParam.
  * AudioParam.value does not update until the audio thread catches up,
  * so reading it every frame would keep scheduling the same event.
  * @type {WeakMap<AudioParam, number>}
  */
 const paramWritten = new WeakMap();
+/** Last target handed to glideParam. Distinct from the sampled `.value`. */
+const paramTarget = new WeakMap();
+/** AudioContext time of the last glideParam schedule. */
+const paramGlideAt = new WeakMap();
 
 /**
  * Assign an AudioParam only when the value moved.
@@ -68,7 +72,43 @@ function writeParam(param, value, eps = 1e-4) {
   const prev = paramWritten.get(param);
   if (typeof prev === "number" && Math.abs(prev - value) <= eps) return;
   paramWritten.set(param, value);
+  paramTarget.set(param, value);
   param.value = value;
+}
+
+/**
+ * Approach `value` on the audio thread, and only when the target moved.
+ * A field frame used to cancel and reschedule every gain while diffuse piles
+ * were up. The audio thread falls behind that list, then catches up as a click.
+ * Small creeps wait one render quantum so the event list stays a single ramp.
+ * @param {AudioParam | null | undefined} param
+ * @param {number} value
+ * @param {number} now AudioContext currentTime
+ * @param {number} tau seconds
+ * @param {number} [eps]
+ */
+function glideParam(param, value, now, tau, eps = 1e-3) {
+  if (!param || !Number.isFinite(value) || !Number.isFinite(now)) return;
+  const prev = paramTarget.get(param);
+  if (typeof prev === "number" && Math.abs(prev - value) <= eps) return;
+  const lastAt = paramGlideAt.get(param);
+  const jumped = typeof prev !== "number" || Math.abs(prev - value) >= Math.max(eps * 6, eps + 1e-6);
+  if (!jumped && typeof lastAt === "number" && now - lastAt < 0.032) return;
+  paramTarget.set(param, value);
+  paramWritten.set(param, value);
+  paramGlideAt.set(param, now);
+  const time = Math.max(0.02, Number(tau) || 0.04);
+  try {
+    param.cancelScheduledValues(now);
+    param.setTargetAtTime(value, now, time);
+  } catch {
+    param.value = value;
+  }
+}
+
+/** Greyhole can leave the audio thread once this stem is dry and the tail is gone. */
+function greyholeIdle(level, feedback, wet) {
+  return level <= 0.001 && feedback <= 0.02 && wet <= 0.02;
 }
 
 /** Equal-power dry/wet. `mix` 0 is fully dry. */
@@ -202,6 +242,15 @@ const GRAIN_LIFT = 1.25;
 const RISE_LOOP_CAP = 8;
 /** One-shot flakes that may overlap at once. */
 const RISE_FLAKE_CAP = 16;
+/**
+ * Rising scraps already fading out. A sliding diffuse grain used to orphan one
+ * of these on every cell change, and the graph filled up over a long run.
+ */
+const RISE_RELEASE_CAP = 8;
+/** A new pile note waits this long so a one-frame split does not start a voice. */
+const PILE_NOTE_ARM_MS = 80;
+/** A pile note survives this long after its mass drops, so a flicker does not stop it. */
+const PILE_NOTE_HOLD_MS = 140;
 /** Heard length of a flake. A bright speck, still much longer than a landing grain. */
 const RISE_FLAKE_SEC = 0.42;
 /** How often a shedding atom drops another speck. */
@@ -2607,21 +2656,22 @@ export class EchoScapeAudioEngine {
    * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} weights
    */
   setPileBody(halls, weights) {
-    if (!this.running) return;
+    if (!this.running || !this.ctx) return;
+    const now = this.ctx.currentTime;
     for (const corner of CORNERS) {
       const send = this._hallSends?.[corner];
       if (send) writeParam(send.gain, 0, 1e-5);
       const stem = this.stems[corner];
       if (!stem?.weightLp) continue;
       const amount = clamp01(Number(weights?.[corner]) || 0);
-      writeParam(stem.weightLp.frequency, weightCutoff(amount), 0.5);
-      if (stem.body) writeParam(stem.body.gain, amount * WEIGHT_SHELF_DB, 1e-3);
+      glideParam(stem.weightLp.frequency, weightCutoff(amount), now, 0.08, 30);
+      if (stem.body) glideParam(stem.body.gain, amount * WEIGHT_SHELF_DB, now, 0.08, 0.04);
       if (stem.air) writeParam(stem.air.gain, 0, 1e-4);
       const drive = weightDrive(amount);
-      if (stem.satPre) writeParam(stem.satPre.gain, drive.pre, 1e-4);
-      if (stem.satPost) writeParam(stem.satPost.gain, drive.post, 1e-4);
-      if (stem.satDry) writeParam(stem.satDry.gain, drive.dry, 1e-4);
-      if (stem.satWet) writeParam(stem.satWet.gain, drive.wet, 1e-4);
+      if (stem.satPre) glideParam(stem.satPre.gain, drive.pre, now, 0.08, 0.01);
+      if (stem.satPost) glideParam(stem.satPost.gain, drive.post, now, 0.08, 0.01);
+      if (stem.satDry) glideParam(stem.satDry.gain, drive.dry, now, 0.08, 0.01);
+      if (stem.satWet) glideParam(stem.satWet.gain, drive.wet, now, 0.08, 0.01);
     }
   }
 
@@ -2701,20 +2751,46 @@ export class EchoScapeAudioEngine {
       const rec = this._stemReverbs[corner];
       if (!rec?.send) continue;
       const level = Math.min(1, Math.max(0, Number(levels?.[corner]) || 0));
-      writeParam(rec.send.gain, level, 1e-5);
       const dt = rec.heardAt > 0 ? Math.min(0.1, Math.max(0, now - rec.heardAt)) : 0;
       rec.heardAt = now;
       const askedFeedback = Math.min(1, Math.max(0, Number(feedbacks?.[corner]) || 0));
       const askedWet = Math.min(1, Math.max(0, Number(wets?.[corner]) || 0));
       const prevFeedback = Number.isFinite(rec.feedbackHeld) ? rec.feedbackHeld : askedFeedback;
       const prevWet = Number.isFinite(rec.wetHeld) ? rec.wetHeld : askedWet;
-      const idle = level <= 0 && askedFeedback <= 0 && askedWet <= 0;
+      const idle = greyholeIdle(level, askedFeedback, askedWet);
       const feedback = idle ? 0 : this._ringRelease(prevFeedback, askedFeedback, dt);
       const wet = idle ? 0 : this._ringRelease(prevWet, askedWet, dt);
       rec.feedbackHeld = feedback;
       rec.wetHeld = wet;
-      if (rec.ret) writeParam(rec.ret.gain, 0.45 * wet, 1e-4);
+      const asleep = greyholeIdle(level, feedback, wet);
+      // Wake the tank before any send reaches it. Sleep only after the tail is dry.
+      // Delay time and size stay where they were set: moving them crossfades the buffer.
+      if (rec.node?.setParamValue && rec.asleep !== asleep) {
+        rec.asleep = asleep;
+        try {
+          rec.node.setParamValue("/greyhole/bypass", asleep ? 1 : 0);
+        } catch {
+          /* param name differs */
+        }
+      }
+      if (!asleep) glideParam(rec.send.gain, level, now, 0.08, 0.008);
+      else writeParam(rec.send.gain, 0, 1e-4);
+      if (rec.ret) {
+        if (!asleep) glideParam(rec.ret.gain, 0.45 * wet, now, 0.08, 0.008);
+        else writeParam(rec.ret.gain, 0, 1e-4);
+      }
       if (!rec.node?.setParamValue) continue;
+      if (asleep) {
+        if (rec.feedback) {
+          rec.feedback = 0;
+          try {
+            rec.node.setParamValue("/greyhole/feedback", 0);
+          } catch {
+            /* param name differs */
+          }
+        }
+        continue;
+      }
       const sent = feedback < 0.01 ? 0 : Math.round(feedback * 100) / 100;
       if (rec.feedback === sent) continue;
       rec.feedback = sent;
@@ -2852,19 +2928,20 @@ export class EchoScapeAudioEngine {
    * @param {{ tl?: number, tr?: number, bl?: number, br?: number }} [cutoffs] Hz
    */
   setStemGains(gains, pans, cutoffs) {
-    if (!this.running) return;
+    if (!this.running || !this.ctx) return;
+    const now = this.ctx.currentTime;
     for (const corner of CORNERS) {
       const stem = this.stems[corner];
       if (!stem?.gain) continue;
       const level = Math.min(1, Math.max(0, Number(gains?.[corner]) || 0));
-      writeParam(stem.gain.gain, level, 1e-5);
+      glideParam(stem.gain.gain, level, now, 0.05, 0.006);
       if (stem.pan) {
         const placed = Math.min(1, Math.max(-1, Number(pans?.[corner]) || 0));
-        writeParam(stem.pan.pan, placed, 1e-4);
+        glideParam(stem.pan.pan, placed, now, 0.06, 0.012);
       }
       if (stem.tone) {
         const hz = Number(cutoffs?.[corner]);
-        writeParam(stem.tone.frequency, Number.isFinite(hz) && hz > 0 ? hz : 20000, 0.5);
+        glideParam(stem.tone.frequency, Number.isFinite(hz) && hz > 0 ? hz : 20000, now, 0.06, 40);
       }
     }
   }
@@ -3075,6 +3152,8 @@ export class EchoScapeAudioEngine {
     const wanted = notes.filter((note) => note && note.id != null);
     if (!wanted.length) {
       this._stopPileNotes(stem);
+      stem.noteSeen?.clear();
+      stem.noteGone?.clear();
       return;
     }
     const buffer = stem.bedBuffer || this._strikeBuffers?.[corner] || null;
@@ -3101,11 +3180,37 @@ export class EchoScapeAudioEngine {
     }
     const ctx = this.ctx;
     const now = ctx.currentTime;
+    const nowMs = performance.now();
+    if (!stem.noteSeen) stem.noteSeen = new Map();
+    if (!stem.noteGone) stem.noteGone = new Map();
+    const wantedIds = new Set();
+    for (let i = 0; i < wanted.length; i += 1) {
+      const id = wanted[i].id;
+      wantedIds.add(id);
+      if (!stem.noteSeen.has(id)) stem.noteSeen.set(id, nowMs);
+      stem.noteGone.delete(id);
+    }
+    for (const id of stem.noteSeen.keys()) {
+      if (!wantedIds.has(id)) stem.noteSeen.delete(id);
+    }
     const keep = new Set();
+    for (let i = 0; i < stem.notes.length; i += 1) {
+      const id = stem.notes[i].id;
+      if (wantedIds.has(id) || !stem.notes[i].voice) continue;
+      let goneAt = stem.noteGone.get(id);
+      if (goneAt == null) {
+        goneAt = nowMs;
+        stem.noteGone.set(id, goneAt);
+      }
+      if (nowMs - goneAt < PILE_NOTE_HOLD_MS) keep.add(id);
+      else stem.noteGone.delete(id);
+    }
+    for (const id of stem.noteGone.keys()) {
+      if (!wantedIds.has(id) && !keep.has(id)) stem.noteGone.delete(id);
+    }
     for (let i = 0; i < wanted.length; i += 1) {
       const note = wanted[i];
       const id = note.id;
-      keep.add(id);
       const rate = this._clampRate(note.rate);
       const share = Math.sqrt(Math.min(1, Math.max(0, Number(note.share) || 0)));
       const level = share > 0 ? share : 1 / Math.sqrt(wanted.length);
@@ -3117,6 +3222,9 @@ export class EchoScapeAudioEngine {
         }
       }
       const existing = index >= 0 ? stem.notes[index] : null;
+      const armed = i === 0 || nowMs - (stem.noteSeen.get(id) || nowMs) >= PILE_NOTE_ARM_MS;
+      if (!existing?.voice && !armed) continue;
+      keep.add(id);
       if (!existing?.voice) {
         if (existing) this._releasePileNote(existing);
         const gain = ctx.createGain();
@@ -3138,7 +3246,7 @@ export class EchoScapeAudioEngine {
         gain.connect(stem.gain);
         voice.start(now, offset);
         gain.gain.linearRampToValueAtTime(level, now + 0.04);
-        const slot = { id, voice, gain, startedAt: now, offset, rate };
+        const slot = { id, voice, gain, startedAt: now, offset, rate, level };
         voice.onended = () => {
           if (slot.voice !== voice) return;
           slot.voice = null;
@@ -3147,13 +3255,14 @@ export class EchoScapeAudioEngine {
         else stem.notes.push(slot);
         continue;
       }
-      if (Math.abs(existing.voice.playbackRate.value - rate) > 0.002) existing.voice.playbackRate.value = rate;
-      existing.rate = rate;
-      const gain = existing.gain.gain;
-      const current = Math.max(0.0001, gain.value || 0.0001);
-      gain.cancelScheduledValues(now);
-      gain.setValueAtTime(current, now);
-      gain.setTargetAtTime(level, now, 0.05);
+      if (Math.abs((existing.rate || 0) - rate) > 0.01) {
+        existing.rate = rate;
+        writeParam(existing.voice.playbackRate, rate, 0.01);
+      }
+      if (Math.abs((existing.level ?? -1) - level) > 0.008) {
+        existing.level = level;
+        glideParam(existing.gain.gain, level, now, 0.05, 0.008);
+      }
     }
     for (let i = stem.notes.length - 1; i >= 0; i -= 1) {
       if (keep.has(stem.notes[i].id)) continue;
@@ -3285,6 +3394,11 @@ export class EchoScapeAudioEngine {
     if (!voice || voice.gone) return;
     voice.gone = true;
     voice.released = true;
+    const fading = this._riseReleasing;
+    if (fading) {
+      const index = fading.indexOf(voice);
+      if (index >= 0) fading.splice(index, 1);
+    }
     if (voice.timer) {
       window.clearTimeout(voice.timer);
       voice.timer = 0;
@@ -3321,6 +3435,11 @@ export class EchoScapeAudioEngine {
     gain.cancelScheduledValues(now);
     gain.setValueAtTime(current, now);
     gain.exponentialRampToValueAtTime(0.0001, now + release);
+    if (!this._riseReleasing) this._riseReleasing = [];
+    this._riseReleasing.push(voice);
+    while (this._riseReleasing.length > RISE_RELEASE_CAP) {
+      this._disposeRiseVoice(this._riseReleasing[0]);
+    }
     voice.timer = window.setTimeout(() => this._disposeRiseVoice(voice), Math.ceil(release * 1000) + 60);
   }
 
@@ -3418,47 +3537,17 @@ export class EchoScapeAudioEngine {
     if (!this.ctx || !voice?.gain) return;
     const now = this.ctx.currentTime;
     const level = Math.max(0.0001, riseVoiceLevel(atom.scale, count, mode));
-    const gain = voice.gain.gain;
-    const current = Math.max(0.0001, gain.value || 0.0001);
-    if (Math.abs(current - level) > 0.008) {
-      gain.cancelScheduledValues(now);
-      gain.setValueAtTime(current, now);
-      gain.setTargetAtTime(level, now, 0.06);
-    }
+    glideParam(voice.gain.gain, level, now, 0.06, 0.008);
     const rate = this._riseRate(atom, mode);
-    if (voice.voice && Math.abs(voice.voice.playbackRate.value - rate) > 0.01) {
-      const playback = voice.voice.playbackRate;
-      playback.cancelScheduledValues(now);
-      playback.setValueAtTime(playback.value, now);
-      playback.setTargetAtTime(rate, now, 0.08);
-    }
+    if (voice.voice) writeParam(voice.voice.playbackRate, rate, 0.01);
     const panValue = Math.min(1, Math.max(-1, Number(atom.pan) || 0));
-    if (voice.pan && Math.abs(voice.pan.pan.value - panValue) > 0.02) {
-      voice.pan.pan.cancelScheduledValues(now);
-      voice.pan.pan.setValueAtTime(voice.pan.pan.value, now);
-      voice.pan.pan.setTargetAtTime(panValue, now, 0.05);
-    }
+    if (voice.pan) glideParam(voice.pan.pan, panValue, now, 0.05, 0.02);
     if (mode === "drift" && voice.filter) {
-      const hz = this._riseCutoff(mode, atom.scale);
-      if (Math.abs(voice.filter.frequency.value - hz) > 40) {
-        voice.filter.frequency.cancelScheduledValues(now);
-        voice.filter.frequency.setValueAtTime(voice.filter.frequency.value, now);
-        voice.filter.frequency.setTargetAtTime(hz, now, 0.08);
-      }
+      glideParam(voice.filter.frequency, this._riseCutoff(mode, atom.scale), now, 0.08, 40);
     } else if (mode === "halo" && voice.filter) {
-      const hz = haloHz(atom.crowd);
-      if (Math.abs(voice.filter.frequency.value - hz) > 12) {
-        voice.filter.frequency.cancelScheduledValues(now);
-        voice.filter.frequency.setValueAtTime(voice.filter.frequency.value, now);
-        voice.filter.frequency.setTargetAtTime(hz, now, 0.1);
-      }
+      glideParam(voice.filter.frequency, haloHz(atom.crowd), now, 0.1, 12);
     } else if (mode === "thread" && voice.filter) {
-      const hz = this._riseCutoff(mode, atom.scale);
-      if (Math.abs(voice.filter.frequency.value - hz) > 30) {
-        voice.filter.frequency.cancelScheduledValues(now);
-        voice.filter.frequency.setValueAtTime(voice.filter.frequency.value, now);
-        voice.filter.frequency.setTargetAtTime(hz, now, 0.08);
-      }
+      glideParam(voice.filter.frequency, this._riseCutoff(mode, atom.scale), now, 0.08, 30);
     }
     const stem = this.stems?.[voice.corner];
     if (stem && voice.body && voice.air) this._copySplashShelves(stem, voice.body, voice.air);
@@ -3668,9 +3757,10 @@ export class EchoScapeAudioEngine {
   _copySplashShelves(stem, body, air) {
     const apply = (from, to, fallback) => {
       to.type = from?.type || fallback.type;
-      to.frequency.value = Number(from?.frequency?.value) || fallback.frequency;
-      to.Q.value = Number(from?.Q?.value) || fallback.Q;
-      to.gain.value = Number.isFinite(Number(from?.gain?.value)) ? Number(from.gain.value) : fallback.gain;
+      writeParam(to.frequency, Number(from?.frequency?.value) || fallback.frequency, 0.5);
+      writeParam(to.Q, Number(from?.Q?.value) || fallback.Q, 1e-3);
+      const gain = Number(from?.gain?.value);
+      writeParam(to.gain, Number.isFinite(gain) ? gain : fallback.gain, 1e-3);
     };
     apply(stem?.body, body, { type: "lowshelf", frequency: 200, Q: 0.7, gain: 0 });
     apply(stem?.air, air, { type: "highshelf", frequency: 650, Q: 0.7, gain: 0 });

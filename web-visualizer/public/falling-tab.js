@@ -1,4 +1,4 @@
-import { audioEngine } from "./audio-engine.js?v=101";
+import { audioEngine } from "./audio-engine.js?v=102";
 import {
   clearBoard,
   hideFallingBlocks,
@@ -6,7 +6,7 @@ import {
   onFieldPress,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=381";
+} from "./falling-blocks.js?v=382";
 import { fieldDebug, fieldFrame, resetFieldSonify, setDiffuseReverb } from "./grid-sonify.js?v=55";
 import { STEM_CORNERS, controller, setActiveFx } from "./mixer-core.js?v=67";
 

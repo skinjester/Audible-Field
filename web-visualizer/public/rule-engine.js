@@ -1032,6 +1032,7 @@ function transferGrain(grid, x, y, z, toX, toY, toZ, matIndex, catalog) {
   const shrinkT = grid.getShrinkT?.(x, y, z) ?? 0;
   const risingT = grid.getRiseT?.(x, y, z) ?? 0;
   const risingElapsed = grid.getRiseElapsed?.(x, y, z) ?? 0;
+  const audioId = grid.getAudioId?.(x, y, z) ?? 0;
 
   grid.set(toX, toY, toZ, matIndex);
   grid.set(x, y, z, 0);
@@ -1048,6 +1049,7 @@ function transferGrain(grid, x, y, z, toX, toY, toZ, matIndex, catalog) {
   grid.setShuffleOriginZ?.(toX, toY, toZ, shuffleOz);
   grid.setShrink?.(toX, toY, toZ, shrinking, shrinkT);
   if (risingElapsed > 0 || risingT > 0) grid.setRise?.(toX, toY, toZ, true, risingT, risingElapsed);
+  if (audioId > 0) grid.setAudioId?.(toX, toY, toZ, audioId);
 }
 
 /**
@@ -1362,6 +1364,7 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
   const flowDirZ = grid.getFlowDz?.(x, y, z) ?? 0;
   const risingT = grid.getRiseT?.(x, y, z) ?? 0;
   const risingElapsed = grid.getRiseElapsed?.(x, y, z) ?? 0;
+  const audioId = grid.getAudioId?.(x, y, z) ?? 0;
 
   /** @type {CellPos | null} */
   let to = null;
@@ -1395,6 +1398,7 @@ function applyOrientedRule(grid, x, y, z, matIndex, rule, dx, dz, catalog) {
     grid.setFlowDx?.(to.x, to.y, to.z, flowDirX);
     grid.setFlowDz?.(to.x, to.y, to.z, flowDirZ);
     if (risingElapsed > 0 || risingT > 0) grid.setRise?.(to.x, to.y, to.z, true, risingT, risingElapsed);
+    if (audioId > 0) grid.setAudioId?.(to.x, to.y, to.z, audioId);
     return to;
   }
   // Applied with no @ in result (e.g. etch consumes self + neighbor).
