@@ -588,7 +588,7 @@ export function createParamModel(params, saved, path) {
 
 /**
  * Assigned continuous params follow one stick axis across their window.
- * Unassigned continuous params stay at the neutral value.
+ * Unassigned continuous params stay at the value set on the dial.
  * Booleans and choices stay at the switch or menu value.
  * @param {ReturnType<typeof finalizeListedParam>} param
  * @param {{ ranges: Record<string, { low: number, high: number }>, axes: Record<string, string | null>, switches: Record<string, number> }} model
@@ -606,14 +606,15 @@ export function paramSentValue(param, model, stickX, stickY) {
       const stick = axis === "x" ? stickX : stickY;
       return quantizeParam(valueFromStickRange(low, high, stick), param);
     }
-    return quantizeParam(neutralParamValue(param), param);
+    const manual = Number(model?.switches?.[param.id]);
+    return quantizeParam(Number.isFinite(manual) ? manual : neutralParamValue(param), param);
   }
   const stored = Number(model?.switches?.[param.id]);
   return quantizeParam(Number.isFinite(stored) ? stored : neutralParamValue(param), param);
 }
 
 /**
- * Write every parameter: stick window, neutral hold, switch, or menu.
+ * Write every parameter: stick window, manual value, switch, or menu.
  * @param {{ setParamValue?: Function }} audioNode
  * @param {ReturnType<typeof createParamModel> | null} model
  * @param {number} stickX

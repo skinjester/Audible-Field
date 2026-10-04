@@ -28,7 +28,7 @@ import {
   listWamParams,
   createParamModel,
   applyWamControls,
-} from "./wam-host.js?v=13";
+} from "./wam-host.js?v=14";
 import {
   NATIVE_FX,
   DEFAULT_STICK_SCALE,

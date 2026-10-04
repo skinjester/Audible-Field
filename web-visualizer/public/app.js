@@ -1,11 +1,11 @@
 import { STEM_CORNERS, notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=100";
+import { audioEngine } from "./audio-engine.js?v=101";
 import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=40";
-import * as fallingTab from "./falling-tab.js?v=103";
-import * as visualizeTab from "./visualize-tab.js?v=31";
+import * as diagnostics from "./diagnostics.js?v=41";
+import * as fallingTab from "./falling-tab.js?v=104";
+import * as visualizeTab from "./visualize-tab.js?v=32";
 
 const statusEl = document.querySelector(".status");
 const audioLineEls = {
@@ -61,7 +61,8 @@ let statusKey = "";
 let audioHealthKey = "";
 const SPARK_MS = 250;
 const SPARK_LEN = 48;
-const SPARK_FLOOR = { splashes: 8, flow: 20, voices: 32, rising: 16 };
+/** Minimum top of each spark, so a quiet trace does not zoom to a single blip. Voices start at the four beds. */
+const SPARK_FLOOR = { splashes: 8, flow: 20, voices: 4, rising: 16 };
 const sparkHistory = { splashes: [], flow: [], voices: [], rising: [] };
 let sparkAt = 0;
 let audioQuadKey = "";
@@ -307,7 +308,7 @@ function paintSpark(id) {
   const last = values.length - 1;
   for (let i = 0; i < values.length; i += 1) {
     const x = last === 0 ? 0 : (i / last) * 100;
-    const y = 22 - (Math.max(0, values[i]) / max) * 20;
+    const y = 24 - (Math.max(0, values[i]) / max) * 24;
     pts.push(`${x.toFixed(2)},${y.toFixed(2)}`);
   }
   const points = pts.join(" ");

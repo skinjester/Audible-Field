@@ -1137,8 +1137,8 @@ dd {
 
 .fx-dial-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
-  gap: 10px 6px;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 14px 10px;
 }
 
 .fx-dial {
@@ -1149,19 +1149,15 @@ dd {
   min-width: 0;
 }
 
-.fx-dial[data-armed="false"] {
-  opacity: 0.55;
-}
-
 .fx-dial-face {
-  width: 52px;
-  height: 52px;
+  width: 96px;
+  height: 96px;
 }
 
 .fx-dial-svg {
   display: block;
-  width: 52px;
-  height: 52px;
+  width: 96px;
+  height: 96px;
   overflow: visible;
   touch-action: none;
   user-select: none;
@@ -1187,6 +1183,15 @@ dd {
   cursor: ns-resize;
 }
 
+.fx-dial-value-hit {
+  fill: transparent;
+  cursor: ns-resize;
+}
+
+.fx-dial[data-armed="true"] .fx-dial-value-hit {
+  pointer-events: none;
+}
+
 .fx-dial-track {
   stroke: var(--line);
   stroke-width: 4;
@@ -1208,18 +1213,6 @@ dd {
   stroke: var(--ink);
   stroke-width: 1.5;
   stroke-linecap: round;
-}
-
-.fx-dial-thumb {
-  fill: var(--card);
-  stroke: var(--ink);
-  stroke-width: 1.5;
-  cursor: ns-resize;
-}
-
-.fx-dial-thumb-hit {
-  fill: transparent;
-  cursor: ns-resize;
 }
 
 .fx-dial-label,
@@ -1511,6 +1504,9 @@ dd {
 [data-panel="falling-blocks"] canvas {
   cursor: crosshair;
   touch-action: none;
+  /* Focus stays on the canvas for keyboard emit and material cycling.
+     The browser's default ring is the orange rectangle around the stage. */
+  outline: none;
 }
 
 [data-panel="falling-blocks"] canvas.is-emitting,
