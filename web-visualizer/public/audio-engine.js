@@ -2437,34 +2437,69 @@ export class EchoScapeAudioEngine {
 
   /**
    * Greyhole send for rising Diffuse grains. Delay time and size are not touched.
-   * Feedback is the long diffuse tail: it reaches max as soon as grains lift, then rings down.
-   * `wets` scales the return. An empty quadrant slews it to silence.
+   * The dry bed is a separate gain. Closing it stops new input. Sound already in the
+   * feedback loop keeps coming out the return, so feedback and the return are not
+   * allowed to fall faster than the ring.
    * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} levels
    * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} [feedbacks]
    * @param {{ tl?: number, tr?: number, bl?: number, br?: number } | null} [wets]
    */
   setDiffuseGreyhole(levels, feedbacks, wets) {
-    if (!this.running || !this._stemReverbs) return;
+    if (!this.running || !this._stemReverbs || !this.ctx) return;
+    const now = this.ctx.currentTime;
     for (const corner of CORNERS) {
       const rec = this._stemReverbs[corner];
       if (!rec?.send) continue;
       const level = Math.min(1, Math.max(0, Number(levels?.[corner]) || 0));
       writeParam(rec.send.gain, level, 1e-5);
-      if (rec.ret && wets) {
-        const wet = Math.min(1, Math.max(0, Number(wets[corner]) || 0));
-        writeParam(rec.ret.gain, 0.45 * wet, 1e-5);
-      }
+      const dt = rec.heardAt > 0 ? Math.min(0.1, Math.max(0, now - rec.heardAt)) : 0;
+      rec.heardAt = now;
+      const askedFeedback = Math.min(1, Math.max(0, Number(feedbacks?.[corner]) || 0));
+      const askedWet = Math.min(1, Math.max(0, Number(wets?.[corner]) || 0));
+      const prevFeedback = Number.isFinite(rec.feedbackHeld) ? rec.feedbackHeld : askedFeedback;
+      const prevWet = Number.isFinite(rec.wetHeld) ? rec.wetHeld : askedWet;
+      let feedback = this._ringRelease(prevFeedback, askedFeedback, dt);
+      let wet = this._ringRelease(prevWet, askedWet, dt);
+      if (feedback > 0.08 && prevWet > 0.5) wet = Math.max(wet, prevWet);
+      rec.feedbackHeld = feedback;
+      rec.wetHeld = wet;
+      if (rec.ret) writeParam(rec.ret.gain, 0.45 * wet, 1e-4);
       if (!rec.node?.setParamValue) continue;
-      const rawFeedback = Math.min(1, Math.max(0, Number(feedbacks?.[corner]) || 0));
-      const feedback = rawFeedback < 0.01 ? 0 : Math.round(rawFeedback * 100) / 100;
-      if (rec.feedback === feedback) continue;
-      rec.feedback = feedback;
+      const sent = feedback < 0.01 ? 0 : Math.round(feedback * 100) / 100;
+      if (rec.feedback === sent) continue;
+      rec.feedback = sent;
       try {
-        rec.node.setParamValue("/greyhole/feedback", feedback);
+        rec.node.setParamValue("/greyhole/feedback", sent);
       } catch {
         /* param name differs */
       }
     }
+  }
+
+  /**
+   * True while a diffuse Greyhole is still regenerating after its input has stopped.
+   */
+  diffuseTailOpen() {
+    const recs = this._stemReverbs;
+    if (!recs) return false;
+    for (const corner of CORNERS) {
+      const rec = recs[corner];
+      if ((rec?.feedbackHeld || 0) > 0.03) return true;
+      if ((rec?.wetHeld || 0) > 0.03) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Rises may jump. A falling reverb control keeps ringing instead of closing with the input.
+   * @param {number} current
+   * @param {number} target
+   * @param {number} dt
+   */
+  _ringRelease(current, target, dt) {
+    if (target >= current || !(dt > 0)) return target;
+    const a = 1 - Math.exp(-dt / 8);
+    return current + (target - current) * a;
   }
 
   /**
@@ -2992,7 +3027,7 @@ export class EchoScapeAudioEngine {
 
   _clearRiseLoops() {
     if (!this._riseVoices) return;
-    for (const voice of this._riseVoices.values()) this._releaseRiseVoice(voice, true);
+    for (const voice of this._riseVoices.values()) this._releaseRiseVoice(voice, 0.12);
     this._riseVoices.clear();
   }
 
@@ -3022,10 +3057,11 @@ export class EchoScapeAudioEngine {
     }
   }
 
-  _releaseRiseVoice(voice, fade) {
+  _releaseRiseVoice(voice, seconds) {
     if (!voice || voice.released) return;
     voice.released = true;
-    if (!fade || !this.ctx || !voice.gain) {
+    const release = Number(seconds) > 0 ? Number(seconds) : 0.12;
+    if (!this.ctx || !voice.gain) {
       this._disposeRiseVoice(voice);
       return;
     }
@@ -3034,8 +3070,8 @@ export class EchoScapeAudioEngine {
     const current = Math.max(0.0001, gain.value || 0.0001);
     gain.cancelScheduledValues(now);
     gain.setValueAtTime(current, now);
-    gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
-    voice.timer = window.setTimeout(() => this._disposeRiseVoice(voice), 140);
+    gain.exponentialRampToValueAtTime(0.0001, now + release);
+    voice.timer = window.setTimeout(() => this._disposeRiseVoice(voice), Math.ceil(release * 1000) + 60);
   }
 
   _dropFlake(voice) {
@@ -3190,7 +3226,7 @@ export class EchoScapeAudioEngine {
       const count = counts[atom.corner] || 1;
       let voice = this._riseVoices.get(atom.id);
       if (!voice || voice.mode !== mode || voice.released) {
-        if (voice) this._releaseRiseVoice(voice, true);
+        if (voice) this._releaseRiseVoice(voice, 0.12);
         voice = this._makeRiseVoice(atom, mode, this._riseLoopSeconds(mode), true);
         if (!voice) continue;
         this._riseVoices.set(atom.id, voice);
@@ -3199,7 +3235,7 @@ export class EchoScapeAudioEngine {
     }
     for (const [id, voice] of this._riseVoices) {
       if (live.has(id)) continue;
-      this._releaseRiseVoice(voice, true);
+      this._releaseRiseVoice(voice, 2.4);
       this._riseVoices.delete(id);
     }
   }

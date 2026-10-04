@@ -4,7 +4,7 @@
  * A single column stays near 7 kHz. A wide pour opens toward 20 kHz.
  * Each pile's resting height is weight on that stem: darker, a low shelf, and a soft clip.
  * Full weight is 10 atoms (2.5 world units). Taller than that stays pinned. Rising grains do not add weight.
- * Rising Diffuse grains open that bed's Greyhole send, fully by 2.5 world units, and the feedback jumps to the long diffuse tail as soon as they lift. The send is then scaled by how much rising mass is in the quadrant: one full-size atom is already a clear fraction, and more atoms, counted by their drawn size, fill the rest. Delay time and size stay fixed. The send is taken before the weight filters. An empty quadrant drops that tail quickly.
+ * Rising Diffuse grains open that bed's Greyhole send. The altitude is the average height of the cluster that holds the most of them, fully open by 2.5 world units, so one grain above that cluster does not open the mix by itself. Feedback jumps to the long diffuse tail as soon as they lift. The send is then scaled by how much rising mass is in the quadrant: one full-size atom is already a clear fraction, and more atoms, counted by their drawn size, fill the rest. Delay time and size stay fixed. The send is taken before the weight filters. After the last grain is gone the tail keeps ringing; only a quadrant that was not holding that tail drops quickly.
  * Greyhole stays off the resting stack: moving its delay with the stack was glitching playback.
  * Each connected pile plays that quadrant's sample as its own note.
  * The note is the pitch at the pile's center: an octave up at the quadrant center, the sample's own pitch at the corners.
@@ -49,6 +49,7 @@ const WEIGHT_CURVE = 1.15;
 const STACK_FIELD_U = 12;
 /**
  * Drawn altitude (world units) that fully opens the Diffuse Greyhole send.
+ * This is the average height of the busiest rising cluster, not the single highest grain.
  * The first lift already raises it; 2.5 is full, the same range as the main-branch rise.
  */
 const RISE_FULL = 2.5;
@@ -56,10 +57,12 @@ const RISE_FULL = 2.5;
 const FEEDBACK_MAX = 0.98;
 /** How fast the long tail engages once grains start rising. */
 const DECAY_ATTACK = 0.12;
-/** How long the long tail keeps ringing after the rise is gone, while the quadrant still has material. */
+/** How long the long tail keeps ringing after the rise is gone, including after the last atom despawns. */
 const DECAY_RELEASE = 14;
-/** Empty quadrant. Feedback and the wet return fall on this time constant. */
+/** Quadrant that was not holding a diffuse tail. Feedback and the wet return fall on this time constant. */
 const EMPTY_TAIL = 0.25;
+/** How the dry bed lets go after the last diffuse atom. The reverb send is after this gain, so the same fade is what the tail still hears. */
+const BED_RING = 2.6;
 /**
  * Rising mass that fills the rest of the send after the single-atom floor.
  * Mass is the sum of drawn scales, so one full atom is 1 and a shrinking atom counts for less.
@@ -109,8 +112,10 @@ const weights = { tl: 0, tr: 0, bl: 0, br: 0 };
 const diffuses = { tl: 0, tr: 0, bl: 0, br: 0 };
 /** Greyhole feedback for that rise. Hits the long tail immediately, then rings after the grains land. */
 const feedbacks = { tl: 0, tr: 0, bl: 0, br: 0 };
-/** 0..1 Greyhole wet return. An empty quadrant slews this shut. */
+/** 0..1 Greyhole wet return. Stays open while a diffuse tail is still ringing. */
 const wets = { tl: 0, tr: 0, bl: 0, br: 0 };
+/** Last pile notes, kept while a diffuse tail is still fading the bed. */
+const heldNotes = { tl: [], tr: [], bl: [], br: [] };
 let gen = -1;
 
 function hitLife(hit) {
@@ -146,6 +151,7 @@ export function resetFieldSonify() {
     riseLatch[id] = false;
     pitches[id] = 1;
     noteRates[id].clear();
+    heldNotes[id] = [];
     halls[id] = 0;
     weights[id] = 0;
     diffuses[id] = 0;
@@ -177,43 +183,48 @@ export function fieldFrame(snap, dt) {
     const crowd = riseCrowd(Number(quad.riseMass) || 0);
     const riseSend = riseOpen * crowd;
     const empty = coverage <= 0 && !rising;
-    if (empty) riseLatch[id] = false;
+    if (rising) riseLatch[id] = true;
     let feedbackTarget = 0;
     let feedbackTau = 0.35;
     if (rising) {
       feedbackTarget = FEEDBACK_MAX;
       feedbackTau = DECAY_ATTACK;
-    } else if (empty) {
-      feedbackTarget = 0;
-      feedbackTau = EMPTY_TAIL;
     } else if (riseLatch[id]) {
       feedbackTarget = 0;
       feedbackTau = DECAY_RELEASE;
       if (feedbacks[id] < 0.04) riseLatch[id] = false;
+    } else if (empty) {
+      feedbackTarget = 0;
+      feedbackTau = EMPTY_TAIL;
     }
     feedbacks[id] = follow(feedbacks[id], feedbackTarget, dt, feedbackTau);
     const reverbTarget = riseOpen;
-    if (rising) riseLatch[id] = true;
+    const tailing = rising || riseLatch[id];
     let decayTarget = reverbTarget;
     let decayTau = 0.25;
     if (rising) {
       decayTarget = 1;
       decayTau = DECAY_ATTACK;
-    } else if (empty) {
-      decayTarget = 0;
-      decayTau = EMPTY_TAIL;
     } else if (riseLatch[id]) {
       decayTarget = reverbTarget;
       decayTau = DECAY_RELEASE;
+    } else if (empty) {
+      decayTarget = 0;
+      decayTau = EMPTY_TAIL;
     }
-    longTails[id] = rising || riseLatch[id];
-    gains[id] = gainTarget <= 0 ? 0 : follow(gains[id], gainTarget, dt, 0.08);
+    longTails[id] = tailing;
+    gains[id] = gainTarget <= 0
+      ? (tailing ? follow(gains[id], 0, dt, BED_RING) : 0)
+      : follow(gains[id], gainTarget, dt, 0.08);
     heights[id] = reverbTarget <= 0 ? 0 : follow(heights[id], reverbTarget, dt, rising ? 0.12 : 0.25);
     decays[id] = follow(decays[id], decayTarget, dt, decayTau);
     halls[id] = 0;
     weights[id] = weightTarget <= 0 ? 0 : follow(weights[id], weightTarget, dt, 0.2);
-    diffuses[id] = follow(diffuses[id], riseSend, dt, empty ? EMPTY_TAIL : rising ? 0.12 : 0.25);
-    wets[id] = follow(wets[id], empty ? 0 : 1, dt, empty ? EMPTY_TAIL : 0.08);
+    if (!(tailing && !rising)) {
+      diffuses[id] = follow(diffuses[id], riseSend, dt, empty ? EMPTY_TAIL : rising ? 0.12 : 0.25);
+    }
+    const wetOpen = !empty || tailing;
+    wets[id] = follow(wets[id], wetOpen ? 1 : 0, dt, wetOpen ? 0.08 : EMPTY_TAIL);
     cutoffs[id] = cutoffHz(gains[id]);
     const list = Array.isArray(snap?.piles?.[id]) ? snap.piles[id] : [];
     const live = new Set();
@@ -241,6 +252,9 @@ export function fieldFrame(snap, dt) {
       if (!live.has(pileId)) noteRates[id].delete(pileId);
     }
     pitches[id] = list.length ? loudRate : follow(pitches[id], 1, dt, 0.2);
+    if (notes[id].length) heldNotes[id] = notes[id].map((note) => ({ ...note }));
+    else if (tailing && heldNotes[id].length) notes[id] = heldNotes[id];
+    else heldNotes[id] = [];
   }
 
   let splash = null;

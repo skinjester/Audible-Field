@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { audioEngine } from "./audio-engine.js?v=84";
+import { audioEngine } from "./audio-engine.js?v=86";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
@@ -4069,9 +4069,75 @@ function planeViewportPan() {
 }
 
 /**
+ * Drawn altitude that should drive the diffuse reverb.
+ * Rising atoms are grouped by columns that touch. The group with the most atoms wins,
+ * and the altitude is their size-weighted average. One grain that has climbed ahead of that group does not set it.
+ * @param {{ corner: string, key: number, scale: number, tip: number }[]} atoms
+ * @param {string} corner
+ */
+function crowdedRiseHeight(atoms, corner) {
+  /** @type {Map<number, { scale: number, count: number, sum: number }>} */
+  const byKey = new Map();
+  for (let i = 0; i < atoms.length; i += 1) {
+    const atom = atoms[i];
+    if (atom.corner !== corner) continue;
+    const scale = atom.scale > 0 ? atom.scale : 0;
+    const tip = atom.tip > 0 ? atom.tip : 0;
+    let group = byKey.get(atom.key);
+    if (!group) {
+      group = { scale: 0, count: 0, sum: 0 };
+      byKey.set(atom.key, group);
+    }
+    group.scale += scale;
+    group.count += 1;
+    group.sum += tip * scale;
+  }
+  if (!byKey.size) return 0;
+  const keys = [...byKey.keys()];
+  const seen = new Set();
+  let bestAvg = 0;
+  let bestCount = -1;
+  let bestScale = -1;
+  for (let i = 0; i < keys.length; i += 1) {
+    if (seen.has(keys[i])) continue;
+    const stack = [keys[i]];
+    seen.add(keys[i]);
+    let count = 0;
+    let scale = 0;
+    let sum = 0;
+    while (stack.length) {
+      const key = stack.pop();
+      const group = byKey.get(key);
+      count += group.count;
+      scale += group.scale;
+      sum += group.sum;
+      const x = key % GRID_MAX;
+      const z = (key / GRID_MAX) | 0;
+      const next = [];
+      if (x > 0) next.push(key - 1);
+      if (x + 1 < GRID_MAX) next.push(key + 1);
+      if (z > 0) next.push(key - GRID_MAX);
+      if (z + 1 < GRID_MAX) next.push(key + GRID_MAX);
+      for (let n = 0; n < next.length; n += 1) {
+        const nk = next[n];
+        if (seen.has(nk) || !byKey.has(nk)) continue;
+        seen.add(nk);
+        stack.push(nk);
+      }
+    }
+    if (count > bestCount || (count === bestCount && scale > bestScale)) {
+      bestCount = count;
+      bestScale = scale;
+      bestAvg = scale > 0 ? sum / scale : 0;
+    }
+  }
+  return bestAvg;
+}
+
+/**
  * One quadrant's audio measures.
- * `rise` is the drawn altitude of grains that are climbing (diffuse blow), in world units.
- * That climb is included in `peak` and `height`, so the height parameter goes up as they lift.
+ * `rise` is the average drawn altitude of the rising cluster that holds the most grains, in world units.
+ * The tallest grain still counts in `peak` and `height`. It does not set `rise` by itself.
  * `riseMass` is the sum of those grains' drawn scales. One full-size atom is 1.
  */
 function quadAudio(cells, peak, rise, stack, rate, quadCells, riseMass) {
@@ -4293,8 +4359,6 @@ function captureAudioSnapshot(dt) {
   const quadCells = mid * mid;
   const fp = { tl: 0, tr: 0, bl: 0, br: 0 };
   const peak = { tl: 0, tr: 0, bl: 0, br: 0 };
-  /** Highest drawn altitude of grains that are currently rising, world units. */
-  const risePeak = { tl: 0, tr: 0, bl: 0, br: 0 };
   /** Tallest resting column, world units. Rising grains are not included. */
   const stackPeak = { tl: 0, tr: 0, bl: 0, br: 0 };
   const panSum = { tl: 0, tr: 0, bl: 0, br: 0 };
@@ -4328,7 +4392,6 @@ function captureAudioSnapshot(dt) {
         const tip = restTip + lift;
         if (tip > top) top = tip;
         if (lift <= 0 && restTip > stackTop) stackTop = restTip;
-        if (lift > 0 && tip > risePeak[id]) risePeak[id] = tip;
       }
       if (top > maxTop) maxTop = top;
       if (n > 1) stackedN += n;
@@ -4363,6 +4426,10 @@ function captureAudioSnapshot(dt) {
         riseMass[aid] += scale;
         const wx = posX[i];
         const wz = posZ[i];
+        const decoded = decodeCell(i);
+        const half = atomExtent(decoded.x, decoded.y, decoded.z, cells[i]) * 0.5;
+        const yCenter = posY[i] > 0 ? posY[i] : half;
+        const tip = yCenter + half + riseOffset(decoded.x, decoded.y, decoded.z);
         riseAtoms.push({
           id: i,
           corner: aid,
@@ -4371,6 +4438,7 @@ function captureAudioSnapshot(dt) {
           key: ax + az * GRID_MAX,
           scale,
           t,
+          tip,
           pan: Math.min(1, Math.max(-1, screenPan(wx, wz, yaw) + viewPan)),
         });
       } else if (!resting) bucket.fall += 1;
@@ -4454,10 +4522,10 @@ function captureAudioSnapshot(dt) {
     weight: sumW,
     mass: count,
     quads: {
-      tl: quadAudio(fp.tl, peak.tl, risePeak.tl, stackPeak.tl, pileRate(piles.tl), quadCells, riseMass.tl),
-      tr: quadAudio(fp.tr, peak.tr, risePeak.tr, stackPeak.tr, pileRate(piles.tr), quadCells, riseMass.tr),
-      bl: quadAudio(fp.bl, peak.bl, risePeak.bl, stackPeak.bl, pileRate(piles.bl), quadCells, riseMass.bl),
-      br: quadAudio(fp.br, peak.br, risePeak.br, stackPeak.br, pileRate(piles.br), quadCells, riseMass.br),
+      tl: quadAudio(fp.tl, peak.tl, crowdedRiseHeight(riseAtoms, "tl"), stackPeak.tl, pileRate(piles.tl), quadCells, riseMass.tl),
+      tr: quadAudio(fp.tr, peak.tr, crowdedRiseHeight(riseAtoms, "tr"), stackPeak.tr, pileRate(piles.tr), quadCells, riseMass.tr),
+      bl: quadAudio(fp.bl, peak.bl, crowdedRiseHeight(riseAtoms, "bl"), stackPeak.bl, pileRate(piles.bl), quadCells, riseMass.bl),
+      br: quadAudio(fp.br, peak.br, crowdedRiseHeight(riseAtoms, "br"), stackPeak.br, pileRate(piles.br), quadCells, riseMass.br),
     },
     piles,
     rises: riseAtoms,

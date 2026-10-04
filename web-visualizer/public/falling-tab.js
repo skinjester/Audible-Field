@@ -1,4 +1,4 @@
-import { audioEngine } from "./audio-engine.js?v=84";
+import { audioEngine } from "./audio-engine.js?v=86";
 import {
   clearBoard,
   hideFallingBlocks,
@@ -6,8 +6,8 @@ import {
   onFieldPress,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=361";
-import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=41";
+} from "./falling-blocks.js?v=364";
+import { fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=44";
 import { controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
@@ -200,7 +200,7 @@ export function tick(frame) {
     }
   }
   audioEngine.setOutputLevel(
-    fieldAudible(shadow) || audioEngine.hasLiveStrikes() || snap.mass > 0 ? 1 : 0
+    fieldAudible(shadow) || audioEngine.diffuseTailOpen() || audioEngine.hasLiveStrikes() || snap.mass > 0 ? 1 : 0
   );
   audioEngine.setCameraPresence(snap.view?.near, snap.view?.far);
   const label = deps.browserStatusLabel();
