@@ -1,123 +1,145 @@
 # Falling Blocks
 
-The Falling Blocks tab pours atoms onto a ground plane. Where they land, how wide the pile is, and how tall it stands drive the four stem samples. The Web Audio / WAM graph is the same one the rest of AUDIBLE FIELD uses. How that graph is built, and how iOS Safari is allowed to play it, is in [The audio graph](audio-graph.md).
+Falling Blocks pours small material cells, called atoms, onto a ground plane. The plane has four quadrants, and each quadrant controls one sound sample. A pile's width, height, position, and behavior change what the listener hears.
 
-## Where it lives
+Falling Blocks uses the same audio engine as the other Audible Field views. See [The audio graph](audio-graph.md) for signal routing and iOS playback recovery.
 
-Own tab, not a mode inside Visualize.
+## Main files
 
-| Piece | Path |
+| Responsibility | File |
 | --- | --- |
-| Tab + audio tick | [`web-visualizer/public/falling-tab.js`](../web-visualizer/public/falling-tab.js) |
-| Scene, sim, snapshot | [`web-visualizer/public/falling-blocks.js`](../web-visualizer/public/falling-blocks.js) |
-| Pointer, keys, pad | [`web-visualizer/public/falling-input.js`](../web-visualizer/public/falling-input.js) |
-| Binding table | [`web-visualizer/public/input-bindings.js`](../web-visualizer/public/input-bindings.js) |
-| Materials and rules | [`web-visualizer/public/materials.json`](../web-visualizer/public/materials.json) |
-| Rule step | [`web-visualizer/public/rule-engine.js`](../web-visualizer/public/rule-engine.js) |
-| Quadrant → stem levels | [`web-visualizer/public/grid-sonify.js`](../web-visualizer/public/grid-sonify.js) |
-| Graph | [`web-visualizer/public/audio-engine.js`](../web-visualizer/public/audio-engine.js). Routing and iOS playback: [The audio graph](audio-graph.md) |
+| Tab lifecycle and audio updates | [`falling-tab.js`](../web-visualizer/public/falling-tab.js) |
+| Scene, simulation, and audio snapshot | [`falling-blocks.js`](../web-visualizer/public/falling-blocks.js) |
+| Mouse, touch, keyboard, and controller input | [`falling-input.js`](../web-visualizer/public/falling-input.js) |
+| Input assignments | [`input-bindings.js`](../web-visualizer/public/input-bindings.js) |
+| Materials | [`materials.json`](../web-visualizer/public/materials.json) |
+| Material rule processing | [`rule-engine.js`](../web-visualizer/public/rule-engine.js) |
+| Field-to-sound mapping | [`grid-sonify.js`](../web-visualizer/public/grid-sonify.js) |
+| Shared audio engine | [`audio-engine.js`](../web-visualizer/public/audio-engine.js) |
 
-## Play
+Falling Blocks is its own tab. It is not a mode inside Visualize.
 
-An emitter sits above the plane and follows the pointer, left stick, or D-pad. Holding an emit control pours the selected material. The pour continues until the control is released. There is no charge-and-release drop.
+## How to play
+
+An emitter sits above the plane. Aim it, choose a material, and hold an emit control to pour. The pour continues until the control is released.
+
+### Mouse and keyboard
 
 | Input | Action |
 | --- | --- |
-| Move pointer, left stick, or D-pad | Aim the emitter. At the edge of the view the plane scrolls so the rest of the field stays reachable. |
-| Left click, X, Cross, or touchpad click | Pour the widest brush (11×11) at full atom size. |
-| Shift + left click, or left trigger | Pour a single half-size stream. |
-| Right trigger | Pressure. A light pull is the single half-size stream. A deep pull opens the wide full-size field. |
-| Right-drag | Slide the playfield. |
-| Middle-drag, Shift+right-drag, Alt+right-drag, or right stick X | Yaw the playfield under the emitter. |
-| One finger | Pan the field under the emitter. The emitter stays at screen center. |
-| Two-finger twist | Yaw the field around the emitter. |
-| Pinch | Zoom toward and away from the emitter. |
-| Wheel or right stick Y | Zoom. |
-| L1 / R1, or Tab / Shift+Tab | Previous / next material. |
-| Circle, or the clear button | Clear the board. |
-| Square, or the audio button | Toggle field sonification. |
+| Move the pointer | Aim the emitter |
+| Left mouse button or `X` | Pour the widest full-size clump |
+| Shift + left mouse button | Pour one half-size stream |
+| Right-drag | Slide the plane |
+| Middle-drag | Turn the plane |
+| Shift + right-drag or Alt + right-drag | Turn the plane |
+| Mouse wheel | Zoom |
+| Tab / Shift+Tab | Next / previous material |
 
-DualSense touchpad: a finger aims; a click pours the wide brush. The touchpad is not routed to the mixer while this tab is up.
+### Touchscreen
 
-Each cell of a multi-cell brush rolls a chance (`EMIT_CHANCE` 0.4), so a clump cascades instead of falling as one slab. A 1×1 pour always places. The footprint waits about 0.16s after a size change before atoms start coming out.
-
-## Field
-
-Fixed atom pitch 0.25 on a 16-unit plane. The camera sits at a fixed 60° pitch. Distance zooms (default 30, range 10–60). Yaw and slide move the surface, not the camera orbit.
-
-The plane is split into four quadrants. Those quadrants are the four stems:
-
-| Quadrant | Stem color |
+| Input | Action |
 | --- | --- |
-| Top-left | Red |
-| Top-right | Yellow |
-| Bottom-left | Blue |
-| Bottom-right | Green |
+| Drag with one finger on the field | Slide the plane under the centered emitter |
+| Twist with two fingers | Turn the plane around the emitter |
+| Pinch | Zoom toward or away from the emitter |
+| Hold Emit still for 280 ms | Begin pouring |
+| Drag Emit upward | Choose a wider clump |
+| Drag Emit downward | Choose a narrower or single stream |
+| Release Emit | Stop pouring |
 
-Sky color blends those same quadrants from surface yaw. That blend is visual. Stem loudness comes from which quadrant holds atoms, not from the camera angle.
+Moving the Emit control before the hold finishes restarts the 280 ms wait. The selected size stays in place for the next pour.
+
+### DualSense and other gamepads
+
+| Input | Action |
+| --- | --- |
+| Left stick or D-pad | Aim; reaching the edge scrolls the plane |
+| Cross or DualSense touchpad click | Pour the widest full-size clump |
+| Left trigger | Pour one half-size stream |
+| Right trigger | Pour a pressure-sensitive stream from narrow to wide |
+| Right stick left / right | Turn the plane |
+| Right stick up / down | Zoom |
+| L1 / R1 | Previous / next material |
+| Circle | Clear the field |
+| Square | Turn field audio on or off |
+
+On a DualSense touchpad, a finger aims and a mechanical click pours. The touchpad controls the field instead of the four-corner mixer while this tab is active.
+
+### How clumps form
+
+The widest brush covers an 11 × 11 area. Each cell in a multi-cell brush has a 40% chance to emit an atom. This makes a clump cascade instead of falling as one solid slab. A single-cell stream always emits.
+
+After the brush size changes, the footprint waits about 0.16 seconds before emitting. This prevents a sudden slab while the footprint is resizing.
+
+## Field and camera
+
+Atoms are 0.25 world units wide on a 16-unit plane. The camera stays at a 60-degree downward angle. Its default distance is 30, with a range from 10 to 60.
+
+Turning and sliding move the plane beneath the emitter. The camera does not orbit freely.
+
+The ground and sky stay near black. Each quadrant has a numbered label and the name of its current sample along one edge. Turning the plane moves those labels, but camera direction does not change stem loudness.
 
 ## Materials
 
-Palette entries come from [`materials.json`](../web-visualizer/public/materials.json). Default is Block. The floor material is liquid. Active types:
+The palette comes from [`materials.json`](../web-visualizer/public/materials.json). Block is selected by default.
 
 | Material | Behavior |
 | --- | --- |
-| Block | Falls. A lone block on the floor shrinks and clears. A block with the same material above it ages out, so a pile of blocks loses height. |
-| Sand | Falls and slides into gaps. |
-| Diffuse | Falls and slides. Resting grains with nothing above rise and clear. Contact converts other atoms into Diffuse, so piles dissipate. |
-| Erode | Falls, slides, and creeps. Clears what it touches and leaves a shrink. `sonify: false`, so Erode grains stay out of the audio measures. |
+| Block | Falls. A lone floor block shrinks and clears. Blocks in a stack age out, so the pile loses height |
+| Sand | Falls and slides into gaps |
+| Diffuse | Falls and slides. Exposed grains rise and clear. Contact converts nearby atoms to Diffuse, so a pile can dissolve |
+| Erode | Falls, slides, and creeps. It clears atoms it touches and leaves a shrinking mark. Erode is excluded from sound measurements |
 
-Commented-out types in the same file (Slime, Block Exp, Etch, Water) are not in the palette.
+Slime, Block Exp, Etch, and Water remain commented out in `materials.json`, so they do not appear in the palette.
 
 ## Simulation
 
-Atoms fall continuously (about 28 world units per second) until they meet the floor or another atom. A rule step at 22 Hz then applies each material's diagrams: fall, slide, creep, age, convert, vacuum, clear.
+Atoms fall at about 28 world units per second until they meet the floor or another atom. Material rules run 22 times per second. Depending on the material, a rule can make an atom fall, slide, creep, age, convert another atom, clear space, or disappear.
 
-Sonifying atoms sample a lifetime when they are poured. A wave between 0.1s and 5s keeps moving whether or not anything is emitting (period 0.4s). The HUD shows that wave and the last few emitted lifetimes.
+Each sound-producing atom receives a lifetime when it is poured. A repeating 0.4-second wave chooses values from 0.1 to 5 seconds. The wave continues even when nothing is pouring. The on-screen display shows the current wave and recent values.
 
-```mermaid
-flowchart TB
-  input[Aim and pour]
-  emit[Emit into grid]
-  fall[Continuous fall]
-  rules[Material rules]
-  snap[Grid snapshot]
-  sonify[grid-sonify]
-  audio[audioEngine]
+The simulation-to-audio sequence is:
 
-  input --> emit
-  emit --> fall
-  fall --> rules
-  rules --> snap
-  snap --> sonify
-  sonify --> audio
-```
+1. Input aims the emitter and pours atoms.
+2. Gravity and material rules update the field.
+3. `captureAudioSnapshot` measures the field.
+4. `fieldFrame` converts those measurements into audio controls.
+5. `falling-tab.js` writes the controls to the shared audio engine.
 
-## Audio
+## Sound mapping
 
-`captureAudioSnapshot` describes the grid. `fieldFrame` in `grid-sonify.js` turns one frame of that snapshot into stem controls. `falling-tab.js` writes them on the audio engine. Face effect slots stay dry: the controller shadow passed into `sync` is zeros. The nodes those calls reach are in [The audio graph](audio-graph.md).
+Only atoms allowed to produce sound are included in these measurements. Erode is excluded.
 
-Per quadrant, for atoms that sonify:
-
-| World | Audio |
+| Field measurement | Sound result |
 | --- | --- |
-| Ground cells occupied | Stem gain. Wider coverage is louder. The same amount opens that stem's low-pass, from about 7 kHz on a single column toward 20 kHz on a wide pour. |
-| Tallest resting column | Weight on that pile's stem. Taller darkens a low-pass from 18 kHz toward 2.5 kHz, adds a low shelf up to +6 dB, and blends in a level-matched soft clip. Full weight is 10 atoms. Rising grains do not add to it. |
-| Diffuse grains rising | Greyhole send, taken before the weight filters so the tail stays bright. Feedback jumps to the long tail as soon as they lift, then releases slowly while the quadrant still has material. An empty quadrant fades that tail quickly. Pitch stays where the pile sits. |
-| Distance to the quadrant center | Playback rate. The center is an octave up. The quadrant corners stay at the sample's own pitch. Settled height and rising Diffuse grains do not change pitch. |
-| Pile position after yaw, plus where the plane sits in the view | Stereo pan of that stem. |
-| Landing | A splash ring, and one event at the pitch of the pile. Each ring gets an octave-up glint that is already at full level when the ring appears and fades with it. The phrase restarts the sample in phase with the bed, at the bed's brightness, and the rest of the brightness arrives within about 30 ms. That sweep is not restarted. The phrase ends about 0.12 s after the latest ring fades. The voice sits under the stem. A heavier landing is a little louder. |
-| Zoom closer than default | Louder, with a soft clip. |
-| Zoom farther than default | Quieter, low-passed. |
+| Ground area covered | Wider coverage raises the stem level and opens its brightness filter from about 6 kHz toward 20 kHz |
+| Tallest resting column | More height darkens the stem from 18 kHz toward 2.5 kHz, adds up to 6 dB of low tone, and blends in soft clipping. Ten atoms reach maximum weight |
+| Connected piles | Each pile plays a separate pitched copy of its quadrant sample |
+| Distance from quadrant center | A pile at the center plays one octave higher. A pile at an outer corner keeps the sample's original pitch |
+| Pile position after turning and sliding | Moves the stem left or right |
+| Rising Diffuse atoms | Opens a bright Grey Hole tail. Feedback rises quickly, then fades slowly while material remains. An empty quadrant closes it quickly |
+| Camera closer than default | Makes the full mix louder and adds soft clipping |
+| Camera farther than default | Makes the full mix quieter and darker |
 
-Erode does not add coverage, height, pan, or splash. Clearing the board or turning audio off resets the sonify followers.
+Resting height does not add reverb. The reverb tail belongs to rising Diffuse atoms. Rising atoms also do not add weight or change pile pitch.
 
-## Still out of scope
+### Landings
 
-- Click-to-place as the primary edit
-- Rebuilding the browser WAM graph
-- Unreal / Steam client
+A landing draws a ring and sends an impact to the audio engine at that pile's pitch. The default Phrase mode starts the quadrant sample in step with the bed. Later landings on the same pile extend the phrase instead of starting overlapping copies. A short octave-high layer adds a bright glint.
+
+The phrase opens its filter over about 30 milliseconds and ends shortly after the latest ring fades. Heavier landings are slightly louder.
+
+The engine also contains developer-selectable Grain and Tick modes, although the app has no player control for them. These modes use short one-shot sounds and ignore repeated landings on the same pile for 110 milliseconds.
+
+Face-button effects stay bypassed in Falling Blocks. Clearing the field or turning audio off resets the field measurements and extra voices.
+
+## Out of scope
+
+- Click-to-place as the main editing method
+- A separate audio or WAM graph for this view
+- Unreal Engine or Steam client
 - Multiplayer
 - A rigid-body solver for loose pieces
 - Melting landed mass into a density field
-- Structural collapse when support is removed, beyond what a material rule already clears
+- Structural collapse beyond what the current material rules clear

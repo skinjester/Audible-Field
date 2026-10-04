@@ -2138,6 +2138,7 @@ function bindSettingsUi() {
     const target = event.target;
     if (target instanceof Node && (panel.contains(target) || btn.contains(target))) return;
     setOpen(false);
+    if (document.activeElement === btn) btn.blur();
   });
 }
 

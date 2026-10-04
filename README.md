@@ -1,114 +1,104 @@
 # Audible Field
 
-Audible Field is an activity-driven browser instrument that mixes sound sources to sonify a three-dimensional visual field. Mike Wilcox created the original Max/MSP patch for his interactive audio installation work at Colgate University. I reimplemented that patch with the Web Audio API so it could run in a browser, using it as a foundation for expanding the scope of the project. The VST effects used in the original Max patch are recreated in the browser with local [Web Audio Modules](https://www.webaudiomodules.org/) (WAM2).
+Audible Field is a browser instrument that turns activity in a three-dimensional field into sound. It began as a browser version of Mike Wilcox's Max/MSP patch for interactive audio installations at Colgate University. The browser version uses the Web Audio API and local [Web Audio Modules](https://www.webaudiomodules.org/) (WAMs) in place of the original VST effects.
 
-## Current input support
-
-Audible Field has been tested with a mouse and keyboard and with a PlayStation DualSense wireless controller. Support for touchscreens and the built-in MacBook trackpad is forthcoming.
+The repository keeps the older EchoScape name in some folder names and code identifiers. In this documentation, **Audible Field** means the browser application.
 
 ## Features
 
-- Four-corner, equal-power sample mixing
-- Mouse, keyboard, Gamepad API, and DualSense WebHID input
-- Local WAM2 effects with stick-to-parameter mappings
-- Three.js audio-reactive visualization
-- Falling Blocks simulation that turns material behavior into sound
-- Runtime sample and plugin selection
+- Four sound samples mixed across four corners
+- Mouse, keyboard, touchscreen, gamepad, and DualSense controls
+- Local browser effects with stick-controlled parameters
+- A Three.js landscape that reacts to the shared mix
+- A Falling Blocks simulation that turns material behavior into sound
+- Sample and effect selection while the app is running
+
+Input support differs by view. Diagnostics and Visualize support mouse, keyboard, and gamepad input. Falling Blocks also supports touchscreen navigation and an on-screen Emit control. Chrome or Edge is required for DualSense touchpad input through WebHID. DualSense sticks, triggers, shoulders, and face buttons use the standard Gamepad API.
 
 ## Run
 
-Requires Node.js and npm.
+Install [Node.js](https://nodejs.org/) and npm, then run:
 
 ```bash
 npm install --prefix web-visualizer
 npm start --prefix web-visualizer
 ```
 
-Open [http://127.0.0.1:8080](http://127.0.0.1:8080). The start script builds `web-visualizer/dist` and serves it. Set `PORT` to use another port.
-
-Chrome or Edge is required for DualSense touchpad input (WebHID). Sticks, triggers, and face buttons also work through the Gamepad API.
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080). The start command builds `web-visualizer/dist` and serves it. Set the `PORT` environment variable to use another port.
 
 ## Views
 
 ### Diagnostics
 
-Diagnostics is a control panel for testing gamepad input, assigning audio sources, and mapping controls to DSP effects. Its four-quadrant pad maps pointer or stick position to sample levels, while triggers, shoulders, and face buttons control tone, reverb, delay, and the active plugin.
+Diagnostics is a control panel for testing gamepad input, choosing samples, and assigning effects. Its four-quadrant pad changes the level of each sample. Triggers, shoulder buttons, face buttons, and sticks control filters, delay, reverb, panning, and the selected effect.
 
-Click a quadrant name to choose another sample. Samples are WAV files under `samples/`. The build copies them into the site and writes the library catalog.
+Click a quadrant name to choose another sample. Most source samples are stored under `samples/`; the bundled nature beds are under `web-visualizer/public/beds/`. The build copies the library and creates the catalog used by the menu.
 
 ### Visualize
 
-Visualize translates the shared four-way mix into a GPU-displaced Three.js landscape. Moving between quadrants blends sphere, cube, torus, and cylinder terrain characteristics. Face-button effects generate ripples, waves, drift, and rings; the sticks shape those effects and control the camera.
+Visualize turns the shared four-way mix into a Three.js landscape. Moving toward a quadrant blends its shape into the terrain. Face-button effects create ripples, waves, drift, and rings. The sticks shape those effects and move the camera.
 
 ### Falling Blocks
 
-Mouse, keyboard, and DualSense game-controller input controls the emission of different atom types, whose behavior and interactions drive the mix. Each quadrant is mapped to a sound. Pour atoms into one quadrant or across several to mix them. Wider piles get louder and brighter. Taller piles increase reverb and decay. Material rules determine how atoms fall, spread, transform, and disappear. See [documentation/falling-blocks.md](documentation/falling-blocks.md).
+Falling Blocks pours materials onto a plane divided into four sound quadrants. Wider piles become louder and brighter. Taller resting piles sound darker, heavier, and more saturated. Rising Diffuse atoms create a long reverb tail. Material rules decide how atoms fall, spread, transform, and disappear.
+
+Falling Blocks supports mouse, keyboard, touchscreen, and DualSense input. See [Falling Blocks](documentation/falling-blocks.md) for controls and the complete world-to-sound mapping.
 
 ## App structure
 
-`app.js` is the browser entry point. It starts audio, polls controller input, switches tabs, and maintains the status line. Each tab exposes a small lifecycle—show, hide, tick, and controller commands—so all views share the same mixer and audio engine.
+`app.js` is the browser entry point. It starts audio, switches tabs, polls controller input, and updates the status line. Each tab has a small lifecycle for showing, hiding, updating, and handling controller commands. All tabs share one mixer and one audio engine.
 
-The main data flow is:
-
-```text
-mouse / keyboard / DualSense
-          ↓
-      mixer-core
-       ↙       ↘
- audio-engine  active view
-```
-
-`mixer-core.js` owns shared position and controller state. `audio-engine.js` consumes that state and builds the Web Audio graph: four looping stems, equal-power gains, filters, sends, face-button effects, WAM inserts, panning, and output limiting. The routing, and the extra steps iOS Safari needs before those beds make sound, are described in [documentation/audio-graph.md](documentation/audio-graph.md).
+`mixer-core.js` owns shared position and controller state. `audio-engine.js` turns that state into sound through four looping channels, effects, filters, panning, compression, and output limiting. Falling Blocks can write its own channel levels into the same engine. See [The audio graph](documentation/audio-graph.md) for the full routing and the extra steps required by iOS Safari.
 
 ### Main modules
 
-- **App and tabs:** `app.js`, `diagnostics.js`, `visualize-tab.js`, and `falling-tab.js` coordinate the UI without duplicating the audio graph.
-- **Audio:** `audio-engine.js` loads stems and constructs the graph. `wam-host.js`, `wam-catalog.js`, and `wam-stick-maps.js` load plugins and map stick movement to parameters.
-- **Samples and effects:** `sample-picker.js` and `fx-picker.js` provide the quadrant and WAM menus. Selected samples and effects are restored from browser storage.
-- **Input:** `gamepad-input.js` handles standard controller data; `dualsense-hid.js` adds touchpad coordinates through WebHID; `input-bindings.js` keeps control mappings in one place.
-- **Visualization:** `visualize.js` owns the Three.js scene while `visualize-tab.js` connects it to the shared mixer.
-- **Falling Blocks:** `falling-blocks.js` renders and simulates the field, `falling-input.js` interprets controls, `rule-engine.js` applies material rules, and `grid-sonify.js` turns field measurements into stem levels and effects.
-- **Shared UI:** `ui-scroll.js` provides the custom scroll behavior used by menus and panels.
+- **App and tabs:** `app.js`, `diagnostics.js`, `visualize-tab.js`, and `falling-tab.js`
+- **Audio:** `audio-engine.js`, `wam-host.js`, `wam-catalog.js`, and `wam-stick-maps.js`
+- **Samples and effects:** `sample-picker.js` and `fx-picker.js`
+- **Input:** `gamepad-input.js`, `dualsense-hid.js`, `touch-input.js`, and `input-bindings.js`
+- **Visualization:** `visualize.js` and `visualize-tab.js`
+- **Falling Blocks:** `falling-blocks.js`, `falling-input.js`, `rule-engine.js`, and `grid-sonify.js`
+- **Shared UI:** `ui-scroll.js`
 
-Vendored WAMs live under `web-visualizer/public/wams/` and are loaded locally; the app does not depend on a plugin CDN at runtime.
+Vendored WAMs are stored under `web-visualizer/public/wams/` and loaded locally. The app does not need a plugin service or content-delivery network while it runs.
 
 ## Build and assets
 
-The source app is a static ES-module site under `web-visualizer/public/`. The build script:
+The source application is under `web-visualizer/public/`. The build script:
 
 1. Recreates `web-visualizer/dist/`.
-2. Copies the public app and sample library.
-3. Generates sample and WAM catalogs.
+2. Copies the application and sample library.
+3. Creates the sample and WAM catalogs.
 4. Copies the required Three.js module.
 
-Run a build without starting the server:
+Build without starting the server:
 
 ```bash
 npm run build --prefix web-visualizer
 ```
 
-`dist` is generated output and should not be edited directly. Add samples under `samples/`, edit application code under `web-visualizer/public/`, then rebuild.
+`web-visualizer/dist` is generated output. Do not edit it directly. Edit files under `web-visualizer/public/`, add samples under `samples/`, and rebuild.
 
-## Layout
+## Repository layout
 
-| Path | What it is |
+| Path | Purpose |
 | --- | --- |
-| `web-visualizer/public` | App source: mixer, audio graph, views, vendored WAMs |
-| `web-visualizer/dist` | Built site served locally and deployed |
-| `samples` | Sample library copied into the build |
-| `EchoScape Max patch files` | Max patch and plugin presets for the original instrument |
-| `documentation` | Design notes for the audio graph, Falling Blocks, the sample library, and WAMs |
+| `web-visualizer/public` | Application source, audio engine, views, and vendored WAMs |
+| `web-visualizer/dist` | Generated site used for local serving and deployment |
+| `samples` | Source sample library copied into the build |
+| `EchoScape Max patch files` | Original Max patch and plugin presets |
+| `documentation` | Project guides and technical references |
 
 ## Documentation
 
-- [The audio graph](documentation/audio-graph.md), including iOS Safari playback
-- [Falling Blocks](documentation/falling-blocks.md)
-- [Web Audio Modules](documentation/web-audio-modules.md)
+- [Falling Blocks](documentation/falling-blocks.md): controls, simulation, and sound mapping
+- [The audio graph](documentation/audio-graph.md): routing, voices, effects, and iOS Safari playback
+- [Web Audio Modules](documentation/web-audio-modules.md): local plugin integration and maintenance
 
 ## Acknowledgements
 
-Falling Blocks is inspired in part by [TodePond's SandPond](https://github.com/TodePond/Sandpond), a 3D cellular-automata engine in which atoms follow simple spatial rules.
+Falling Blocks is inspired in part by [TodePond's SandPond](https://github.com/TodePond/Sandpond), a three-dimensional cellular automaton in which simple rules create complex material behavior.
 
 ## Deploy
 
-The repo is set up for Vercel. Install and build run inside `web-visualizer`, and the published directory is `web-visualizer/dist`.
+The repository is configured for Vercel. Installation and building run inside `web-visualizer`, and Vercel publishes `web-visualizer/dist`.
