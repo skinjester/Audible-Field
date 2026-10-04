@@ -3,7 +3,7 @@ import { audioEngine } from "./audio-engine.js?v=101";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=76";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=61";
+import { fallingInput } from "./falling-input.js?v=62";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -2026,12 +2026,13 @@ function bindAboutUi() {
   if (!(btn instanceof HTMLButtonElement) || !(dialog instanceof HTMLDialogElement)) return;
   if (btn.dataset.bound === "1") return;
   btn.dataset.bound = "1";
+  const selectNav = bindAboutNav(dialog);
   onFieldPress(btn, () => {
     if (dialog.open) return;
+    selectNav(aboutNavPanelId(fallingInput.navMode));
     dialog.showModal();
     dialog.focus({ preventScroll: true });
   });
-  bindAboutNav(dialog);
   const closeBtn = dialog.querySelector(".falling-about-close");
   if (closeBtn instanceof HTMLButtonElement) {
     onFieldPress(closeBtn, () => {
@@ -2043,9 +2044,21 @@ function bindAboutUi() {
   });
 }
 
+/** @param {"mouse" | "touch" | "pad"} mode */
+function aboutNavPanelId(mode) {
+  if (mode === "touch") return "falling-nav-touch";
+  if (mode === "pad") return "falling-nav-pad";
+  return "falling-nav-mouse";
+}
+
+/** @type {(id: string) => void} */
+let selectAboutNav = () => {};
+
+/** @param {HTMLDialogElement} dialog @returns {(id: string) => void} */
 function bindAboutNav(dialog) {
   const root = dialog.querySelector("[data-falling-nav]");
-  if (!(root instanceof HTMLElement) || root.dataset.bound === "1") return;
+  if (!(root instanceof HTMLElement)) return selectAboutNav;
+  if (root.dataset.bound === "1") return selectAboutNav;
   root.dataset.bound = "1";
   const tabs = [...root.querySelectorAll("[role='tab']")];
   const panels = [...root.querySelectorAll("[role='tabpanel']")];
@@ -2060,6 +2073,7 @@ function bindAboutNav(dialog) {
       panel.toggleAttribute("hidden", panel.id !== id);
     }
   };
+  selectAboutNav = select;
   for (const tab of tabs) {
     if (!(tab instanceof HTMLButtonElement)) continue;
     tab.addEventListener("click", () => {
@@ -2067,6 +2081,7 @@ function bindAboutNav(dialog) {
       if (id) select(id);
     });
   }
+  return select;
 }
 
 function bindClearUi() {

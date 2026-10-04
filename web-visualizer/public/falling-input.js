@@ -112,6 +112,8 @@ export class FallingInput {
     this._keyCycle = 0;
     /** "idle" until a device is used, then "pointer" or "pad". */
     this._device = "idle";
+    /** Last mouse, pen, or touch that took the field. Null until one arrives. */
+    this._pointerKind = null;
     this._pointerActivity = false;
     this._padWasUsing = false;
     this._showPadGlyphs = false;
@@ -140,6 +142,21 @@ export class FallingInput {
   /** True while PlayStation glyphs should be on screen. */
   get showPadGlyphs() {
     return this._showPadGlyphs;
+  }
+
+  /**
+   * About navigation tab for the device in use.
+   * A controller stays selected while its glyphs are up, including the click
+   * that opens About. Otherwise the latest mouse or touch wins, and a device
+   * that has not been used yet follows the primary pointer.
+   * @returns {"mouse" | "touch" | "pad"}
+   */
+  get navMode() {
+    if (this._showPadGlyphs) return "pad";
+    if (this._pointerKind === "touch" || this._pointerKind === "mouse") return this._pointerKind;
+    const coarse = window.matchMedia?.("(pointer: coarse)")?.matches === true;
+    const touch = (navigator.maxTouchPoints || 0) > 0;
+    return coarse && touch ? "touch" : "mouse";
   }
 
   /**
@@ -250,6 +267,7 @@ export class FallingInput {
     this._prevCycleNext = false;
     this._keyCycle = 0;
     this._device = "idle";
+    this._pointerKind = null;
     this._pointerActivity = false;
     this._padWasUsing = false;
     this._showPadGlyphs = false;
@@ -470,10 +488,12 @@ export class FallingInput {
     if (type !== "mouse" && type !== "pen" && type !== "touch") return;
     if (event.type === "pointermove" && type !== "touch" && !event.movementX && !event.movementY) return;
     this._pointerActivity = true;
+    this._pointerKind = type === "touch" ? "touch" : "mouse";
   }
 
   _onWheelDevice() {
     this._pointerActivity = true;
+    this._pointerKind = "mouse";
   }
 
   /**

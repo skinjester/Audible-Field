@@ -6,7 +6,7 @@ import {
   onFieldPress,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=379";
+} from "./falling-blocks.js?v=380";
 import { fieldDebug, fieldFrame, resetFieldSonify } from "./grid-sonify.js?v=54";
 import { STEM_CORNERS, controller, setActiveFx } from "./mixer-core.js?v=67";
 
