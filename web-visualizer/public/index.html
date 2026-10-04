@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Audible Field</title>
-    <link rel="stylesheet" href="/styles.css?v=264" />
+    <link rel="stylesheet" href="/styles.css?v=266" />
     <script type="importmap">
       {
         "imports": {
@@ -508,27 +508,14 @@
               </div>
               <div class="falling-side">
               <div class="falling-settings-panel" id="falling-settings-panel" data-falling-settings-panel hidden>
-                <div class="falling-hud">
-                  <div class="falling-palette-row">
-                    <button type="button" class="falling-clear falling-face falling-pill" data-falling-clear title="Clear board">
-                      <span class="pad-glyph" aria-hidden="true">&#x0115;</span>
-                      Clear
-                    </button>
-                    <button type="button" class="falling-audio falling-face falling-pill" data-falling-audio aria-pressed="true" title="Sonify the field">
-                      <span class="pad-glyph" aria-hidden="true">&#x0116;</span>
-                      <span class="dot" aria-hidden="true"></span>
-                      Audio
-                    </button>
-                    <span class="falling-pill" data-falling-trigger="lt" role="img" aria-label="Left trigger emits a stream">
-                      <span class="pad-glyph" aria-hidden="true">&#x0108;</span>
-                      Emit Stream
-                    </span>
-                    <span class="falling-pill" data-falling-trigger="rt" role="img" aria-label="Right trigger emits a clump">
-                      <span class="pad-glyph" aria-hidden="true">&#x0109;</span>
-                      Emit Clump
-                    </span>
-                  </div>
-                </div>
+                <span class="falling-pill" data-falling-trigger="lt" role="img" aria-label="Left trigger emits a stream">
+                  <span class="pad-glyph" aria-hidden="true">&#x0108;</span>
+                  Emit Stream
+                </span>
+                <span class="falling-pill" data-falling-trigger="rt" role="img" aria-label="Right trigger emits a clump">
+                  <span class="pad-glyph" aria-hidden="true">&#x0109;</span>
+                  Emit Clump
+                </span>
                 <div class="falling-rise-modes" data-falling-rise-modes>
                   <p class="falling-rise-label" id="falling-rise-label">Rising atoms</p>
                   <div class="falling-rise-options" role="radiogroup" aria-labelledby="falling-rise-label">
@@ -559,6 +546,10 @@
                   </div>
                   <p class="falling-rise-hint" data-falling-rise-hint>The piece keeps playing, thins as it shrinks, and drifts upward.</p>
                 </div>
+                <button type="button" class="falling-clear falling-face falling-pill" data-falling-clear title="Clear board">
+                  <span class="pad-glyph" aria-hidden="true">&#x0115;</span>
+                  Clear
+                </button>
               </div>
               </div>
               <div class="falling-material-bar">
@@ -573,6 +564,6 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=470"></script>
+    <script type="module" src="/app.js?v=471"></script>
   </body>
 </html>

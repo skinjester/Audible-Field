@@ -3,9 +3,9 @@ import { audioEngine } from "./audio-engine.js?v=100";
 import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=39";
+import * as diagnostics from "./diagnostics.js?v=40";
 import * as fallingTab from "./falling-tab.js?v=103";
-import * as visualizeTab from "./visualize-tab.js?v=30";
+import * as visualizeTab from "./visualize-tab.js?v=31";
 
 const statusEl = document.querySelector(".status");
 const audioLineEls = {

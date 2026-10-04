@@ -264,11 +264,11 @@ function paintDial(host, param, range, sent) {
     needle.setAttribute("y2", outer.y.toFixed(2));
   }
   for (const end of ["low", "high"]) {
-    const thumb = host.querySelector(`[data-thumb="${end}"]`);
-    if (!thumb) continue;
     const point = dialPoint(end === "low" ? lowT : highT);
-    thumb.setAttribute("cx", point.x.toFixed(2));
-    thumb.setAttribute("cy", point.y.toFixed(2));
+    for (const thumb of host.querySelectorAll(`[data-thumb="${end}"]`)) {
+      thumb.setAttribute("cx", point.x.toFixed(2));
+      thumb.setAttribute("cy", point.y.toFixed(2));
+    }
   }
   host.querySelector(".fx-dial-svg")?.setAttribute("aria-valuenow", String(sent));
 }
@@ -287,7 +287,8 @@ function bindDial(host, slot, param) {
 
   const deltaFor = (event, originY, fine) => {
     const span = param.max - param.min || 1;
-    return ((originY - event.clientY) / DIAL_DRAG_PX) * span * fine;
+    const travel = window.matchMedia("(pointer: coarse)").matches ? 168 : DIAL_DRAG_PX;
+    return ((originY - event.clientY) / travel) * span * fine;
   };
 
   svg.addEventListener("pointerdown", (event) => {
@@ -398,6 +399,8 @@ function buildDialFace(param) {
     svgEl("path", { class: "fx-dial-span-hit", "data-span-hit": "", fill: "none" }),
     svgEl("path", { class: "fx-dial-span", "data-span": "", fill: "none" }),
     svgEl("line", { class: "fx-dial-needle", "data-needle": "" }),
+    svgEl("circle", { class: "fx-dial-thumb-hit", "data-thumb": "low", r: "11" }),
+    svgEl("circle", { class: "fx-dial-thumb-hit", "data-thumb": "high", r: "11" }),
     svgEl("circle", { class: "fx-dial-thumb", "data-thumb": "low", r: "4.5" }),
     svgEl("circle", { class: "fx-dial-thumb", "data-thumb": "high", r: "4.5" })
   );

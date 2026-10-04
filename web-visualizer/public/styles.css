@@ -1217,6 +1217,11 @@ dd {
   cursor: ns-resize;
 }
 
+.fx-dial-thumb-hit {
+  fill: transparent;
+  cursor: ns-resize;
+}
+
 .fx-dial-label,
 .fx-dial-sent {
   margin: 0;
@@ -1298,6 +1303,45 @@ dd {
   color: var(--live);
   border-color: color-mix(in srgb, var(--live) 55%, var(--line));
   background: var(--pill-selected);
+}
+
+@media (pointer: coarse), (max-width: 720px) {
+  .fx-dial-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px 12px;
+  }
+
+  .fx-dial {
+    gap: 6px;
+  }
+
+  .fx-dial-face,
+  .fx-dial-svg {
+    width: min(148px, 42vw);
+    height: min(148px, 42vw);
+  }
+
+  .fx-dial-span-hit {
+    stroke-width: 18;
+  }
+
+  .fx-dial-label {
+    font-size: 13px;
+  }
+
+  .fx-dial-sent {
+    font-size: 12px;
+  }
+
+  .fx-dial-axes {
+    gap: 8px;
+  }
+
+  .fx-axis-sw {
+    min-width: 44px;
+    height: 36px;
+    font-size: 13px;
+  }
 }
 
 .fx-choice {
@@ -1778,6 +1822,8 @@ dd {
 }
 
 .falling-about {
+  grid-column: 1;
+  grid-row: 1;
   cursor: pointer;
 }
 
@@ -1834,11 +1880,18 @@ dd {
 }
 
 .falling-topbar-start {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 10px;
+  row-gap: 10px;
+  align-items: start;
   min-width: 0;
   pointer-events: none;
+}
+
+.falling-fps {
+  grid-column: 1;
+  grid-row: 2;
 }
 
 .falling-fps[aria-expanded="true"] {
@@ -1856,6 +1909,8 @@ dd {
 
 .falling-frame {
   display: none;
+  grid-column: 2;
+  grid-row: 2;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
