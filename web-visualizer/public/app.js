@@ -1,11 +1,11 @@
 import { STEM_CORNERS, notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=106";
+import { audioEngine } from "./audio-engine.js?v=107";
 import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=46";
-import * as fallingTab from "./falling-tab.js?v=112";
-import * as visualizeTab from "./visualize-tab.js?v=37";
+import * as diagnostics from "./diagnostics.js?v=47";
+import * as fallingTab from "./falling-tab.js?v=113";
+import * as visualizeTab from "./visualize-tab.js?v=38";
 
 const statusEl = document.querySelector(".status");
 const audioLineEls = {
@@ -216,17 +216,16 @@ function bindAudioSwitch() {
 
 function audioKindLabel() {
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return "Audio off";
-  if (audioStarting) return "Loading audio";
-  if (!audioEngine.running) return "Audio off";
-  if (audioEngine.ctx && !audioEngine.speakerProved()) return "Tap for audio";
-  // The header switch suspends the context. Keep the audio type, and grey it.
+  if (!audioEngine.running) return audioStarting ? "Loading audio" : "Audio off";
+  const state = audioEngine.ctx?.state;
   if (audioEngine.isAudible()) {
-    const state = audioEngine.ctx?.state;
     if (state === "suspended") return "Audio paused";
     if (state === "interrupted") return "Audio interrupted";
     if (state === "closed") return "Audio closed";
+    if (state === "running" || audioEngine.speakerProved()) return "Browser audio";
     if (state && state !== "running") return "Audio paused";
   }
+  if (audioEngine.ctx && !audioEngine.speakerProved() && state !== "running") return "Tap for audio";
   return "Browser audio";
 }
 
@@ -376,7 +375,7 @@ function paintAudioHealth() {
 }
 
 function audioStatusState() {
-  if (audioStarting) return "loading";
+  if (audioStarting && !audioEngine.running) return "loading";
   if (audioKindLabel() === "Browser audio") return "audio";
   return "offline";
 }
@@ -488,14 +487,20 @@ document.addEventListener("keydown", (event) => unlockBedsFromGesture(event, "pr
 document.addEventListener("touchend", (event) => unlockBedsFromGesture(event, "lift"), true);
 document.addEventListener("pointerup", (event) => unlockBedsFromGesture(event, "lift"), true);
 document.addEventListener("click", (event) => unlockBedsFromGesture(event, "lift"), true);
-window.addEventListener("pagehide", () => {
+window.addEventListener("pagehide", (event) => {
+  if (event.persisted) return;
+  if (audioEngine.ctx?.state === "running") return;
   audioEngine.forgetSpeakerProof();
 });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") {
-    audioEngine.forgetSpeakerProof();
+    if (audioEngine.ctx?.state !== "running") audioEngine.forgetSpeakerProof();
     return;
   }
+  if (!audioShouldBeAudible()) return;
+  void audioEngine.recoverForeground();
+});
+window.addEventListener("pageshow", () => {
   if (!audioShouldBeAudible()) return;
   void audioEngine.recoverForeground();
 });

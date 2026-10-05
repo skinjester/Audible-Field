@@ -662,12 +662,13 @@ export class EchoScapeAudioEngine {
     }
 
     if (!this.ctx || this.ctx.state === "closed") {
-      if (isWebKitIOS()) await this._waitForGestureContext();
-      else this.ctx = new AC();
-    }
-    if (!this.ctx || this.ctx.state === "closed") {
-      this.error = "Tap for audio.";
-      throw new Error(this.error);
+      if (isWebKitIOS()) {
+        while (!this.ctx || this.ctx.state === "closed") {
+          await this._waitForGestureContext();
+        }
+      } else {
+        this.ctx = new AC();
+      }
     }
     this._watchContext(this.ctx);
     // Outside a user gesture, some Chromium builds never resolve resume().
@@ -751,7 +752,9 @@ export class EchoScapeAudioEngine {
     this.ready = true;
     this.running = true;
     this.setActiveFx(mixerController.activeFx || this.activeFx, true);
-    this.sync(mixerState, mixerController);
+    // Leave stem gains at 0. Falling Blocks and Diagnostics write the real mix
+    // on the next frame. The center mix here was a one-shot blast of all four beds.
+    this.sync(mixerState, mixerController, { stems: false });
     await this._playAll();
     await this._safeResume(300);
     void this._loadStemReverbs();
@@ -768,7 +771,7 @@ export class EchoScapeAudioEngine {
     }
     this.circleFxMode = this._fxWam?.circle ? "wam" : "native";
     this.setActiveFx(mixerController.activeFx || this.activeFx, true);
-    this.sync(mixerState, mixerController);
+    this.sync(mixerState, mixerController, { stems: false });
 
     console.info("[EchoScape audio] started", {
       ctx: this.ctx.state,
@@ -931,8 +934,6 @@ export class EchoScapeAudioEngine {
       if (this._fingerDown) return;
       this._proofPending = false;
       this._proofMisses += 1;
-      if (this.ctx !== ctx) return;
-      if (ctx.state === "running") void ctx.suspend().catch(() => {});
     }, 700);
   }
 
@@ -942,6 +943,9 @@ export class EchoScapeAudioEngine {
    */
   _maybeReplaceContext() {
     if (this._proofMisses < 2 || !this.ctx || this.ctx.state === "closed") return;
+    // Replacing the context while start() still owns it leaves the graph half-built
+    // and the audio chain wedged. Retry proof on the next tap instead.
+    if (this._startInFlight || this.running) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     const old = this.ctx;
@@ -1089,29 +1093,32 @@ export class EchoScapeAudioEngine {
    * Safari will not play through an AudioContext constructed on page load.
    * Create it on the tap, and wake anyone waiting in start().
    */
-  _openContextInGesture() {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-    if (this.ctx && this.ctx.state !== "closed") {
-      this._watchContext(this.ctx);
-      return;
-    }
-    this.ctx = new AC();
-    this._ctxBornInGesture = true;
-    this._watchContext(this.ctx);
+  _flushContextWaiters() {
     const waiters = this._contextWaiters;
+    if (!waiters.length) return;
     this._contextWaiters = [];
     for (let i = 0; i < waiters.length; i += 1) waiters[i]();
   }
 
+  _openContextInGesture() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!this.ctx || this.ctx.state === "closed") {
+      this.ctx = new AC();
+      this._ctxBornInGesture = true;
+    }
+    this._watchContext(this.ctx);
+    this._flushContextWaiters();
+  }
+
   _waitForGestureContext() {
-    if (this.ctx && this.ctx.state !== "closed") return Promise.resolve();
     return new Promise((resolve) => {
       if (this.ctx && this.ctx.state !== "closed") {
         resolve();
         return;
       }
       this._contextWaiters.push(resolve);
+      if (this.ctx && this.ctx.state !== "closed") this._flushContextWaiters();
     });
   }
 
@@ -1121,11 +1128,12 @@ export class EchoScapeAudioEngine {
     try {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      gain.gain.value = 0;
+      const now = Number.isFinite(ctx.currentTime) ? ctx.currentTime : 0;
+      gain.gain.setValueAtTime(0, now);
       osc.connect(gain);
       gain.connect(ctx.destination);
-      osc.start(0);
-      osc.stop((Number.isFinite(ctx.currentTime) ? ctx.currentTime : 0) + 0.05);
+      osc.start(now);
+      osc.stop(now + 0.05);
     } catch {
       /* ignore */
     }
@@ -2454,9 +2462,7 @@ export class EchoScapeAudioEngine {
     satWet.gain.value = 0;
     const satSum = this.ctx.createGain();
     satSum.gain.value = 1;
-    const weights = equalPowerMix(mixerState.x, mixerState.y);
-    const initialGain =
-      typeof opts.initialGain === "number" ? opts.initialGain : weights[corner] ?? 0;
+    const initialGain = typeof opts.initialGain === "number" ? opts.initialGain : 0;
     gain.gain.value = initialGain;
     pan.pan.value = 0;
     // A media element in the graph follows the ringer switch. Buffer beds do not.

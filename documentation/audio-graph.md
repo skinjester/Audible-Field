@@ -166,7 +166,7 @@ The helper `writeParam` also avoids writing the same value every frame. Repeated
 
 ## Start, pause, and sample replacement
 
-`start` builds the graph and loads the four beds one at a time. It starts audible beds before restoring WAM preferences. `app.js` places start, resume, and suspend work on one promise chain so those operations cannot overlap.
+`start` builds the graph and loads the four beds one at a time. Stem gains begin at 0, and `start` calls `sync` with `stems: false`, so the four-corner mixer is not written until the active view's next frame. That avoids a loud blast of all four beds when the first gesture both unlocks Safari and finishes startup. Audible beds come up before restoring WAM preferences. `app.js` places start, resume, and suspend work on one promise chain so those operations cannot overlap. Header status treats the engine as live once `running` is true; WAM restore no longer keeps the line on "Loading audio" while beds are already playing.
 
 `suspendPlayback` pauses media elements and suspends the `AudioContext` without destroying the graph. Falling Blocks uses it when field audio is turned off.
 
@@ -189,7 +189,7 @@ iOS Safari needs more than a normal call to `AudioContext.resume()`. A context c
 
 iOS often delivers both `pointerdown` and `touchstart` for one tap. The first `BufferSource.start` can be discarded because `resume()` has not taken yet. If the speaker is not yet proved, the second event retries instead of being ignored. The matching lift (`touchend` / `click`) also retries. A proof that never ends is treated as a miss after 700 milliseconds so `_proofPending` cannot deadlock until the user finds another control.
 
-Normal startup does not construct an `AudioContext` on iPhone or iPad. `start()` waits until the first trusted tap creates the context, then `resume()`, a zero-gain oscillator, and the proof buffer all run on that tap. A context created on page load will resume and still stay silent; selecting another control later appeared to "fix" it because that tap was the first construction inside a gesture.
+Normal startup does not construct an `AudioContext` on iPhone or iPad. `start()` waits until the first trusted tap creates the context. If that tap already created one, the waiter is flushed even when the context already exists, so a reload cannot leave `start()` parked forever. `resume()`, a zero-gain oscillator, and the proof buffer all run on that tap. A context created on page load will resume and still stay silent; selecting another control later appeared to "fix" it because that tap was the first construction inside a gesture.
 
 Desktop still creates the context at startup.
 
@@ -208,15 +208,15 @@ After proof, the engine clears the old master event, forgets cached AudioParam t
 
 ### 3. Recover from a failed proof
 
-If the proof does not finish within 700 milliseconds after the finger lifts, the attempt counts as a miss and the context is suspended for another gesture.
+If the proof does not finish within 700 milliseconds after the finger lifts, the attempt counts as a miss. The next tap retries `resume()` and the proof. The engine does not suspend a context that may already be running: Safari can fire `onended` late after reload, and suspending at that point killed playback.
 
-After two misses, the next press replaces the `AudioContext`. Audio nodes cannot move between contexts, so `app.js` then rebuilds the graph. Greyhole instances and the WAM host id are still tied to the old context; if that recovery path is used, those leftovers may need a rebuild as well.
+The engine does not replace the `AudioContext` while `start()` is in flight or after the graph is running. Nodes cannot move between contexts, and tearing the graph down mid-start left the audio chain wedged.
 
 ### 4. Recover after interruption
 
-Safari may change the context to `interrupted` after screen lock, a phone call, or backgrounding. The engine treats this like `suspended`.
+Safari may change the context to `interrupted` after screen lock, a phone call, or backgrounding. The engine treats this like `suspended` and clears speaker proof on that state change.
 
-`pagehide` and a hidden document clear the previous speaker proof. Returning to the page does not claim a new user gesture. The next real press resumes playback. If the context remained `running`, the engine only restarts bed elements that actually paused.
+`pagehide` and a hidden document clear speaker proof only when the context is not still `running`. iOS often fires those events when the toolbar shows or the tab is snapshotted, while audio continues. Forgetting proof in that window made the header say "Tap for audio" and stopped new field voices. Returning to the page does not claim a new user gesture. The next real press resumes if the context actually stopped. If it remained `running`, the engine only restarts bed elements that actually paused.
 
 ### 5. Avoid the iPhone silent switch
 
@@ -232,4 +232,4 @@ On desktop, the media element can remain audible until the buffer is ready.
 - After lock or background sleep, the next touch resumes the beds.
 - The silent switch does not mute decoded bed and impact voices.
 - Falling Blocks ignores unlock gestures while its audio toggle is off.
-- The header status shows sample rate, context state, bed count, extra voices, and loaded WAM count.
+- The header shows "Loading audio" only until the engine is running, then "Browser audio" once the context is live. It does not keep "waiting" through WAM restore or a proof-flag blip while sound is already playing.
