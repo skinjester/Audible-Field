@@ -186,7 +186,7 @@ Before the first trusted gesture, `resume()` is skipped unless it is inside user
 
 ### On-device trace
 
-Open the page with `?trace` to show a trace panel at the bottom of the screen, newest line first. Each press, lift, resume, context state change, bed load, bed decode, master open or shut, and the first landings print one line with `ctx`, `currentTime`, `run`, `unl` (unlocked), and the four beds' element or buffer state (`p2` paused at readyState 2, `>4` playing, `buf` decoded loop).
+Open the page with `?trace`. The log and its Share and Clear buttons sit at the bottom of the Falling Blocks settings panel, so they do not cover Emit. Newest lines are at the top of the log. Each press, lift, resume, context state change, bed load, bed decode, master open or shut, and the first landings print one line with `ctx`, `currentTime`, `run`, `unl` (unlocked), and the four beds' element or buffer state (`p2` paused at readyState 2, `>4` playing, `buf` decoded loop).
 
 The same lines go to three other places:
 

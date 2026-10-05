@@ -596,31 +596,35 @@ function mountAudioTrace() {
   // Send the header now, so the panel learns at once whether a file sink exists.
   flush();
 
-  // Panel: newest line on top, so the latest event is never clipped off the bottom.
+  // Lives in Settings so it never covers Emit or the field controls.
   const panel = document.createElement("div");
   panel.setAttribute("data-audio-trace", "");
   panel.style.cssText =
-    "position:fixed;left:0;right:0;bottom:0;z-index:9999;margin:0;max-height:40vh;display:flex;flex-direction:column;" +
-    "font:10px/1.3 ui-monospace,Menlo,Consolas,monospace;color:#e8ffe8;background:rgba(0,0,0,.8);pointer-events:none";
+    "pointer-events:auto;align-self:stretch;width:min(100%,22rem);box-sizing:border-box;" +
+    "display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:8px;" +
+    "font:10px/1.3 ui-monospace,Menlo,Consolas,monospace;color:#e8ffe8;background:rgba(0,0,0,.72);text-align:left";
   const bar = document.createElement("div");
-  bar.style.cssText = "display:flex;gap:8px;align-items:center;padding:4px 8px;pointer-events:auto";
+  bar.style.cssText = "display:flex;gap:8px;align-items:center";
   const status = document.createElement("span");
   status.style.cssText = "opacity:.75;flex:1 1 auto";
   const share = document.createElement("button");
   share.type = "button";
   share.textContent = "Share trace";
   share.style.cssText =
-    "font:inherit;padding:4px 10px;border:1px solid #6c6;border-radius:4px;background:#143;color:#e8ffe8";
+    "font:inherit;padding:6px 10px;border:1px solid #6c6;border-radius:4px;background:#143;color:#e8ffe8";
   const clear = document.createElement("button");
   clear.type = "button";
   clear.textContent = "Clear";
   clear.style.cssText =
-    "font:inherit;padding:4px 10px;border:1px solid #666;border-radius:4px;background:#222;color:#ccc";
+    "font:inherit;padding:6px 10px;border:1px solid #666;border-radius:4px;background:#222;color:#ccc";
   bar.append(status, share, clear);
   const body = document.createElement("pre");
-  body.style.cssText = "margin:0;padding:0 8px 6px;overflow:hidden;white-space:pre-wrap";
+  body.style.cssText =
+    "margin:0;max-height:9rem;overflow:auto;white-space:pre-wrap;pointer-events:auto;-webkit-overflow-scrolling:touch";
   panel.append(bar, body);
-  document.body.appendChild(panel);
+  const settings = document.querySelector("[data-falling-settings-panel]");
+  if (settings) settings.appendChild(panel);
+  else document.body.appendChild(panel);
 
   const shown = [];
   const setStatus = (text) => {
@@ -631,7 +635,23 @@ function mountAudioTrace() {
   const fullText = () => stored.join("\n");
   const fileName = () => `audible-field-trace-${session.replace(/[:.]/g, "-")}.txt`;
 
-  share.addEventListener("click", async () => {
+  // pointerdown, not click: the field cancels touchstart, so click never arrives.
+  share.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.stopPropagation();
+    void shareTrace();
+  });
+  clear.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.stopPropagation();
+    stored = [header];
+    shown.length = 0;
+    body.textContent = "";
+    saveStored();
+    setStatus("cleared");
+  });
+
+  async function shareTrace() {
     const text = fullText();
     try {
       const file = new File([text], fileName(), { type: "text/plain" });
@@ -667,15 +687,7 @@ function mountAudioTrace() {
     a.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 5000);
     setStatus("downloaded");
-  });
-
-  clear.addEventListener("click", () => {
-    stored = [header];
-    shown.length = 0;
-    body.textContent = "";
-    saveStored();
-    setStatus("cleared");
-  });
+  }
 
   audioEngine.onTrace = (event, facts) => {
     const at = ((performance.now() - startedAt) / 1000).toFixed(2).padStart(6);
