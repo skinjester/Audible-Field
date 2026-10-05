@@ -4,7 +4,7 @@ import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
 import * as diagnostics from "./diagnostics.js?v=50";
-import * as fallingTab from "./falling-tab.js?v=116";
+import * as fallingTab from "./falling-tab.js?v=117";
 import * as visualizeTab from "./visualize-tab.js?v=41";
 
 const statusEl = document.querySelector(".status");
@@ -534,8 +534,15 @@ function audioGateNeeded() {
   return ctx.state !== "running";
 }
 
+/** startup-experiment: a start screen would spend the tap, so the Emit hold is never the first gesture. */
+const START_SCREEN = false;
+
 function syncAudioGate(now) {
   if (!(audioGateEl instanceof HTMLElement)) return;
+  if (!START_SCREEN) {
+    if (!audioGateEl.hidden) audioGateEl.hidden = true;
+    return;
+  }
   if (!audioGateNeeded()) {
     gateBlockedSince = 0;
     if (!audioGateEl.hidden) {
@@ -906,6 +913,7 @@ diagnostics.initDiagnostics(deps);
 fallingTab.initFallingTab(deps);
 
 mountAudioTrace();
+audioEngine.trace("experiment", { name: "emit-touchstart-open", screen: 0 });
 if (!readAudioPref()) audioEngine.setAudible(false);
 bindAudioSwitch();
 mountUiScrolls();

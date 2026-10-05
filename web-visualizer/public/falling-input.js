@@ -547,7 +547,12 @@ export class FallingInput {
     if (event.type === "touchstart" && isEmitTarget(event.target)) {
       const touch = event.changedTouches?.[0];
       if (touch && this._emitTouchId == null) this._emitTouchId = touch.identifier;
-      if (event.cancelable) event.preventDefault();
+      // startup-experiment: leave this touchstart alone. iOS grants activation
+      // on touchend only while the touch is still a potential tap, and
+      // preventDefault() here ends that. The button's CSS (touch-action,
+      // user-select, touch-callout) covers the scroll and callout this used to stop.
+      // The trace's `lift … act=` on the hold's release is the result.
+      return;
     }
     if (!event.cancelable) return;
     const target = event.target;
