@@ -180,6 +180,12 @@ The engine listens for the context's `statechange`. When the browser reports `ru
 
 Before the first trusted gesture, `resume()` is skipped unless it is inside user activation. Safari leaves an earlier resume pending forever.
 
+### Which touch counts
+
+A device trace (October 5) settled which events iOS Safari accepts. `navigator.userActivation.isActive` was false on `pointerdown` and `touchstart`, false on the `pointerup` and `touchend` that ended an Emit hold, and true only on the release of a short tap. Every `resume()` called during the hold stayed pending, and all of them completed the moment a later tap released. So a hold cannot open the speaker on a phone; a tap can. That is why selecting a control used to be needed first: the selection was a tap, Emit is a hold.
+
+The page handles this with the **start screen** (`[data-audio-gate]` in `app.js`). On a phone-class device the page opens on a full-screen "Audible Field — Tap to begin". The release of that tap is the gesture that unlocks audio; the screen hides on the next frame after `ctx.state` reports `running`. It is shown once per load. It comes back, reading "Tap to resume sound", only if a lock or a backgrounded tab leaves the context `interrupted`. It never appears on desktop, where a mouse press carries activation.
+
 `glideParam`, the master trim, and the output gate schedule a ramp only after `currentTime` has moved. Until then they assign `.value`. A ramp scheduled at a frozen `currentTime` of 0 never applies.
 
 `playSplash`, pile notes, and rise grains start on the tap itself. They do not wait for a later timer.

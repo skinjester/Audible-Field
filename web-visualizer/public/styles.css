@@ -3086,3 +3086,63 @@ body:not(.has-dualsense) .pad-glyph {
   box-shadow: 0 0 8px var(--ui-scroll-thumb-glow);
   cursor: grabbing;
 }
+
+/* Phone start screen. Shown on a touch device while the AudioContext is not running.
+   The browser starts sound only on the release of a short tap, so the first touch is this one. */
+.start-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 32px 24px;
+  background: radial-gradient(900px 600px at 50% 30%, #181818 0%, rgba(8, 8, 8, 0.97) 70%);
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: pointer;
+}
+
+.start-screen[hidden] {
+  display: none;
+}
+
+.start-screen-inner {
+  max-width: 22rem;
+  text-align: center;
+}
+
+.start-screen-kicker {
+  margin: 0 0 18px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.start-screen-title {
+  margin: 0 0 14px;
+  font-size: clamp(26px, 7vw, 34px);
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--live);
+  animation: start-screen-breathe 2.4s ease-in-out infinite;
+}
+
+.start-screen-note {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+@keyframes start-screen-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .start-screen-title { animation: none; }
+}

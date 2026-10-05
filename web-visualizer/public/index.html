@@ -25,7 +25,7 @@
       content="Interactive browser instrument where simulated materials fall, spread, collide, and shape sound in real time."
     />
     <meta name="twitter:image" content="https://audible-field.vercel.app/og-image.png" />
-    <link rel="stylesheet" href="/styles.css?v=270" />
+    <link rel="stylesheet" href="/styles.css?v=272" />
     <script type="importmap">
       {
         "imports": {
@@ -589,6 +589,14 @@
         </section>
       </div>
     </main>
-    <script type="module" src="/app.js?v=488"></script>
+    <!-- Phones: the start screen. Its tap release is the gesture that lets the browser start sound. -->
+    <div class="start-screen" data-audio-gate hidden>
+      <div class="start-screen-inner">
+        <p class="start-screen-kicker">Audible Field</p>
+        <p class="start-screen-title" data-audio-gate-title>Tap to begin</p>
+        <p class="start-screen-note">A field of falling material, heard as four looping beds.</p>
+      </div>
+    </div>
+    <script type="module" src="/app.js?v=490"></script>
   </body>
 </html>

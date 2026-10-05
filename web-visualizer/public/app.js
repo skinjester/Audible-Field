@@ -218,13 +218,10 @@ function audioKindLabel() {
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return "Audio off";
   if (audioStarting) return "Loading audio";
   if (!audioEngine.running) return "Audio off";
-  // Before the first trusted press, the browser holds the context suspended.
-  if (audioEngine.ctx && !audioEngine.unlocked() && !audioEngine.outputRunning()) return "Tap for audio";
-  // The header switch suspends the context. Keep the audio type, and grey it.
   if (audioEngine.isAudible()) {
     const state = audioEngine.ctx?.state;
-    if (state === "suspended") return "Audio paused";
-    if (state === "interrupted") return "Audio interrupted";
+    // Suspended or interrupted with the switch on: the browser is waiting for a tap.
+    if (state === "suspended" || state === "interrupted") return "Tap for audio";
     if (state === "closed") return "Audio closed";
     if (state && state !== "running") return "Audio paused";
   }
@@ -510,6 +507,69 @@ document.addEventListener("visibilitychange", () => {
   void audioEngine.recoverForeground();
 });
 
+/**
+ * Phone start screen.
+ * iOS Safari grants user activation on the release of a short tap, never on a
+ * touch press and never on the release of a hold. Emit is a hold, so the first
+ * Emit on a phone cannot open the speaker; the trace showed every resume() from
+ * it left pending until a later tap. On a touch device the page therefore opens
+ * on a start screen whose tap is that gesture. It is shown once per load, and
+ * again only if a lock or a backgrounded tab leaves the context interrupted.
+ * The document-level lift listeners do the actual resume.
+ */
+const audioGateEl = document.querySelector("[data-audio-gate]");
+const audioGateTitle = document.querySelector("[data-audio-gate-title]");
+let gateBlockedSince = 0;
+let gateShownOnce = false;
+
+function phoneClass() {
+  return window.matchMedia?.("(pointer: coarse)")?.matches === true && (navigator.maxTouchPoints || 0) > 0;
+}
+
+function audioGateNeeded() {
+  if (!phoneClass()) return false;
+  if (!audioShouldBeAudible()) return false;
+  const ctx = audioEngine.ctx;
+  if (!ctx || ctx.state === "closed") return false;
+  return ctx.state !== "running";
+}
+
+function syncAudioGate(now) {
+  if (!(audioGateEl instanceof HTMLElement)) return;
+  if (!audioGateNeeded()) {
+    gateBlockedSince = 0;
+    if (!audioGateEl.hidden) {
+      audioGateEl.hidden = true;
+      audioEngine.trace("gate-hide", {});
+    }
+    return;
+  }
+  if (!gateBlockedSince) gateBlockedSince = now;
+  // First load: show at once. Later: a tap already in flight resumes within a
+  // frame or two, so wait before bringing the screen back for an interruption.
+  if (gateShownOnce && now - gateBlockedSince < 400) return;
+  if (audioGateEl.hidden) {
+    audioGateEl.hidden = false;
+    if (audioGateTitle) audioGateTitle.textContent = gateShownOnce ? "Tap to resume sound" : "Tap to begin";
+    audioEngine.trace("gate-show", { again: gateShownOnce ? 1 : 0 });
+    gateShownOnce = true;
+  }
+}
+
+if (audioGateEl instanceof HTMLElement) {
+  // Release events carry activation; the capture listeners above already called resume().
+  const onLift = (event) => {
+    audioEngine.trace("gate-tap", { ev: event.type, act: navigator.userActivation?.isActive ?? "n/a" });
+    if (audioGateTitle) audioGateTitle.textContent = "Starting…";
+    // A hold instead of a tap carries no activation. Ask again rather than sit on "Starting…".
+    window.setTimeout(() => {
+      if (!audioGateEl.hidden && audioGateTitle) audioGateTitle.textContent = "Tap to begin";
+    }, 1200);
+  };
+  audioGateEl.addEventListener("pointerup", onLift);
+  audioGateEl.addEventListener("touchend", onLift);
+}
+
 const TRACE_STORE_KEY = "audible-field.trace-log";
 const TRACE_STORE_MAX = 600;
 
@@ -776,6 +836,7 @@ function tick(now) {
     tabs[activeTab].tick({ dt: frameDt });
     refreshStatusLine();
     paintAudioHealth();
+    syncAudioGate(now);
   } catch (err) {
     console.error("EchoScape diagnostics tick failed:", err);
   }
