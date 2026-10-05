@@ -186,7 +186,15 @@ Before the first trusted gesture, `resume()` is skipped unless it is inside user
 
 ### On-device trace
 
-Open the page with `?trace` to show a trace panel at the bottom of the screen. Each press, lift, context state change, bed load, and bed decode prints one line with `ctx`, `currentTime`, `running`, `unlocked`, and the four beds' element or buffer state. The same lines go to the console.
+Open the page with `?trace` to show a trace panel at the bottom of the screen, newest line first. Each press, lift, resume, context state change, bed load, bed decode, master open or shut, and the first landings print one line with `ctx`, `currentTime`, `run`, `unl` (unlocked), and the four beds' element or buffer state (`p2` paused at readyState 2, `>4` playing, `buf` decoded loop).
+
+The same lines go to three other places:
+
+- The console.
+- `POST /trace`. When the page is served by `web-visualizer/server.js` on the LAN, the server appends every line to `web-visualizer/trace.log`. The panel shows `· file` while that sink is accepting lines. Static hosting has no `/trace`, and the page stops posting after the first failure.
+- `localStorage`, capped at 600 lines, so a reload keeps the previous load's lines. Each load starts with a `#` header carrying the time, URL, and user agent.
+
+**Share trace** hands the whole stored log to the share sheet as a `.txt` file (AirDrop, Notes, Mail), falling back to the clipboard and then a download. **Clear** empties the stored log. Taps on the panel are not counted as unlock gestures.
 
 ### Avoid the iPhone silent switch
 

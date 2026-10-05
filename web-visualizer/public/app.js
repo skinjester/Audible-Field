@@ -476,6 +476,8 @@ function enqueueAudio(task) {
 
 function unlockBedsFromGesture(event, phase) {
   if (!event.isTrusted) return;
+  // The trace panel's own Share button must not count as the unlock tap.
+  if (event.target instanceof Element && event.target.closest("[data-audio-trace]")) return;
   const facts = {
     ev: event.type,
     act: navigator.userActivation?.isActive ?? "n/a",
@@ -508,10 +510,17 @@ document.addEventListener("visibilitychange", () => {
   void audioEngine.recoverForeground();
 });
 
+const TRACE_STORE_KEY = "audible-field.trace-log";
+const TRACE_STORE_MAX = 600;
+
 /**
- * On-screen audio trace for the phone, where there is no console.
+ * Audio trace for the phone, where there is no console.
  * Open the page with `?trace` (or set localStorage "audible-field.trace" to "1").
- * Every press, lift, context change, and bed event prints one line.
+ * Every press, lift, context change, and bed event makes one line. Lines go to:
+ *  - the on-screen panel (newest first),
+ *  - `POST /trace`, which the LAN server appends to web-visualizer/trace.log,
+ *  - localStorage, so a reload keeps the previous load's lines,
+ *  - the Share button, which hands the whole log to the share sheet as a .txt file.
  */
 function mountAudioTrace() {
   let wanted = false;
@@ -520,19 +529,154 @@ function mountAudioTrace() {
   } catch {
     /* storage unavailable */
   }
-  const lines = [];
-  const startedAt = performance.now();
-  let panel = null;
-  if (wanted) {
-    panel = document.createElement("pre");
-    panel.setAttribute("data-audio-trace", "");
-    panel.setAttribute("aria-hidden", "true");
-    // Newest line on top, so the latest event is never clipped off the bottom.
-    panel.style.cssText =
-      "position:fixed;left:0;right:0;bottom:0;z-index:9999;margin:0;padding:6px 8px;max-height:40vh;overflow:hidden;" +
-      "font:10px/1.3 ui-monospace,Menlo,Consolas,monospace;color:#e8ffe8;background:rgba(0,0,0,.8);pointer-events:none;white-space:pre-wrap";
-    document.body.appendChild(panel);
+  if (!wanted) {
+    audioEngine.onTrace = (event, facts) => {
+      console.info("[EchoScape trace]", event, facts);
+    };
+    return;
   }
+
+  const startedAt = performance.now();
+  const session = new Date().toISOString();
+  const ua = navigator.userAgent.replace(/\s+/g, " ");
+  const header = `# ${session} ${location.href} ${ua}`;
+
+  /** @type {string[]} */
+  let stored = [];
+  try {
+    const raw = localStorage.getItem(TRACE_STORE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(parsed)) stored = parsed.filter((line) => typeof line === "string");
+  } catch {
+    stored = [];
+  }
+  stored.push(header);
+  const saveStored = () => {
+    try {
+      const trimmed = stored.length > TRACE_STORE_MAX ? stored.slice(stored.length - TRACE_STORE_MAX) : stored;
+      localStorage.setItem(TRACE_STORE_KEY, JSON.stringify(trimmed));
+    } catch {
+      /* storage full or unavailable */
+    }
+  };
+  saveStored();
+
+  // Server sink. Batched; gives up after the first failure (static hosting has no /trace).
+  let serverOk = true;
+  /** @type {string[]} */
+  let outbox = [header];
+  let flushTimer = 0;
+  const flush = () => {
+    flushTimer = 0;
+    if (!serverOk || !outbox.length) return;
+    const body = outbox.join("\n");
+    outbox = [];
+    fetch("/trace", {
+      method: "POST",
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body,
+      keepalive: true,
+    })
+      .then((res) => {
+        if (!res.ok) serverOk = false;
+      })
+      .catch(() => {
+        serverOk = false;
+      });
+  };
+  const queue = (line) => {
+    if (!serverOk) return;
+    outbox.push(line);
+    if (!flushTimer) flushTimer = window.setTimeout(flush, 400);
+  };
+  window.addEventListener("pagehide", () => {
+    if (flushTimer) window.clearTimeout(flushTimer);
+    flush();
+  });
+  // Send the header now, so the panel learns at once whether a file sink exists.
+  flush();
+
+  // Panel: newest line on top, so the latest event is never clipped off the bottom.
+  const panel = document.createElement("div");
+  panel.setAttribute("data-audio-trace", "");
+  panel.style.cssText =
+    "position:fixed;left:0;right:0;bottom:0;z-index:9999;margin:0;max-height:40vh;display:flex;flex-direction:column;" +
+    "font:10px/1.3 ui-monospace,Menlo,Consolas,monospace;color:#e8ffe8;background:rgba(0,0,0,.8);pointer-events:none";
+  const bar = document.createElement("div");
+  bar.style.cssText = "display:flex;gap:8px;align-items:center;padding:4px 8px;pointer-events:auto";
+  const status = document.createElement("span");
+  status.style.cssText = "opacity:.75;flex:1 1 auto";
+  const share = document.createElement("button");
+  share.type = "button";
+  share.textContent = "Share trace";
+  share.style.cssText =
+    "font:inherit;padding:4px 10px;border:1px solid #6c6;border-radius:4px;background:#143;color:#e8ffe8";
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.textContent = "Clear";
+  clear.style.cssText =
+    "font:inherit;padding:4px 10px;border:1px solid #666;border-radius:4px;background:#222;color:#ccc";
+  bar.append(status, share, clear);
+  const body = document.createElement("pre");
+  body.style.cssText = "margin:0;padding:0 8px 6px;overflow:hidden;white-space:pre-wrap";
+  panel.append(bar, body);
+  document.body.appendChild(panel);
+
+  const shown = [];
+  const setStatus = (text) => {
+    status.textContent = text;
+  };
+  setStatus(`${stored.length} lines`);
+
+  const fullText = () => stored.join("\n");
+  const fileName = () => `audible-field-trace-${session.replace(/[:.]/g, "-")}.txt`;
+
+  share.addEventListener("click", async () => {
+    const text = fullText();
+    try {
+      const file = new File([text], fileName(), { type: "text/plain" });
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: "Audible Field trace" });
+        setStatus("shared file");
+        return;
+      }
+      if (navigator.share) {
+        await navigator.share({ text, title: "Audible Field trace" });
+        setStatus("shared text");
+        return;
+      }
+    } catch (err) {
+      if (err?.name === "AbortError") {
+        setStatus("share cancelled");
+        return;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus("copied to clipboard");
+      return;
+    } catch {
+      /* fall through to download */
+    }
+    const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName();
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+    setStatus("downloaded");
+  });
+
+  clear.addEventListener("click", () => {
+    stored = [header];
+    shown.length = 0;
+    body.textContent = "";
+    saveStored();
+    setStatus("cleared");
+  });
+
   audioEngine.onTrace = (event, facts) => {
     const at = ((performance.now() - startedAt) / 1000).toFixed(2).padStart(6);
     const rest = Object.entries(facts)
@@ -540,10 +684,13 @@ function mountAudioTrace() {
       .join(" ");
     const line = `${at} ${event.padEnd(11)} ${rest}`;
     console.info("[EchoScape trace]", line);
-    if (!panel) return;
-    lines.unshift(line);
-    if (lines.length > 16) lines.pop();
-    panel.textContent = lines.join("\n");
+    stored.push(line);
+    saveStored();
+    queue(line);
+    shown.unshift(line);
+    if (shown.length > 14) shown.pop();
+    body.textContent = shown.join("\n");
+    setStatus(`${stored.length} lines${serverOk ? " · file" : ""}`);
   };
 }
 

@@ -5,6 +5,35 @@ const path = require("path");
 
 const HTTP_PORT = Number(process.env.PORT) || 8080;
 const DIST_DIR = path.join(__dirname, "dist");
+/** Audio trace lines posted by a page opened with `?trace` land here, one per line. */
+const TRACE_FILE = path.join(__dirname, "trace.log");
+const TRACE_MAX_BODY = 256 * 1024;
+
+function appendTrace(req, res) {
+  const chunks = [];
+  let size = 0;
+  req.on("data", (chunk) => {
+    size += chunk.length;
+    if (size > TRACE_MAX_BODY) {
+      res.writeHead(413).end();
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on("end", () => {
+    const body = Buffer.concat(chunks).toString("utf8");
+    const text = body.endsWith("\n") ? body : `${body}\n`;
+    fs.appendFile(TRACE_FILE, text, (err) => {
+      if (err) {
+        console.error("trace append failed:", err.message);
+        res.writeHead(500, { "Access-Control-Allow-Origin": "*" }).end();
+        return;
+      }
+      res.writeHead(204, { "Access-Control-Allow-Origin": "*" }).end();
+    });
+  });
+}
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -52,6 +81,25 @@ const httpServer = http.createServer((req, res) => {
     urlPath = decodeURIComponent(qIndex >= 0 ? rawUrl.slice(0, qIndex) : rawUrl);
   } catch {
     res.writeHead(400).end("Bad request");
+    return;
+  }
+
+  if (urlPath === "/trace") {
+    if (req.method === "POST") {
+      appendTrace(req, res);
+      return;
+    }
+    if (req.method === "OPTIONS") {
+      res
+        .writeHead(204, {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+        })
+        .end();
+      return;
+    }
+    res.writeHead(405).end("Method not allowed");
     return;
   }
 
