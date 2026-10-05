@@ -7,11 +7,11 @@ import { readFileSync } from "node:fs";
 import { moveGrain } from "../public/rule-engine.js";
 
 const source = readFileSync(new URL("../public/audio-engine.js", import.meta.url), "utf8");
-const start = source.indexOf("const paramWritten");
+const start = source.indexOf("let paramWritten");
 const end = source.indexOf("/** Equal-power dry/wet.");
 if (start < 0 || end < start) throw new Error("could not find the param helpers");
-const helpers = new Function(`${source.slice(start, end)}\nreturn { writeParam, glideParam, greyholeIdle };`);
-const { writeParam, glideParam, greyholeIdle } = helpers();
+const helpers = new Function(`${source.slice(start, end)}\nreturn { writeParam, glideParam, greyholeIdle, resetParamCaches };`);
+const { writeParam, glideParam, greyholeIdle, resetParamCaches } = helpers();
 
 function mockParam() {
   const events = [];
@@ -53,6 +53,29 @@ function fail(message) {
   const targets = param.events.filter((event) => event.op === "target").length;
   if (targets !== 1) fail(`settled send scheduled ${targets} events, expected 1`);
   else console.log("settled send scheduled once");
+}
+
+// A frozen clock must not schedule. Cancel, then assign .value.
+{
+  const param = mockParam();
+  for (let i = 0; i < 120; i += 1) glideParam(param, 0.42, 0, 0.05, 0.006, false);
+  const targets = param.events.filter((event) => event.op === "target").length;
+  const cancels = param.events.filter((event) => event.op === "cancel").length;
+  if (targets !== 0) fail(`locked glide scheduled ${targets} ramps, expected 0`);
+  else if (cancels < 1) fail("locked glide did not cancel");
+  else if (param.value !== 0.42) fail(`locked glide left value ${param.value}, expected 0.42`);
+  else console.log("locked glide assigned without scheduling");
+}
+
+// After caches are cleared, the same number may schedule once on a live clock.
+{
+  const param = mockParam();
+  glideParam(param, 0.42, 0, 0.05, 0.006, false);
+  resetParamCaches();
+  glideParam(param, 0.42, 1, 0.05, 0.006, true);
+  const targets = param.events.filter((event) => event.op === "target").length;
+  if (targets !== 1) fail(`live glide after reset scheduled ${targets} events, expected 1`);
+  else console.log("live glide after reset scheduled once");
 }
 
 // Identical writes stay quiet. That path used to crackle on a resting sheet.

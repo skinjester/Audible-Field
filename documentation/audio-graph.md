@@ -196,15 +196,17 @@ The proof sound is 250 milliseconds of extremely quiet noise shaped by a smooth 
 The speaker is considered ready only when that buffer ends while the current context is still `running`. Until then:
 
 - The master level is assigned directly instead of scheduled against a frozen audio clock.
+- Stem gains, pile weight, Greyhole sends, and rise-grain controls use the same rule: `setTargetAtTime` only while `AudioContext.state` is `running`. Otherwise the engine cancels any stuck timeline and assigns `.value`.
 - Buffer beds are marked for restart because iOS may discard a source started while the context was suspended.
+- Looping rise grains and pile notes are not started until the context is running. A source started while suspended is dropped so the next frame can recreate it. The proof buffer is the only `BufferSource` started before that.
 
-After proof, the engine clears the old master event and restarts marked beds at their current positions.
+After proof, the engine clears the old master event, forgets cached AudioParam targets and related JavaScript early-return values, and restarts marked beds at their current positions. The next Falling Blocks tick then writes the live field onto a moving clock. User activation ends when the press handler returns, so Emit's hold is not a second gesture.
 
 ### 3. Recover from a failed proof
 
 If the proof does not finish within 700 milliseconds after the finger lifts, the attempt counts as a miss and the context is suspended for another gesture.
 
-After two misses, the next press replaces the `AudioContext`. Audio nodes cannot move between contexts, so `app.js` then rebuilds the graph.
+After two misses, the next press replaces the `AudioContext`. Audio nodes cannot move between contexts, so `app.js` then rebuilds the graph. Greyhole instances and the WAM host id are still tied to the old context; if that recovery path is used, those leftovers may need a rebuild as well.
 
 ### 4. Recover after interruption
 
