@@ -25,7 +25,7 @@
       content="Interactive browser instrument where simulated materials fall, spread, collide, and shape sound in real time."
     />
     <meta name="twitter:image" content="https://audible-field.vercel.app/og-image.png" />
-    <link rel="stylesheet" href="/styles.css?v=273" />
+    <link rel="stylesheet" href="/styles.css?v=282" />
     <script type="importmap">
       {
         "imports": {
@@ -141,13 +141,6 @@
                   <dt>D-pad</dt>
                   <dd data-dpad>—</dd>
                 </div>
-                <div class="readout-wide">
-                  <dt>Audio</dt>
-                  <dd>
-                    <span data-audio-detail>—</span>
-                    <span class="catalog-counts" data-catalog-counts>… WAMs · … samples</span>
-                  </dd>
-                </div>
               </dl>
             </aside>
         </div>
@@ -215,22 +208,24 @@
                   </dl>
                 </div>
               </article>
-              <article class="ctrl-card">
+              <article class="ctrl-card ctrl-card-triggers">
                 <p class="fx-btn">Triggers</p>
                 <div class="trig">
-                  <div class="trig-row">
+                  <label class="trig-row">
                     <span title="Lowpass sweeps up">LT</span>
-                    <div class="trig-bar"><span data-lt-bar></span></div>
+                    <div class="trig-bar" aria-hidden="true"><span data-lt-bar></span></div>
+                    <input class="trig-slider" type="range" min="0" max="1" step="0.01" value="0" data-trigger="lt" aria-label="Left trigger, lowpass">
                     <strong data-lt>0.00</strong>
-                  </div>
-                  <div class="trig-row">
+                  </label>
+                  <label class="trig-row">
                     <span title="Highpass sweeps down">RT</span>
-                    <div class="trig-bar"><span data-rt-bar></span></div>
+                    <div class="trig-bar" aria-hidden="true"><span data-rt-bar></span></div>
+                    <input class="trig-slider" type="range" min="0" max="1" step="0.01" value="0" data-trigger="rt" aria-label="Right trigger, highpass">
                     <strong data-rt>0.00</strong>
-                  </div>
+                  </label>
                 </div>
               </article>
-              <article class="ctrl-card">
+              <article class="ctrl-card ctrl-card-shoulders">
                 <p class="fx-btn">Shoulders</p>
                 <div class="trig">
                   <div class="click-row">
@@ -248,52 +243,38 @@
               <p class="kicker">Face buttons</p>
               <h2>Active plugin</h2>
             </div>
-            <p class="fx-active" data-fx-active>X · WAM Off</p>
           </header>
           <div class="fx-grid">
             <article class="fx-card" data-fx-card="cross" data-on="true">
               <p class="fx-btn">X</p>
               <p class="fx-plugin-static" data-fx-name="cross" title="Press X to mute WAMs (keeps assignments)">WAM Off</p>
-              <dl>
-                <div>
-                  <dt>Param 112</dt>
-                  <dd data-fx-x>0.00</dd>
-                </div>
-                <div>
-                  <dt>Param 6</dt>
-                  <dd data-fx-y>0.00</dd>
-                </div>
-              </dl>
             </article>
             <article class="fx-card" data-fx-card="square">
               <p class="fx-btn">Square</p>
               <div class="fx-plugin-row">
-                <button type="button" class="fx-plugin" data-fx-plugin="square" aria-haspopup="listbox" aria-expanded="false" title="Choose Square WAM">
-                  <span class="fx-plugin-label" data-fx-name="square">kHs Comb Filter</span>
+                <p class="fx-plugin-static" data-fx-name="square">kHs Comb Filter</p>
+                <button type="button" class="fx-plugin-menu" data-fx-plugin="square" aria-haspopup="listbox" aria-expanded="false" aria-label="Choose Square plugin" title="Choose Square WAM">
                   <span class="stem-caret" aria-hidden="true"></span>
                 </button>
               </div>
-              <p class="fx-stick-summary" data-fx-summary="square">X · —    Y · —</p>
             </article>
             <article class="fx-card" data-fx-card="triangle">
               <p class="fx-btn">Triangle</p>
               <div class="fx-plugin-row">
-                <button type="button" class="fx-plugin" data-fx-plugin="triangle" aria-haspopup="listbox" aria-expanded="false" title="Choose Triangle WAM">
-                  <span class="fx-plugin-label" data-fx-name="triangle">kHs Formant Filter</span>
+                <p class="fx-plugin-static" data-fx-name="triangle">kHs Formant Filter</p>
+                <button type="button" class="fx-plugin-menu" data-fx-plugin="triangle" aria-haspopup="listbox" aria-expanded="false" aria-label="Choose Triangle plugin" title="Choose Triangle WAM">
                   <span class="stem-caret" aria-hidden="true"></span>
                 </button>
               </div>
-              <p class="fx-stick-summary" data-fx-summary="triangle">X · —    Y · —</p>
             </article>
             <article class="fx-card" data-fx-card="circle">
               <p class="fx-btn">Circle</p>
               <div class="fx-plugin-row">
-                <button type="button" class="fx-plugin" data-fx-plugin="circle" aria-haspopup="listbox" aria-expanded="false" title="Choose Circle WAM">
-                  <span class="fx-plugin-label" data-fx-name="circle">Crystallizer</span>
+                <p class="fx-plugin-static" data-fx-name="circle">Crystallizer</p>
+                <button type="button" class="fx-plugin-menu" data-fx-plugin="circle" aria-haspopup="listbox" aria-expanded="false" aria-label="Choose Circle plugin" title="Choose Circle WAM">
                   <span class="stem-caret" aria-hidden="true"></span>
                 </button>
               </div>
-              <p class="fx-stick-summary" data-fx-summary="circle">X · —    Y · —</p>
             </article>
           </div>
           <div class="fx-params" data-fx-params hidden></div>
@@ -604,6 +585,6 @@
         <a class="start-screen-link" href="https://github.com/skinjester/Audible-Field" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="15 3 21 3 21 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="10" y1="14" x2="21" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>https://github.com/skinjester/Audible-Field</a>
       </div>
     </div>
-    <script type="module" src="/app.js?v=490"></script>
+    <script type="module" src="/app.js?v=501"></script>
   </body>
 </html>

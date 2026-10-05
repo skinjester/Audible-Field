@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { audioEngine } from "./audio-engine.js?v=111";
+import { audioEngine } from "./audio-engine.js?v=114";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=77";
 import { inputBindings } from "./input-bindings.js?v=15";
@@ -2046,13 +2046,32 @@ function bindSettingsUi() {
   onFieldPress(btn, () => {
     setOpen(panel.hasAttribute("hidden"));
   });
-  document.addEventListener("pointerdown", (event) => {
-    if (panel.hasAttribute("hidden")) return;
+  // Capture runs before the control under the pointer. Close the menu, then
+  // let the press through so that control still engages, including a drag.
+  const outside = (event) => {
+    if (panel.hasAttribute("hidden")) return false;
     const target = event.target;
-    if (target instanceof Node && (panel.contains(target) || btn.contains(target))) return;
-    setOpen(false);
-    if (document.activeElement === btn) btn.blur();
-  });
+    if (!(target instanceof Node)) return false;
+    return !panel.contains(target) && !btn.contains(target);
+  };
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!outside(event)) return;
+      const target = event.target;
+      const emit = target instanceof Element && target.closest("[data-falling-touch-emit]");
+      if (emit) {
+        // Emit captures this pointer in the same event. Hiding the panel first
+        // cancels that drag, so close once the gesture has the pointer.
+        queueMicrotask(() => {
+          if (!panel.hasAttribute("hidden")) setOpen(false);
+        });
+        return;
+      }
+      setOpen(false);
+    },
+    true
+  );
 }
 
 function bindAboutUi() {

@@ -70,6 +70,8 @@ export class GamepadInput {
       rightStick: false,
       l1: false,
       r1: false,
+      lt: false,
+      rt: false,
     };
     /** @type {string[]} */
     this._edges = [];
@@ -148,8 +150,8 @@ export class GamepadInput {
 
     if (!this.uiLock.l1) setShoulder("l1", pressed(gamepadButtons.l1) ? 1 : 0);
     if (!this.uiLock.r1) setShoulder("r1", pressed(gamepadButtons.r1) ? 1 : 0);
-    setTrigger("lt", value(gamepadButtons.lt));
-    setTrigger("rt", value(gamepadButtons.rt));
+    if (!this.uiLock.lt) setTrigger("lt", value(gamepadButtons.lt));
+    if (!this.uiLock.rt) setTrigger("rt", value(gamepadButtons.rt));
     setStickClick("ls", pressed(gamepadButtons.ls) ? 1 : 0);
     setStickClick("rs", pressed(gamepadButtons.rs) ? 1 : 0);
 

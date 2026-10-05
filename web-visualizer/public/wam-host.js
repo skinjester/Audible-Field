@@ -315,6 +315,46 @@ export function valueFromStickRange(low, high, stick) {
   return rest + s * ((hi - lo) / 2);
 }
 
+/** @param {string | null | undefined} axis */
+export function stickAxisOn(axis, which) {
+  if (which !== "x" && which !== "y") return false;
+  return axis === which || axis === "xy";
+}
+
+/**
+ * Toggle one stick axis without clearing the other.
+ * @param {string | null | undefined} axis
+ * @param {"x" | "y"} which
+ * @param {boolean} on
+ * @returns {"x" | "y" | "xy" | null}
+ */
+export function withStickAxis(axis, which, on) {
+  const x = which === "x" ? on : stickAxisOn(axis, "x");
+  const y = which === "y" ? on : stickAxisOn(axis, "y");
+  if (x && y) return "xy";
+  if (x) return "x";
+  if (y) return "y";
+  return null;
+}
+
+/**
+ * One axis uses that stick direction. Both axes add, then stop at a full throw.
+ * @param {string | null | undefined} axis
+ * @param {number} stickX
+ * @param {number} stickY
+ */
+function stickForAxes(axis, stickX, stickY) {
+  const x = stickAxisOn(axis, "x");
+  const y = stickAxisOn(axis, "y");
+  if (x && y) {
+    const sum = (Number(stickX) || 0) + (Number(stickY) || 0);
+    return Math.min(1, Math.max(-1, sum));
+  }
+  if (x) return stickX;
+  if (y) return stickY;
+  return 0;
+}
+
 /**
  * Value sent while a continuous parameter is not on X or Y.
  * Booleans and choices use this as their initial switch value too.
@@ -356,6 +396,76 @@ function isTwoStateSpan(min, max, step) {
 function faustMetaHas(item, key) {
   if (!Array.isArray(item?.meta)) return false;
   return item.meta.some((entry) => entry && typeof entry === "object" && key in entry);
+}
+
+function canonicalUnit(raw) {
+  const key = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\.$/, "");
+  if (!key) return "";
+  if (key === "hz" || key === "hertz") return "Hz";
+  if (key === "khz") return "kHz";
+  if (key === "s" || key === "sec" || key === "secs" || key === "second" || key === "seconds") return "s";
+  if (key === "ms" || key === "msec" || key === "millisec" || key === "millisecond" || key === "milliseconds") return "ms";
+  if (key === "%" || key === "percent" || key === "pct") return "%";
+  if (key === "db" || key === "decibel" || key === "decibels") return "dB";
+  if (key === "deg" || key === "degree" || key === "degrees") return "deg";
+  if (key === "st" || key === "semitone" || key === "semitones") return "st";
+  if (key === "cent" || key === "cents" || key === "ct") return "cent";
+  return String(raw).trim();
+}
+
+function inferUnit(id, label, min, max) {
+  const name = `${id || ""} ${label || ""}`.toLowerCase();
+  if (/delay|decay/.test(name) && min >= 0 && max > 0 && max <= 30) return "s";
+  if (/(^|[^a-z])time([^a-z]|$)/.test(name) && min >= 0 && max >= 0.05 && max <= 5) return "s";
+  if (/freq|cutoff/.test(name)) return "Hz";
+  if (/\btone\b/.test(name) && max >= 200 && max <= 24000) return "Hz";
+  if (/detune/.test(name)) return "cent";
+  if (/\bdb\b/.test(name) || (/\bgain\b/.test(name) && (min < 0 || max > 2))) return "dB";
+  return "";
+}
+
+function fmtQuantityNumber(n) {
+  if (!Number.isFinite(n)) return "—";
+  const abs = Math.abs(n);
+  const digits = abs >= 100 ? 0 : abs >= 10 ? 1 : 2;
+  return n.toFixed(digits).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+}
+
+function fmtQuantity(value, unit) {
+  if (!Number.isFinite(value)) return "—";
+  const u = canonicalUnit(unit);
+  if (u === "s") return `${fmtQuantityNumber(value)} s`;
+  if (u === "ms") return `${fmtQuantityNumber(value)} ms`;
+  if (u === "Hz") {
+    const abs = Math.abs(value);
+    if (abs >= 1000) return `${fmtQuantityNumber(value / 1000)} kHz`;
+    return `${fmtQuantityNumber(value)} Hz`;
+  }
+  if (u === "kHz") return `${fmtQuantityNumber(value)} kHz`;
+  if (u === "%") return `${fmtQuantityNumber(value)}%`;
+  if (u === "dB") return `${fmtQuantityNumber(value)} dB`;
+  if (u === "deg") return `${fmtQuantityNumber(value)}°`;
+  if (u === "st") return `${fmtQuantityNumber(value)} st`;
+  if (u === "cent") return `${fmtQuantityNumber(value)} ct`;
+  if (u) return `${fmtQuantityNumber(value)} ${u}`;
+  return fmtQuantityNumber(value);
+}
+
+/**
+ * Dial and menu text for a parameter value, including its unit when one applies.
+ * @param {number} value
+ * @param {{ type?: string, min?: number, max?: number, choices?: string[], units?: string }} param
+ */
+export function formatParamReadout(value, param) {
+  if (param?.type === "boolean") return Number(value) >= 0.5 ? "On" : "Off";
+  if (param?.type === "choice") {
+    const index = Math.round(Number(value) - Number(param.min || 0));
+    return param.choices?.[index] || fmtQuantity(value, "");
+  }
+  return fmtQuantity(Number(value), param?.units || "");
 }
 
 export function finalizeListedParam(raw, mapEntry) {
@@ -403,6 +513,8 @@ export function finalizeListedParam(raw, mapEntry) {
     def,
     choices: Array.isArray(raw.choices) ? raw.choices.map(String) : [],
     discreteStep: step,
+    units: canonicalUnit(raw.units) || inferUnit(raw.id, raw.label, min, max),
+    section: typeof raw.section === "string" ? raw.section : "",
     authored,
   };
 }
@@ -438,6 +550,7 @@ async function readSdkParamInfo(audioNode, moduleInstance) {
       def: Number.isFinite(p.defaultValue) ? Number(p.defaultValue) : Number.isFinite(min) ? min : 0,
       choices: Array.isArray(p.choices) ? p.choices : [],
       discreteStep: Number(p.discreteStep) > 0 ? Number(p.discreteStep) : 0,
+      units: typeof p.units === "string" ? p.units : "",
       authored: true,
     });
   }
@@ -454,8 +567,41 @@ function faustUiList(audioNode) {
   return [];
 }
 
+function metaUnit(item) {
+  if (!Array.isArray(item?.meta)) return "";
+  for (const entry of item.meta) {
+    if (entry && typeof entry.unit === "string" && entry.unit.trim()) return entry.unit.trim();
+  }
+  return "";
+}
+
+/** Named Faust groups, when a plugin actually has more than one. */
+function faustSectionById(audioNode) {
+  const ui = audioNode?.json_object?.ui;
+  if (!Array.isArray(ui)) return new Map();
+  const found = new Map();
+  const names = new Set();
+  const walk = (nodes, section) => {
+    for (const node of nodes || []) {
+      if (!node || typeof node !== "object") continue;
+      const kind = String(node.type || "");
+      if (kind === "vgroup" || kind === "hgroup" || kind === "tgroup") {
+        walk(node.items, String(node.label || "").trim() || section);
+        continue;
+      }
+      if (node.address == null || !section) continue;
+      found.set(String(node.address), section);
+      names.add(section);
+    }
+  };
+  walk(ui, "");
+  if (names.size < 2) return new Map();
+  return found;
+}
+
 function readFaustParams(audioNode) {
   const desc = faustUiList(audioNode);
+  const sections = faustSectionById(audioNode);
   const out = [];
   for (const item of desc) {
     if (!item || item.address == null) continue;
@@ -464,6 +610,8 @@ function readFaustParams(audioNode) {
     const id = String(item.address);
     const label = shortParamLabel(item.label || id, id);
     const init = Number(item.init);
+    const units = metaUnit(item);
+    const section = sections.get(id) || "";
     if (kind === "checkbox" || kind === "button") {
       out.push({
         id,
@@ -474,6 +622,8 @@ function readFaustParams(audioNode) {
         def: Number.isFinite(init) ? (init >= 0.5 ? 1 : 0) : 0,
         choices: [],
         discreteStep: 1,
+        units,
+        section,
         authored: true,
       });
       continue;
@@ -493,6 +643,8 @@ function readFaustParams(audioNode) {
       def: twoState ? (Number.isFinite(init) && init >= 0.5 ? 1 : 0) : Number.isFinite(init) ? init : min,
       choices: [],
       discreteStep: twoState ? 1 : step,
+      units,
+      section,
       authored: true,
     });
   }
@@ -520,7 +672,13 @@ function mergeListedParams(sdk, faust) {
     const sdkParam = sdkById.get(item.id) || sdkByLeaf.get(leafName(item.id, item.id));
     if (sdkParam && !used.has(sdkParam)) {
       used.add(sdkParam);
-      merged.push({ ...item, id: sdkParam.id, label: sdkParam.label || item.label });
+      merged.push({
+        ...item,
+        id: sdkParam.id,
+        label: sdkParam.label || item.label,
+        units: item.units || sdkParam.units || "",
+        section: item.section || sdkParam.section || "",
+      });
     } else if (!sdkParam) {
       merged.push(item);
     }
@@ -570,7 +728,8 @@ export function createParamModel(params, saved, path) {
     }
     ranges[param.id] = { low, high };
     const axis = saved?.axes?.[param.id];
-    axes[param.id] = param.type === "float" && (axis === "x" || axis === "y") ? axis : null;
+    axes[param.id] =
+      param.type === "float" && (axis === "x" || axis === "y" || axis === "xy") ? axis : null;
     const stored = Number(saved?.switches?.[param.id]);
     switches[param.id] = quantizeParam(
       Number.isFinite(stored) ? stored : neutralParamValue(param),
@@ -587,11 +746,11 @@ export function createParamModel(params, saved, path) {
 }
 
 /**
- * Assigned continuous params follow one stick axis across their window.
+ * Assigned continuous params follow their stick axes across their window.
  * Unassigned continuous params stay at the value set on the dial.
  * Booleans and choices stay at the switch or menu value.
  * @param {ReturnType<typeof finalizeListedParam>} param
- * @param {{ ranges: Record<string, { low: number, high: number }>, axes: Record<string, string | null>, switches: Record<string, number> }} model
+ * @param {{ ranges: Record<string, { low: number, high: number }>, axes: Record<string, "x" | "y" | "xy" | null>, switches: Record<string, number> }} model
  * @param {number} stickX
  * @param {number} stickY
  */
@@ -599,12 +758,11 @@ export function paramSentValue(param, model, stickX, stickY) {
   if (!param) return 0;
   if (param.type === "float") {
     const axis = model?.axes?.[param.id];
-    if (axis === "x" || axis === "y") {
+    if (stickAxisOn(axis, "x") || stickAxisOn(axis, "y")) {
       const range = model?.ranges?.[param.id];
       const low = Number.isFinite(range?.low) ? range.low : param.min;
       const high = Number.isFinite(range?.high) ? range.high : param.max;
-      const stick = axis === "x" ? stickX : stickY;
-      return quantizeParam(valueFromStickRange(low, high, stick), param);
+      return quantizeParam(valueFromStickRange(low, high, stickForAxes(axis, stickX, stickY)), param);
     }
     const manual = Number(model?.switches?.[param.id]);
     return quantizeParam(Number.isFinite(manual) ? manual : neutralParamValue(param), param);

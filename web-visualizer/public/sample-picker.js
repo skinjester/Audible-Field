@@ -319,28 +319,47 @@ function ensureDropdownDom() {
   });
 }
 
+function viewportBox() {
+  const pad = 8;
+  const vv = window.visualViewport;
+  if (!vv) {
+    return {
+      top: pad,
+      left: pad,
+      right: window.innerWidth - pad,
+      bottom: window.innerHeight - pad,
+    };
+  }
+  return {
+    top: vv.offsetTop + pad,
+    left: vv.offsetLeft + pad,
+    right: vv.offsetLeft + vv.width - pad,
+    bottom: vv.offsetTop + vv.height - pad,
+  };
+}
+
 function positionDropdown(anchor) {
   if (!dropdownEl || !anchor) return;
   const rect = anchor.getBoundingClientRect();
-  const pad = 8;
-  const maxW = Math.min(280, window.innerWidth - pad * 2);
+  const box = viewportBox();
+  const maxW = Math.min(280, box.right - box.left);
   let left = rect.left;
-  let top = rect.bottom + 4;
 
   dropdownEl.style.width = `${maxW}px`;
-  dropdownEl.style.maxHeight = `${Math.min(320, window.innerHeight - pad * 2)}px`;
+  dropdownEl.style.maxHeight = "none";
   dropdownEl.hidden = false;
   dropdownEl.setAttribute("aria-hidden", "false");
 
-  // Measure after show
-  const dd = dropdownEl.getBoundingClientRect();
-  if (left + dd.width > window.innerWidth - pad) {
-    left = Math.max(pad, window.innerWidth - pad - dd.width);
-  }
-  if (top + dd.height > window.innerHeight - pad) {
-    top = Math.max(pad, rect.top - dd.height - 4);
-  }
-  left = Math.max(pad, left);
+  const natural = dropdownEl.getBoundingClientRect().height;
+  const room = Math.max(0, box.bottom - box.top);
+  if (natural > room + 1) dropdownEl.style.maxHeight = `${Math.floor(room)}px`;
+
+  const height = Math.min(natural, room);
+  let top = rect.bottom + 4;
+  if (top + height > box.bottom) top = box.bottom - height;
+  if (top < box.top) top = box.top;
+  if (left + maxW > box.right) left = box.right - maxW;
+  if (left < box.left) left = box.left;
 
   dropdownEl.style.left = `${Math.round(left)}px`;
   dropdownEl.style.top = `${Math.round(top)}px`;
@@ -441,7 +460,7 @@ function listingFromCatalog(groups, relPath) {
  */
 export async function openStemDropdown(opts = {}) {
   ensureDropdownDom();
-  const { closeFxDropdown } = await import("./fx-picker.js?v=5");
+  const { closeFxDropdown } = await import("./fx-picker.js?v=6");
   closeFxDropdown();
 
   // Toggle closed if the same slot is already open.
