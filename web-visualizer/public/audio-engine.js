@@ -87,7 +87,7 @@ function writeParam(param, value, eps = 1e-4) {
  * A field frame used to cancel and reschedule every gain while diffuse piles
  * were up. The audio thread falls behind that list, then catches up as a click.
  * Small creeps wait one render quantum so the event list stays a single ramp.
- * While the context is not running, `live` is false: cancel any stuck timeline
+ * While currentTime has not moved, `live` is false: cancel any stuck timeline
  * and assign `.value`. Events scheduled at a frozen currentTime 0 never apply.
  * @param {AudioParam | null | undefined} param
  * @param {number} value
@@ -192,14 +192,6 @@ function isCoarseTouch() {
   const coarse = window.matchMedia?.("(pointer: coarse)")?.matches === true;
   const touch = (navigator.maxTouchPoints || 0) > 0;
   return coarse && touch;
-}
-
-/** Safari on iPhone/iPad: AudioContext must be constructed inside a trusted tap. */
-function isWebKitIOS() {
-  const ua = navigator.userAgent || "";
-  if (/iPhone|iPod/.test(ua)) return true;
-  if (/iPad/.test(ua)) return true;
-  return navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1;
 }
 
 /** Safari uses "interrupted" after a lock, a call, or a backgrounded tab. */
@@ -600,10 +592,6 @@ export class EchoScapeAudioEngine {
     this._watchedCtx = null;
     /** True after a proof buffer has finished while the context was running. */
     this._speakerProved = false;
-    /** This AudioContext was constructed inside a trusted tap. */
-    this._ctxBornInGesture = false;
-    /** @type {Function[]} */
-    this._contextWaiters = [];
     /** Proof buffers that never finished. Two failures replace the context. */
     this._proofMisses = 0;
     this._proofGeneration = 0;
@@ -661,15 +649,7 @@ export class EchoScapeAudioEngine {
       throw new Error(this.error);
     }
 
-    if (!this.ctx || this.ctx.state === "closed") {
-      if (isWebKitIOS()) {
-        while (!this.ctx || this.ctx.state === "closed") {
-          await this._waitForGestureContext();
-        }
-      } else {
-        this.ctx = new AC();
-      }
-    }
+    if (!this.ctx || this.ctx.state === "closed") this.ctx = new AC();
     this._watchContext(this.ctx);
     // Outside a user gesture, some Chromium builds never resolve resume().
     await this._safeResume(300);
@@ -752,9 +732,7 @@ export class EchoScapeAudioEngine {
     this.ready = true;
     this.running = true;
     this.setActiveFx(mixerController.activeFx || this.activeFx, true);
-    // Leave stem gains at 0. Falling Blocks and Diagnostics write the real mix
-    // on the next frame. The center mix here was a one-shot blast of all four beds.
-    this.sync(mixerState, mixerController, { stems: false });
+    this.sync(mixerState, mixerController);
     await this._playAll();
     await this._safeResume(300);
     void this._loadStemReverbs();
@@ -771,7 +749,7 @@ export class EchoScapeAudioEngine {
     }
     this.circleFxMode = this._fxWam?.circle ? "wam" : "native";
     this.setActiveFx(mixerController.activeFx || this.activeFx, true);
-    this.sync(mixerState, mixerController, { stems: false });
+    this.sync(mixerState, mixerController);
 
     console.info("[EchoScape audio] started", {
       ctx: this.ctx.state,
@@ -888,6 +866,7 @@ export class EchoScapeAudioEngine {
   /**
    * A short, very quiet buffer. Its end is the proof the audio thread rendered.
    * Started synchronously from the press. Pure silence can be skipped.
+   * Finishing does not stop splashes, pile notes, or rise grains.
    */
   _primeSpeaker() {
     const ctx = this.ctx;
@@ -917,9 +896,7 @@ export class EchoScapeAudioEngine {
       this._speakerProved = true;
       this._proofMisses = 0;
       this._applyProvedOutput();
-      this._releaseClockCaches();
       this._restartSuspendedBeds();
-      this._dropLockedLoopVoices();
     };
     try {
       voice.start(ctx.currentTime);
@@ -931,9 +908,10 @@ export class EchoScapeAudioEngine {
     this._proofTimer = window.setTimeout(() => {
       this._proofTimer = null;
       if (generation !== this._proofGeneration || this._speakerProved) return;
-      if (this._fingerDown) return;
-      this._proofPending = false;
+      if (this._fingerDown || this._proofPending) return;
+      if (ctx.state !== "running" || this.ctx !== ctx) return;
       this._proofMisses += 1;
+      void ctx.suspend().catch(() => {});
     }, 700);
   }
 
@@ -943,9 +921,6 @@ export class EchoScapeAudioEngine {
    */
   _maybeReplaceContext() {
     if (this._proofMisses < 2 || !this.ctx || this.ctx.state === "closed") return;
-    // Replacing the context while start() still owns it leaves the graph half-built
-    // and the audio chain wedged. Retry proof on the next tap instead.
-    if (this._startInFlight || this.running) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     const old = this.ctx;
@@ -957,7 +932,6 @@ export class EchoScapeAudioEngine {
     this.stems = {};
     this._pendingEls = {};
     this.ctx = new AC();
-    this._ctxBornInGesture = true;
     this._watchContext(this.ctx);
     void old.close().catch(() => {});
     this._restartRequested = true;
@@ -973,33 +947,28 @@ export class EchoScapeAudioEngine {
       if (contextNeedsResume(ctx)) void ctx.resume();
       return;
     }
-    this._resumeAndPrime(ctx);
+    if (contextNeedsResume(ctx)) void ctx.resume();
+    this._primeSpeaker();
   }
 
   /**
-   * Finger is up. The press may have started a proof that never rendered.
-   * Lift is still a user gesture, so retry instead of waiting for another control.
+   * Finger is up. Retry only if the press never started a proof.
+   * A running context that still has no proof is suspended for the next press.
    */
   _unlockOnLift() {
     if (!this._audible) return;
     const ctx = this.ctx;
     if (!ctx || ctx.state === "closed" || this._speakerProved) return;
-    this._resumeAndPrime(ctx);
-  }
-
-  _resumeAndPrime(ctx) {
-    if (!ctx || ctx.state === "closed" || this._speakerProved) return;
+    if (this._proofPending) return;
     if (contextNeedsResume(ctx)) {
-      const pending = ctx.resume();
-      if (pending && typeof pending.then === "function") {
-        void pending.then(() => {
-          if (this._speakerProved || this.ctx !== ctx) return;
-          this._primeSpeaker();
-        }).catch(() => {});
-      }
+      void ctx.resume();
+      this._primeSpeaker();
+      return;
     }
-    this._clickUnlock(ctx);
-    this._primeSpeaker();
+    if (ctx.state === "running") {
+      this._proofMisses += 1;
+      void ctx.suspend().catch(() => {});
+    }
   }
 
   /** Clear a master event that was written while currentTime was frozen at 0. */
@@ -1012,55 +981,8 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * So the next field tick writes onto a moving clock.
-   * Cached targets from the suspended graph would otherwise skip those writes.
-   */
-  _releaseClockCaches() {
-    resetParamCaches();
-    this._outputAmount = null;
-    this._camClose = null;
-    this._camAway = null;
-    for (const rec of Object.values(this._stemReverbs || {})) {
-      rec.feedback = undefined;
-      rec.applied = undefined;
-      rec.asleep = undefined;
-    }
-    for (const corner of CORNERS) {
-      const notes = this.stems[corner]?.notes;
-      if (!notes) continue;
-      for (let i = 0; i < notes.length; i += 1) notes[i].level = undefined;
-    }
-  }
-
-  /**
-   * A looping grain started while suspended is discarded and stays in the map.
-   * Later ticks only aim its gain. Drop it so the next running tick recreates it.
-   */
-  _dropLockedLoopVoices() {
-    if (this._riseVoices) {
-      for (const voice of this._riseVoices.values()) this._disposeRiseVoice(voice);
-      this._riseVoices.clear();
-    }
-    for (const corner of CORNERS) {
-      const stem = this.stems[corner];
-      if (!stem?.notes?.length) continue;
-      while (stem.notes.length) this._disposePileNote(stem.notes.pop());
-      stem.noteSeen?.clear();
-      stem.noteGone?.clear();
-    }
-  }
-
-  /**
-   * True after a proof buffer has rendered and the audio thread is advancing.
-   * `state === "running"` is not enough: iOS can report that with currentTime
-   * still at 0, and a BufferSource started in that window is discarded.
-   */
-  _clockLive() {
-    return !!this.ctx && this._speakerProved && this.ctx.state === "running";
-  }
-
-  /**
-   * Smooth when the speaker is proved. Assign the value until then.
+   * Schedule a ramp only after the audio clock has moved.
+   * At currentTime 0 the ramp sticks and the first notes stay silent.
    * @param {AudioParam | null | undefined} param
    * @param {number} value
    * @param {number} tau
@@ -1069,7 +991,8 @@ export class EchoScapeAudioEngine {
   _glide(param, value, tau, eps) {
     if (!this.ctx || !param) return;
     const now = this.ctx.currentTime;
-    glideParam(param, value, now, tau, eps, this._clockLive());
+    const live = this.ctx.state === "running" && now > 0;
+    glideParam(param, value, now, tau, eps, live);
   }
 
   /** Beds started while the context was suspended never sound on iOS. Start them again. */
@@ -1090,56 +1013,6 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * Safari will not play through an AudioContext constructed on page load.
-   * Create it on the tap, and wake anyone waiting in start().
-   */
-  _flushContextWaiters() {
-    const waiters = this._contextWaiters;
-    if (!waiters.length) return;
-    this._contextWaiters = [];
-    for (let i = 0; i < waiters.length; i += 1) waiters[i]();
-  }
-
-  _openContextInGesture() {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-    if (!this.ctx || this.ctx.state === "closed") {
-      this.ctx = new AC();
-      this._ctxBornInGesture = true;
-    }
-    this._watchContext(this.ctx);
-    this._flushContextWaiters();
-  }
-
-  _waitForGestureContext() {
-    return new Promise((resolve) => {
-      if (this.ctx && this.ctx.state !== "closed") {
-        resolve();
-        return;
-      }
-      this._contextWaiters.push(resolve);
-      if (this.ctx && this.ctx.state !== "closed") this._flushContextWaiters();
-    });
-  }
-
-  /** Zero-gain oscillator. start() in the tap is what WebKit keys off, not the proof noise. */
-  _clickUnlock(ctx) {
-    if (!ctx || ctx.state === "closed") return;
-    try {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      const now = Number.isFinite(ctx.currentTime) ? ctx.currentTime : 0;
-      gain.gain.setValueAtTime(0, now);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now);
-      osc.stop(now + 0.05);
-    } catch {
-      /* ignore */
-    }
-  }
-
-  /**
    * Start the looping beds during a user gesture.
    * Chrome allows AudioBuffer splashes once the context is running, but it
    * blocks HTML media playback unless play() is called in the gesture itself.
@@ -1149,8 +1022,8 @@ export class EchoScapeAudioEngine {
    * @param {'press' | 'lift'} [phase]
    */
   beginGesture(fromUser = false, phase = "press") {
-    if (fromUser) this._openContextInGesture();
-    else if (!this.ctx || this.ctx.state === "closed") return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if ((!this.ctx || this.ctx.state === "closed") && AC) this.ctx = new AC();
     this._watchContext(this.ctx);
     const poke = () => {
       for (const corner of CORNERS) {
@@ -1173,10 +1046,7 @@ export class EchoScapeAudioEngine {
     if (phase === "lift") {
       this._fingerDown = false;
       if (now - this._gestureAt < 700) {
-        if (this._liftHandled) {
-          if (!this._speakerProved) this._unlockOnLift();
-          return;
-        }
+        if (this._liftHandled) return;
         this._liftHandled = true;
       } else {
         this._gestureAt = now;
@@ -1190,9 +1060,6 @@ export class EchoScapeAudioEngine {
     this._fingerDown = true;
     if (this._pressPrimed && now - this._gestureAt < 700) {
       poke();
-      // pointerdown and touchstart both fire on iOS. The first start() is often
-      // discarded because resume() has not taken yet. Skip only if already proved.
-      if (!this._speakerProved) this._unlockOnPress();
       return;
     }
     this._gestureAt = now;
@@ -2462,7 +2329,9 @@ export class EchoScapeAudioEngine {
     satWet.gain.value = 0;
     const satSum = this.ctx.createGain();
     satSum.gain.value = 1;
-    const initialGain = typeof opts.initialGain === "number" ? opts.initialGain : 0;
+    const weights = equalPowerMix(mixerState.x, mixerState.y);
+    const initialGain =
+      typeof opts.initialGain === "number" ? opts.initialGain : weights[corner] ?? 0;
     gain.gain.value = initialGain;
     pan.pan.value = 0;
     // A media element in the graph follows the ringer switch. Buffer beds do not.
@@ -2665,8 +2534,8 @@ export class EchoScapeAudioEngine {
     const target = this._outputOpen * amount;
     const t = this.ctx.currentTime;
     this._master.gain.cancelScheduledValues(t);
-    // Until the speaker is proved, currentTime can stay 0 even when state is running.
-    if (!this._clockLive()) {
+    // Until the speaker is proved, currentTime stays 0 and a scheduled event sticks.
+    if (!this._speakerProved) {
       this._master.gain.value = target;
       return;
     }
@@ -3422,10 +3291,6 @@ export class EchoScapeAudioEngine {
       const armed = i === 0 || nowMs - (stem.noteSeen.get(id) || nowMs) >= PILE_NOTE_ARM_MS;
       if (!existing?.voice && !armed) continue;
       keep.add(id);
-      if (!this._clockLive()) {
-        if (existing?.voice) this._disposePileNote(existing);
-        continue;
-      }
       if (!existing?.voice) {
         if (existing) this._releasePileNote(existing);
         const gain = ctx.createGain();
@@ -3663,7 +3528,6 @@ export class EchoScapeAudioEngine {
     const stem = this.stems?.[atom.corner];
     const buffer = stem?.bedBuffer || this._strikeBuffers?.[atom.corner] || null;
     if (!buffer || !this.ctx || !this._splashOut) return null;
-    if (!this._clockLive()) return null;
     const slice = riseSlice(buffer, atom, seconds);
     const end = Math.min(buffer.duration, slice.offset + slice.duration);
     const start = Math.max(0, Math.min(slice.offset, Math.max(0, end - 0.02)));
@@ -3775,11 +3639,6 @@ export class EchoScapeAudioEngine {
       live.add(atom.id);
       const count = counts[atom.corner] || 1;
       let voice = this._riseVoices.get(atom.id);
-      if (voice && !this._clockLive()) {
-        this._disposeRiseVoice(voice);
-        this._riseVoices.delete(atom.id);
-        voice = null;
-      }
       if (!voice || voice.mode !== mode || voice.released) {
         if (voice) this._releaseRiseVoice(voice, 0.12);
         voice = this._makeRiseVoice(atom, mode, this._riseLoopSeconds(mode), true);
@@ -3888,7 +3747,6 @@ export class EchoScapeAudioEngine {
    */
   playSplash(hits) {
     if (!this.running || !this.ctx || !this._splashOut || !hits) return;
-    if (!this._clockLive()) return;
     for (const corner of CORNERS) {
       const lives = hits[corner];
       if (!lives?.length) continue;
