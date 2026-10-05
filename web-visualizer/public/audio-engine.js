@@ -590,19 +590,13 @@ export class EchoScapeAudioEngine {
     this._r1Held = false;
     /** @type {AudioContext | null} */
     this._watchedCtx = null;
-    /** True after a proof buffer has finished while the context was running. */
-    this._speakerProved = false;
-    /** Proof buffers that never finished. Two failures replace the context. */
-    this._proofMisses = 0;
-    this._proofGeneration = 0;
-    this._proofPending = false;
-    this._gestureAt = 0;
-    this._pressPrimed = false;
-    this._liftHandled = false;
-    this._fingerDown = false;
-    this._restartRequested = false;
-    /** @type {number | null} */
-    this._proofTimer = null;
+    /**
+     * True once a trusted press or key has reached the engine.
+     * Before that, a resume() outside user activation is skipped: iOS ignores it.
+     */
+    this._unlocked = false;
+    /** @type {((event: string, facts: Record<string, unknown>) => void) | null} */
+    this.onTrace = null;
     /** @type {'pending' | 'wam' | 'native'} */
     this.circleFxMode = "pending";
     /** @type {Record<string, { id: string, label: string, kind: string, path?: string }>} */
@@ -653,6 +647,7 @@ export class EchoScapeAudioEngine {
     this._watchContext(this.ctx);
     // Outside a user gesture, some Chromium builds never resolve resume().
     await this._safeResume(300);
+    this._trace("start", { ctx: this.ctx.state });
 
     this._sum = this.ctx.createGain();
     this._sum.gain.value = 1;
@@ -727,14 +722,19 @@ export class EchoScapeAudioEngine {
     this._l1Dry.connect(this._r1Send);
     this._r1Wet.connect(this._shoulderOut);
 
-    // Beds first so sound can start even if WAM restore is slow/hangs.
-    await this._loadStems();
+    // The graph is complete here. Landings, pile notes, and field levels can be
+    // written now. Each bed joins the mix as its file arrives; the engine does
+    // not wait for four downloads before it counts as running. On iOS the
+    // media elements may not load before the first tap, and that wait used to
+    // hold `running` false through the first Emit.
     this.ready = true;
     this.running = true;
+    await this._loadStems();
     this.setActiveFx(mixerController.activeFx || this.activeFx, true);
     this.sync(mixerState, mixerController);
     await this._playAll();
     await this._safeResume(300);
+    this._trace("running", { ctx: this.ctx.state });
     void this._loadStemReverbs();
     void this._loadHall();
 
@@ -769,19 +769,65 @@ export class EchoScapeAudioEngine {
     return this;
   }
 
-  /** Log context transitions once per AudioContext instance. */
+  /**
+   * Follow context transitions once per AudioContext instance.
+   * `running` is the browser's own word that the audio thread is rendering.
+   * Work that had to wait for the clock happens here, not on a timer.
+   */
   _watchContext(ctx) {
     if (!ctx || ctx === this._watchedCtx) return;
     this._watchedCtx = ctx;
     ctx.addEventListener("statechange", () => {
       console.info("[EchoScape audio] AudioContext:", ctx.state);
-      if (ctx.state === "interrupted") this.forgetSpeakerProof();
+      this._trace("ctx", { ctx: ctx.state });
+      if (ctx.state === "running" && this.ctx === ctx) this._onContextRunning();
     });
   }
 
-  /** True once a proof buffer has finished while the context was running. */
-  speakerProved() {
-    return this._speakerProved;
+  /** The audio clock is moving. Beds that were started on a frozen clock start again. */
+  _onContextRunning() {
+    this._restartSuspendedBeds();
+    this._pokePausedBeds();
+  }
+
+  /** True while the browser reports the audio thread rendering. */
+  outputRunning() {
+    return this.ctx?.state === "running";
+  }
+
+  /** True once a trusted press or key has reached the engine. */
+  unlocked() {
+    return this._unlocked;
+  }
+
+  /**
+   * One line per audio event, for the phone where there is no console.
+   * @param {string} event
+   * @param {Record<string, unknown>} [facts]
+   */
+  _trace(event, facts = {}) {
+    const beds = CORNERS.map((corner) => {
+      const stem = this.stems[corner];
+      if (stem?.bedVoice) return "buf";
+      const el = stem?.el || this._pendingEls[corner];
+      if (!el) return "-";
+      // p = paused, > = playing; the digit is the element's readyState (0–4).
+      return el.paused ? `p${el.readyState}` : `>${el.readyState}`;
+    });
+    const line = {
+      ctx: this.ctx?.state || "none",
+      t: this.ctx ? Number(this.ctx.currentTime.toFixed(2)) : 0,
+      running: this.running,
+      unlocked: this._unlocked,
+      audible: this._audible,
+      beds: beds.join(" "),
+      ...facts,
+    };
+    try {
+      this.onTrace?.(event, line);
+    } catch {
+      /* a broken overlay must not stop audio */
+    }
   }
 
   /** Header switch. False silences every voice without tearing down the graph. */
@@ -809,13 +855,24 @@ export class EchoScapeAudioEngine {
     const gate = this._gate;
     if (!gate) return;
     const value = this._audible ? 1 : 0;
-    if (!this.ctx || !this._speakerProved) {
+    const t = this.ctx?.currentTime ?? 0;
+    // Until the clock moves, a scheduled event at 0 sticks. Assign the value instead.
+    if (!this._clockLive()) {
+      try {
+        gate.gain.cancelScheduledValues(t);
+      } catch {
+        /* ignore */
+      }
       gate.gain.value = value;
       return;
     }
-    const t = this.ctx.currentTime;
     gate.gain.cancelScheduledValues(t);
     gate.gain.setValueAtTime(value, t);
+  }
+
+  /** True once the context is running and currentTime has left 0. */
+  _clockLive() {
+    return !!this.ctx && this.ctx.state === "running" && this.ctx.currentTime > 0;
   }
 
   /** Desktop beds also leave the media element. Keep that path on the same switch. */
@@ -830,25 +887,16 @@ export class EchoScapeAudioEngine {
     }
   }
 
-  /** The next real press must open the speaker again. */
-  forgetSpeakerProof() {
-    this._speakerProved = false;
-    this._proofPending = false;
-  }
-
-  /** True once, after a failed proof replaced the context and the graph must be rebuilt. */
-  takeGraphRestart() {
-    const restart = this._restartRequested;
-    this._restartRequested = false;
-    return restart;
-  }
-
-  /** Resume without hanging when autoplay policy blocks the promise. */
+  /**
+   * Resume without hanging when autoplay policy blocks the promise.
+   * Before the first trusted press, only a call inside user activation counts;
+   * iOS leaves an earlier resume() pending forever.
+   */
   async _safeResume(timeoutMs = 300) {
     if (!this._audible) return;
     if (!this.ctx || this.ctx.state === "running") return;
-    // Startup must not resume. A resume before the finger spends the gesture.
-    if (!this._speakerProved) return;
+    if (!this._unlocked && navigator.userActivation?.isActive !== true) return;
+    this._unlocked = true;
     try {
       await Promise.race([
         this.ctx.resume(),
@@ -864,120 +912,16 @@ export class EchoScapeAudioEngine {
   }
 
   /**
-   * A short, very quiet buffer. Its end is the proof the audio thread rendered.
-   * Started synchronously from the press. Pure silence can be skipped.
-   * Finishing does not stop splashes, pile notes, or rise grains.
+   * The one thing iOS asks for: resume() on the call stack of a trusted event.
+   * Nothing is awaited and nothing is tested afterward. `statechange` reports
+   * the result, and `_onContextRunning` finishes the work when it arrives.
    */
-  _primeSpeaker() {
-    const ctx = this.ctx;
-    if (!ctx || ctx.state === "closed" || this._speakerProved) return;
-    const rate = ctx.sampleRate || 44100;
-    const length = Math.max(1, Math.floor(rate * 0.25));
-    const buffer = ctx.createBuffer(1, length, rate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < length; i += 1) {
-      const env = Math.sin((i / (length - 1 || 1)) * Math.PI);
-      data[i] = (Math.random() * 2 - 1) * 0.0008 * env;
-    }
-    const voice = ctx.createBufferSource();
-    voice.buffer = buffer;
-    voice.connect(ctx.destination);
-    const generation = this._proofGeneration + 1;
-    this._proofGeneration = generation;
-    this._proofPending = true;
-    voice.onended = () => {
-      if (generation !== this._proofGeneration) return;
-      this._proofPending = false;
-      if (this._proofTimer != null) {
-        window.clearTimeout(this._proofTimer);
-        this._proofTimer = null;
-      }
-      if (this.ctx !== ctx || ctx.state !== "running") return;
-      this._speakerProved = true;
-      this._proofMisses = 0;
-      this._applyProvedOutput();
-      this._restartSuspendedBeds();
-    };
-    try {
-      voice.start(ctx.currentTime);
-    } catch {
-      this._proofPending = false;
-      return;
-    }
-    if (this._proofTimer != null) window.clearTimeout(this._proofTimer);
-    this._proofTimer = window.setTimeout(() => {
-      this._proofTimer = null;
-      if (generation !== this._proofGeneration || this._speakerProved) return;
-      if (this._fingerDown || this._proofPending) return;
-      if (ctx.state !== "running" || this.ctx !== ctx) return;
-      this._proofMisses += 1;
-      void ctx.suspend().catch(() => {});
-    }, 700);
-  }
-
-  /**
-   * Two proofs that never finished: the context is replaced inside this gesture.
-   * The mixer is rebuilt afterward, because nodes cannot move.
-   */
-  _maybeReplaceContext() {
-    if (this._proofMisses < 2 || !this.ctx || this.ctx.state === "closed") return;
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-    const old = this.ctx;
-    this._proofMisses = 0;
-    this._speakerProved = false;
-    this._proofPending = false;
-    this.running = false;
-    this.ready = false;
-    this.stems = {};
-    this._pendingEls = {};
-    this.ctx = new AC();
-    this._watchContext(this.ctx);
-    void old.close().catch(() => {});
-    this._restartRequested = true;
-  }
-
-  /** Ask the context to run, and start the proof buffer, on this call stack. */
-  _unlockOnPress() {
-    if (!this._audible) return;
-    this._maybeReplaceContext();
+  _resumeInGesture() {
     const ctx = this.ctx;
     if (!ctx || ctx.state === "closed") return;
-    if (this._speakerProved) {
-      if (contextNeedsResume(ctx)) void ctx.resume();
-      return;
-    }
-    if (contextNeedsResume(ctx)) void ctx.resume();
-    this._primeSpeaker();
-  }
-
-  /**
-   * Finger is up. Retry only if the press never started a proof.
-   * A running context that still has no proof is suspended for the next press.
-   */
-  _unlockOnLift() {
-    if (!this._audible) return;
-    const ctx = this.ctx;
-    if (!ctx || ctx.state === "closed" || this._speakerProved) return;
-    if (this._proofPending) return;
-    if (contextNeedsResume(ctx)) {
-      void ctx.resume();
-      this._primeSpeaker();
-      return;
-    }
-    if (ctx.state === "running") {
-      this._proofMisses += 1;
-      void ctx.suspend().catch(() => {});
-    }
-  }
-
-  /** Clear a master event that was written while currentTime was frozen at 0. */
-  _applyProvedOutput() {
-    if (!this._master || !this.ctx) return;
-    const amount = Number(this._outputAmount);
-    const target = this._outputOpen * (Number.isFinite(amount) ? amount : 1);
-    this._master.gain.cancelScheduledValues(this.ctx.currentTime);
-    this._master.gain.value = target;
+    if (!contextNeedsResume(ctx)) return;
+    const pending = ctx.resume();
+    if (pending && typeof pending.catch === "function") pending.catch(() => {});
   }
 
   /**
@@ -999,16 +943,31 @@ export class EchoScapeAudioEngine {
   _restartSuspendedBeds() {
     for (const corner of CORNERS) {
       const stem = this.stems[corner];
-      if (!stem?.bedAwaitingProof) continue;
+      if (!stem?.bedAwaitingRun) continue;
       const buffer = stem.bedBuffer;
       if (!buffer) {
-        stem.bedAwaitingProof = false;
+        stem.bedAwaitingRun = false;
         continue;
       }
       const offset = this._bedPosition(stem);
-      stem.bedAwaitingProof = false;
+      stem.bedAwaitingRun = false;
       this._stopBufferBed(stem);
       this._adoptBufferBed(corner, buffer, offset);
+    }
+  }
+
+  /** Call play() on every bed element that is not yet covered by a buffer voice or pile notes. */
+  _pokeBeds() {
+    for (const corner of CORNERS) {
+      if (this.stems[corner]?.bedVoice || this.stems[corner]?.notes?.length) continue;
+      const wired = this.stems[corner]?.el;
+      if (wired) {
+        this._playEl(wired, true);
+        continue;
+      }
+      let pending = this._pendingEls[corner];
+      if (!pending) pending = this._openPendingBed(corner);
+      if (pending) this._playEl(pending, false);
     }
   }
 
@@ -1017,66 +976,39 @@ export class EchoScapeAudioEngine {
    * Chrome allows AudioBuffer splashes once the context is running, but it
    * blocks HTML media playback unless play() is called in the gesture itself.
    * Call this synchronously from the press or key, before any await.
-   * `lift` is the backup when the press was ignored. It does not suspend a hold.
+   * Press and lift do the same work; the second is a no-op when the first took.
    * @param {boolean} [fromUser]
    * @param {'press' | 'lift'} [phase]
    */
   beginGesture(fromUser = false, phase = "press") {
     const AC = window.AudioContext || window.webkitAudioContext;
-    if ((!this.ctx || this.ctx.state === "closed") && AC) this.ctx = new AC();
-    this._watchContext(this.ctx);
-    const poke = () => {
-      for (const corner of CORNERS) {
-        if (this.stems[corner]?.bedVoice || this.stems[corner]?.notes?.length) continue;
-        const wired = this.stems[corner]?.el;
-        if (wired) {
-          this._playEl(wired, true);
-          continue;
-        }
-        let pending = this._pendingEls[corner];
-        if (!pending) pending = this._openPendingBed(corner);
-        if (pending) this._playEl(pending, false);
-      }
-    };
+    if ((!this.ctx || this.ctx.state === "closed") && AC) {
+      this.ctx = new AC();
+      this._watchContext(this.ctx);
+    }
     if (!fromUser) {
-      poke();
+      this._pokeBeds();
       return;
     }
-    const now = performance.now();
-    if (phase === "lift") {
-      this._fingerDown = false;
-      if (now - this._gestureAt < 700) {
-        if (this._liftHandled) return;
-        this._liftHandled = true;
-      } else {
-        this._gestureAt = now;
-        this._pressPrimed = false;
-        this._liftHandled = true;
-      }
-      poke();
-      this._unlockOnLift();
-      return;
-    }
-    this._fingerDown = true;
-    if (this._pressPrimed && now - this._gestureAt < 700) {
-      poke();
-      return;
-    }
-    this._gestureAt = now;
-    this._pressPrimed = true;
-    this._liftHandled = false;
-    poke();
-    this._unlockOnPress();
+    this._unlocked = true;
+    this._pokeBeds();
+    if (this._audible) this._resumeInGesture();
+    this._trace(phase, {});
   }
 
   /**
-   * The page is visible again. Resume waits for the next real press.
+   * The page is visible again. A resume needs the next real press on iOS.
    * A context that stayed running only restarts beds that actually paused.
    */
   async recoverForeground() {
     const ctx = this.ctx;
     if (!ctx || ctx.state === "closed") return;
-    if (this._speakerProved && ctx.state === "running") this._pokePausedBeds();
+    this._trace("foreground", {});
+    if (ctx.state === "running") {
+      this._pokePausedBeds();
+      return;
+    }
+    if (this._unlocked && this._audible) await this._safeResume(1000);
   }
 
   /** Restart bed elements that stopped while the context kept running. */
@@ -2288,8 +2220,19 @@ export class EchoScapeAudioEngine {
     // file first drops the gesture, and Chrome then leaves the bed paused.
     if (navigator.userActivation?.isActive) this._playEl(el, false);
 
-    await waitForMedia(el);
+    // The stem is wired before the file arrives. A MediaElementSource does not
+    // need loaded data, and the element starts on its own once it has some.
+    // Waiting here used to hold the whole engine until iOS let the file load,
+    // which on a phone is not before the first tap.
     delete this._pendingEls[corner];
+    void waitForMedia(el).then(
+      () => {
+        this._trace("bed-ready", { corner, readyState: el.readyState });
+      },
+      (err) => {
+        console.warn("[EchoScape audio] bed media", corner, err?.message || err);
+      }
+    );
 
     const source = this.ctx.createMediaElementSource(el);
     const gain = this.ctx.createGain();
@@ -2463,13 +2406,14 @@ export class EchoScapeAudioEngine {
     this._primeStrikeBuffer(corner, url);
 
     if (this._audible && !isCoarseTouch()) el.volume = 1;
-    if (opts.resume !== false && (this.running || navigator.userActivation?.isActive)) {
-      try {
-        el.muted = !this._audible;
-        if (el.paused) await el.play();
-      } catch (err) {
-        console.warn("[EchoScape audio] stem play failed:", err?.message || err);
-        if (this.running) throw err;
+    if (opts.resume !== false && (this._unlocked || navigator.userActivation?.isActive)) {
+      el.muted = !this._audible;
+      // Not awaited: before the first tap, autoplay policy rejects this and the
+      // next trusted press calls play() again. A rejection must not abort the load.
+      if (el.paused) {
+        el.play().catch((err) => {
+          console.warn("[EchoScape audio] stem play deferred:", corner, err?.message || err);
+        });
       }
     }
   }
@@ -2534,8 +2478,8 @@ export class EchoScapeAudioEngine {
     const target = this._outputOpen * amount;
     const t = this.ctx.currentTime;
     this._master.gain.cancelScheduledValues(t);
-    // Until the speaker is proved, currentTime stays 0 and a scheduled event sticks.
-    if (!this._speakerProved) {
+    // Until the clock moves, a scheduled event at 0 sticks. Assign the value instead.
+    if (!this._clockLive()) {
       this._master.gain.value = target;
       return;
     }
@@ -2995,16 +2939,24 @@ export class EchoScapeAudioEngine {
     this._strikeToken[corner] = next;
     this._strikeBuffers[corner] = null;
     const ctx = this.ctx;
-    fetch(url)
-      .then((res) => {
-        if (!res.ok) throw new Error(String(res.status));
-        return res.arrayBuffer();
+    // Beds decode one after another, in corner order, so the first can sound
+    // before the network is split four ways. The fetch needs no user gesture,
+    // so on a phone the first bed is usually decoded before the first tap.
+    const chain = this._bedFetchChain || Promise.resolve();
+    this._bedFetchChain = chain
+      .then(() => {
+        if (this._strikeToken[corner] !== next || this.ctx !== ctx) return null;
+        return fetch(url).then((res) => {
+          if (!res.ok) throw new Error(String(res.status));
+          return res.arrayBuffer();
+        });
       })
-      .then((raw) => ctx.decodeAudioData(raw))
+      .then((raw) => (raw ? ctx.decodeAudioData(raw) : null))
       .then((buffer) => {
-        if (this._strikeToken[corner] !== next) return;
+        if (!buffer || this._strikeToken[corner] !== next || this.ctx !== ctx) return;
         this._strikeBuffers[corner] = buffer;
         this._adoptBufferBed(corner, buffer);
+        this._trace("bed-decoded", { corner, seconds: Number(buffer.duration.toFixed(1)) });
       })
       .catch((err) => {
         console.warn("[EchoScape audio] strike buffer", corner, err?.message || err);
@@ -3053,8 +3005,9 @@ export class EchoScapeAudioEngine {
     stem.bedBuffer = buffer;
     stem.bedStartedAt = when;
     stem.bedOffset = pos;
-    // A start() while the context is suspended is discarded. Start once more after proof.
-    stem.bedAwaitingProof = !this._speakerProved || this.ctx.state !== "running";
+    // A start() while the context is suspended is discarded on iOS.
+    // `_onContextRunning` starts it once more when the browser reports running.
+    stem.bedAwaitingRun = this.ctx.state !== "running";
     voice.onended = () => {
       if (stem.bedVoice !== voice) return;
       stem.bedVoice = null;

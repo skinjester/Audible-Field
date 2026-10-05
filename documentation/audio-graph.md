@@ -166,7 +166,7 @@ The helper `writeParam` also avoids writing the same value every frame. Repeated
 
 ## Start, pause, and sample replacement
 
-`start` builds the graph and loads the four beds one at a time. It starts audible beds before restoring WAM preferences. `app.js` places start, resume, and suspend work on one promise chain so those operations cannot overlap.
+`start` builds the graph and wires the four stems at once. The engine counts as running as soon as the graph exists; it does not wait for the bed files. Each bed joins the mix when its media element has data, and switches to a decoded loop when its buffer arrives. Buffers download one after another, in corner order. `start` restores WAM preferences after that. `app.js` places start, resume, and suspend work on one promise chain so those operations cannot overlap.
 
 `suspendPlayback` pauses media elements and suspends the `AudioContext` without destroying the graph. Falling Blocks uses it when field audio is turned off.
 
@@ -174,13 +174,19 @@ The helper `writeParam` also avoids writing the same value every frame. Repeated
 
 ## iOS Safari
 
-A tap resumes the context and starts notes immediately. `playSplash`, pile notes, and rise grains do not wait for a later timer.
+Safari creates every `AudioContext` suspended and ignores `resume()` and `play()` outside a trusted gesture. So the page always starts silent, and the first press, touch, or key must do the unlock. That gesture does exactly what the browser asks for, synchronously and without waiting on anything: `play()` on each bed element and `resume()` on the context. There is no second, engine-side unlock. `ctx.state` is the only truth about whether audio is running.
 
-`glideParam` schedules a ramp only after `currentTime` has moved. Until then it assigns `.value`. A ramp scheduled at a frozen `currentTime` of 0 never applies, which is what silenced the first Emit after the morning of October 4.
+The engine listens for the context's `statechange`. When the browser reports `running`, it restarts any decoded bed that was started while the clock was frozen and calls `play()` on any element that is still paused. No timer, proof buffer, or retry counter stands between the tap and the sound. An earlier design gated resume, beds, and the master gain on a proof buffer finishing; when that proof did not finish, the first tap turned the context on and only the second tap made sound.
 
-The press also starts a short quiet proof buffer straight to the speakers. When that buffer ends, the engine snaps the master gain and restarts any bed that was started while the context was suspended. It does not stop the notes the tap already started.
+Before the first trusted gesture, `resume()` is skipped unless it is inside user activation. Safari leaves an earlier resume pending forever.
 
-`pagehide` and a hidden document clear that proof. The next press resumes playback.
+`glideParam`, the master trim, and the output gate schedule a ramp only after `currentTime` has moved. Until then they assign `.value`. A ramp scheduled at a frozen `currentTime` of 0 never applies.
+
+`playSplash`, pile notes, and rise grains start on the tap itself. They do not wait for a later timer.
+
+### On-device trace
+
+Open the page with `?trace` to show a trace panel at the bottom of the screen. Each press, lift, context state change, bed load, and bed decode prints one line with `ctx`, `currentTime`, `running`, `unlocked`, and the four beds' element or buffer state. The same lines go to the console.
 
 ### Avoid the iPhone silent switch
 

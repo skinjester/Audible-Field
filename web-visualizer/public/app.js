@@ -1,11 +1,11 @@
 import { STEM_CORNERS, notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=109";
+import { audioEngine } from "./audio-engine.js?v=110";
 import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=49";
-import * as fallingTab from "./falling-tab.js?v=115";
-import * as visualizeTab from "./visualize-tab.js?v=40";
+import * as diagnostics from "./diagnostics.js?v=50";
+import * as fallingTab from "./falling-tab.js?v=116";
+import * as visualizeTab from "./visualize-tab.js?v=41";
 
 const statusEl = document.querySelector(".status");
 const audioLineEls = {
@@ -218,7 +218,8 @@ function audioKindLabel() {
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return "Audio off";
   if (audioStarting) return "Loading audio";
   if (!audioEngine.running) return "Audio off";
-  if (audioEngine.ctx && !audioEngine.speakerProved()) return "Tap for audio";
+  // Before the first trusted press, the browser holds the context suspended.
+  if (audioEngine.ctx && !audioEngine.unlocked() && !audioEngine.outputRunning()) return "Tap for audio";
   // The header switch suspends the context. Keep the audio type, and grey it.
   if (audioEngine.isAudible()) {
     const state = audioEngine.ctx?.state;
@@ -479,7 +480,6 @@ function unlockBedsFromGesture(event, phase) {
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return;
   audioEngine.beginGesture(true, phase);
   if (phase === "press") void ensureBrowserAudio();
-  else if (audioEngine.takeGraphRestart()) void ensureBrowserAudio();
 }
 
 document.addEventListener("touchstart", (event) => unlockBedsFromGesture(event, "press"), true);
@@ -487,17 +487,49 @@ document.addEventListener("pointerdown", (event) => unlockBedsFromGesture(event,
 document.addEventListener("keydown", (event) => unlockBedsFromGesture(event, "press"), true);
 document.addEventListener("touchend", (event) => unlockBedsFromGesture(event, "lift"), true);
 document.addEventListener("click", (event) => unlockBedsFromGesture(event, "lift"), true);
-window.addEventListener("pagehide", () => {
-  audioEngine.forgetSpeakerProof();
-});
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "visible") {
-    audioEngine.forgetSpeakerProof();
-    return;
-  }
+  if (document.visibilityState !== "visible") return;
   if (!audioShouldBeAudible()) return;
   void audioEngine.recoverForeground();
 });
+
+/**
+ * On-screen audio trace for the phone, where there is no console.
+ * Open the page with `?trace` (or set localStorage "audible-field.trace" to "1").
+ * Every press, lift, context change, and bed event prints one line.
+ */
+function mountAudioTrace() {
+  let wanted = false;
+  try {
+    wanted = new URLSearchParams(location.search).has("trace") || localStorage.getItem("audible-field.trace") === "1";
+  } catch {
+    /* storage unavailable */
+  }
+  const lines = [];
+  const startedAt = performance.now();
+  let panel = null;
+  if (wanted) {
+    panel = document.createElement("pre");
+    panel.setAttribute("data-audio-trace", "");
+    panel.setAttribute("aria-hidden", "true");
+    panel.style.cssText =
+      "position:fixed;left:0;right:0;bottom:0;z-index:9999;margin:0;padding:6px 8px;max-height:38vh;overflow:hidden;" +
+      "font:11px/1.35 ui-monospace,Menlo,Consolas,monospace;color:#e8ffe8;background:rgba(0,0,0,.78);pointer-events:none;white-space:pre-wrap";
+    document.body.appendChild(panel);
+  }
+  audioEngine.onTrace = (event, facts) => {
+    const at = ((performance.now() - startedAt) / 1000).toFixed(2).padStart(6);
+    const rest = Object.entries(facts)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(" ");
+    const line = `${at} ${event.padEnd(11)} ${rest}`;
+    console.info("[EchoScape trace]", line);
+    if (!panel) return;
+    lines.push(line);
+    if (lines.length > 14) lines.shift();
+    panel.textContent = lines.join("\n");
+  };
+}
 
 async function runEnsureBrowserAudio() {
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return;
@@ -637,6 +669,7 @@ const deps = {
 diagnostics.initDiagnostics(deps);
 fallingTab.initFallingTab(deps);
 
+mountAudioTrace();
 if (!readAudioPref()) audioEngine.setAudible(false);
 bindAudioSwitch();
 mountUiScrolls();
