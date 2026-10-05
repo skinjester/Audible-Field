@@ -909,10 +909,11 @@ export class EchoScapeAudioEngine {
     this._proofTimer = window.setTimeout(() => {
       this._proofTimer = null;
       if (generation !== this._proofGeneration || this._speakerProved) return;
-      if (this._fingerDown || this._proofPending) return;
-      if (ctx.state !== "running" || this.ctx !== ctx) return;
+      if (this._fingerDown) return;
+      this._proofPending = false;
       this._proofMisses += 1;
-      void ctx.suspend().catch(() => {});
+      if (this.ctx !== ctx) return;
+      if (ctx.state === "running") void ctx.suspend().catch(() => {});
     }, 700);
   }
 
@@ -948,28 +949,32 @@ export class EchoScapeAudioEngine {
       if (contextNeedsResume(ctx)) void ctx.resume();
       return;
     }
-    if (contextNeedsResume(ctx)) void ctx.resume();
-    this._primeSpeaker();
+    this._resumeAndPrime(ctx);
   }
 
   /**
-   * Finger is up. Retry only if the press never started a proof.
-   * A running context that still has no proof is suspended for the next press.
+   * Finger is up. The press may have started a proof that never rendered.
+   * Lift is still a user gesture, so retry instead of waiting for another control.
    */
   _unlockOnLift() {
     if (!this._audible) return;
     const ctx = this.ctx;
     if (!ctx || ctx.state === "closed" || this._speakerProved) return;
-    if (this._proofPending) return;
+    this._resumeAndPrime(ctx);
+  }
+
+  _resumeAndPrime(ctx) {
+    if (!ctx || ctx.state === "closed" || this._speakerProved) return;
     if (contextNeedsResume(ctx)) {
-      void ctx.resume();
-      this._primeSpeaker();
-      return;
+      const pending = ctx.resume();
+      if (pending && typeof pending.then === "function") {
+        void pending.then(() => {
+          if (this._speakerProved || this.ctx !== ctx) return;
+          this._primeSpeaker();
+        }).catch(() => {});
+      }
     }
-    if (ctx.state === "running") {
-      this._proofMisses += 1;
-      void ctx.suspend().catch(() => {});
-    }
+    this._primeSpeaker();
   }
 
   /** Clear a master event that was written while currentTime was frozen at 0. */
@@ -1020,13 +1025,17 @@ export class EchoScapeAudioEngine {
     }
   }
 
-  /** True while the audio thread is actually advancing. */
-  _clockRunning() {
-    return !!this.ctx && this.ctx.state === "running";
+  /**
+   * True after a proof buffer has rendered and the audio thread is advancing.
+   * `state === "running"` is not enough: iOS can report that with currentTime
+   * still at 0, and a BufferSource started in that window is discarded.
+   */
+  _clockLive() {
+    return !!this.ctx && this._speakerProved && this.ctx.state === "running";
   }
 
   /**
-   * Smooth when the clock is moving. Assign the value while it is not.
+   * Smooth when the speaker is proved. Assign the value until then.
    * @param {AudioParam | null | undefined} param
    * @param {number} value
    * @param {number} tau
@@ -1035,7 +1044,7 @@ export class EchoScapeAudioEngine {
   _glide(param, value, tau, eps) {
     if (!this.ctx || !param) return;
     const now = this.ctx.currentTime;
-    glideParam(param, value, now, tau, eps, this._clockRunning());
+    glideParam(param, value, now, tau, eps, this._clockLive());
   }
 
   /** Beds started while the context was suspended never sound on iOS. Start them again. */
@@ -1089,7 +1098,10 @@ export class EchoScapeAudioEngine {
     if (phase === "lift") {
       this._fingerDown = false;
       if (now - this._gestureAt < 700) {
-        if (this._liftHandled) return;
+        if (this._liftHandled) {
+          if (!this._speakerProved) this._unlockOnLift();
+          return;
+        }
         this._liftHandled = true;
       } else {
         this._gestureAt = now;
@@ -1103,6 +1115,9 @@ export class EchoScapeAudioEngine {
     this._fingerDown = true;
     if (this._pressPrimed && now - this._gestureAt < 700) {
       poke();
+      // pointerdown and touchstart both fire on iOS. The first start() is often
+      // discarded because resume() has not taken yet. Skip only if already proved.
+      if (!this._speakerProved) this._unlockOnPress();
       return;
     }
     this._gestureAt = now;
@@ -2577,8 +2592,8 @@ export class EchoScapeAudioEngine {
     const target = this._outputOpen * amount;
     const t = this.ctx.currentTime;
     this._master.gain.cancelScheduledValues(t);
-    // A scheduled event at frozen currentTime 0 sticks until the clock moves.
-    if (this.ctx.state !== "running") {
+    // Until the speaker is proved, currentTime can stay 0 even when state is running.
+    if (!this._clockLive()) {
       this._master.gain.value = target;
       return;
     }
@@ -3334,7 +3349,7 @@ export class EchoScapeAudioEngine {
       const armed = i === 0 || nowMs - (stem.noteSeen.get(id) || nowMs) >= PILE_NOTE_ARM_MS;
       if (!existing?.voice && !armed) continue;
       keep.add(id);
-      if (!this._clockRunning()) {
+      if (!this._clockLive()) {
         if (existing?.voice) this._disposePileNote(existing);
         continue;
       }
@@ -3575,7 +3590,7 @@ export class EchoScapeAudioEngine {
     const stem = this.stems?.[atom.corner];
     const buffer = stem?.bedBuffer || this._strikeBuffers?.[atom.corner] || null;
     if (!buffer || !this.ctx || !this._splashOut) return null;
-    if (!this._clockRunning()) return null;
+    if (!this._clockLive()) return null;
     const slice = riseSlice(buffer, atom, seconds);
     const end = Math.min(buffer.duration, slice.offset + slice.duration);
     const start = Math.max(0, Math.min(slice.offset, Math.max(0, end - 0.02)));
@@ -3687,7 +3702,7 @@ export class EchoScapeAudioEngine {
       live.add(atom.id);
       const count = counts[atom.corner] || 1;
       let voice = this._riseVoices.get(atom.id);
-      if (voice && !this._clockRunning()) {
+      if (voice && !this._clockLive()) {
         this._disposeRiseVoice(voice);
         this._riseVoices.delete(atom.id);
         voice = null;
@@ -3800,7 +3815,7 @@ export class EchoScapeAudioEngine {
    */
   playSplash(hits) {
     if (!this.running || !this.ctx || !this._splashOut || !hits) return;
-    if (!this._clockRunning()) return;
+    if (!this._clockLive()) return;
     for (const corner of CORNERS) {
       const lives = hits[corner];
       if (!lives?.length) continue;

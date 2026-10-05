@@ -187,6 +187,8 @@ iOS Safari needs more than a normal call to `AudioContext.resume()`. A context c
 3. Calls `resume()` when the context is suspended or interrupted.
 4. Starts the proof sound.
 
+iOS often delivers both `pointerdown` and `touchstart` for one tap. The first `BufferSource.start` can be discarded because `resume()` has not taken yet. If the speaker is not yet proved, the second event retries instead of being ignored. The matching lift (`touchend` / `click`) also retries. A proof that never ends is treated as a miss after 700 milliseconds so `_proofPending` cannot deadlock until the user finds another control.
+
 Normal startup does not spend a resume attempt before the user touches the page.
 
 ### 2. Prove that audio rendered
@@ -196,7 +198,7 @@ The proof sound is 250 milliseconds of extremely quiet noise shaped by a smooth 
 The speaker is considered ready only when that buffer ends while the current context is still `running`. Until then:
 
 - The master level is assigned directly instead of scheduled against a frozen audio clock.
-- Stem gains, pile weight, Greyhole sends, and rise-grain controls use the same rule: `setTargetAtTime` only while `AudioContext.state` is `running`. Otherwise the engine cancels any stuck timeline and assigns `.value`.
+- Stem gains, pile weight, Greyhole sends, and rise-grain controls use the same rule: `setTargetAtTime` only after the speaker is proved and `AudioContext.state` is `running`. `running` alone is not enough: Safari can report it with `currentTime` still at 0.
 - Buffer beds are marked for restart because iOS may discard a source started while the context was suspended.
 - Looping rise grains and pile notes are not started until the context is running. A source started while suspended is dropped so the next frame can recreate it. The proof buffer is the only `BufferSource` started before that.
 
