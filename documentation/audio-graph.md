@@ -189,7 +189,9 @@ iOS Safari needs more than a normal call to `AudioContext.resume()`. A context c
 
 iOS often delivers both `pointerdown` and `touchstart` for one tap. The first `BufferSource.start` can be discarded because `resume()` has not taken yet. If the speaker is not yet proved, the second event retries instead of being ignored. The matching lift (`touchend` / `click`) also retries. A proof that never ends is treated as a miss after 700 milliseconds so `_proofPending` cannot deadlock until the user finds another control.
 
-Normal startup does not spend a resume attempt before the user touches the page.
+Normal startup does not construct an `AudioContext` on iPhone or iPad. `start()` waits until the first trusted tap creates the context, then `resume()`, a zero-gain oscillator, and the proof buffer all run on that tap. A context created on page load will resume and still stay silent; selecting another control later appeared to "fix" it because that tap was the first construction inside a gesture.
+
+Desktop still creates the context at startup.
 
 ### 2. Prove that audio rendered
 

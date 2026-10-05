@@ -1,11 +1,11 @@
 import { STEM_CORNERS, notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=105";
+import { audioEngine } from "./audio-engine.js?v=106";
 import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=45";
-import * as fallingTab from "./falling-tab.js?v=111";
-import * as visualizeTab from "./visualize-tab.js?v=36";
+import * as diagnostics from "./diagnostics.js?v=46";
+import * as fallingTab from "./falling-tab.js?v=112";
+import * as visualizeTab from "./visualize-tab.js?v=37";
 
 const statusEl = document.querySelector(".status");
 const audioLineEls = {
@@ -478,13 +478,15 @@ function unlockBedsFromGesture(event, phase) {
   if (!audioEngine.isAudible()) return;
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return;
   audioEngine.beginGesture(true, phase);
-  if (audioEngine.takeGraphRestart()) void ensureBrowserAudio();
+  if (phase === "press") void ensureBrowserAudio();
+  else if (audioEngine.takeGraphRestart()) void ensureBrowserAudio();
 }
 
 document.addEventListener("touchstart", (event) => unlockBedsFromGesture(event, "press"), true);
 document.addEventListener("pointerdown", (event) => unlockBedsFromGesture(event, "press"), true);
 document.addEventListener("keydown", (event) => unlockBedsFromGesture(event, "press"), true);
 document.addEventListener("touchend", (event) => unlockBedsFromGesture(event, "lift"), true);
+document.addEventListener("pointerup", (event) => unlockBedsFromGesture(event, "lift"), true);
 document.addEventListener("click", (event) => unlockBedsFromGesture(event, "lift"), true);
 window.addEventListener("pagehide", () => {
   audioEngine.forgetSpeakerProof();

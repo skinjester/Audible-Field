@@ -194,6 +194,14 @@ function isCoarseTouch() {
   return coarse && touch;
 }
 
+/** Safari on iPhone/iPad: AudioContext must be constructed inside a trusted tap. */
+function isWebKitIOS() {
+  const ua = navigator.userAgent || "";
+  if (/iPhone|iPod/.test(ua)) return true;
+  if (/iPad/.test(ua)) return true;
+  return navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1;
+}
+
 /** Safari uses "interrupted" after a lock, a call, or a backgrounded tab. */
 function contextNeedsResume(ctx) {
   return !!ctx && (ctx.state === "suspended" || ctx.state === "interrupted");
@@ -592,6 +600,10 @@ export class EchoScapeAudioEngine {
     this._watchedCtx = null;
     /** True after a proof buffer has finished while the context was running. */
     this._speakerProved = false;
+    /** This AudioContext was constructed inside a trusted tap. */
+    this._ctxBornInGesture = false;
+    /** @type {Function[]} */
+    this._contextWaiters = [];
     /** Proof buffers that never finished. Two failures replace the context. */
     this._proofMisses = 0;
     this._proofGeneration = 0;
@@ -649,7 +661,14 @@ export class EchoScapeAudioEngine {
       throw new Error(this.error);
     }
 
-    if (!this.ctx || this.ctx.state === "closed") this.ctx = new AC();
+    if (!this.ctx || this.ctx.state === "closed") {
+      if (isWebKitIOS()) await this._waitForGestureContext();
+      else this.ctx = new AC();
+    }
+    if (!this.ctx || this.ctx.state === "closed") {
+      this.error = "Tap for audio.";
+      throw new Error(this.error);
+    }
     this._watchContext(this.ctx);
     // Outside a user gesture, some Chromium builds never resolve resume().
     await this._safeResume(300);
@@ -934,6 +953,7 @@ export class EchoScapeAudioEngine {
     this.stems = {};
     this._pendingEls = {};
     this.ctx = new AC();
+    this._ctxBornInGesture = true;
     this._watchContext(this.ctx);
     void old.close().catch(() => {});
     this._restartRequested = true;
@@ -974,6 +994,7 @@ export class EchoScapeAudioEngine {
         }).catch(() => {});
       }
     }
+    this._clickUnlock(ctx);
     this._primeSpeaker();
   }
 
@@ -1065,6 +1086,52 @@ export class EchoScapeAudioEngine {
   }
 
   /**
+   * Safari will not play through an AudioContext constructed on page load.
+   * Create it on the tap, and wake anyone waiting in start().
+   */
+  _openContextInGesture() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (this.ctx && this.ctx.state !== "closed") {
+      this._watchContext(this.ctx);
+      return;
+    }
+    this.ctx = new AC();
+    this._ctxBornInGesture = true;
+    this._watchContext(this.ctx);
+    const waiters = this._contextWaiters;
+    this._contextWaiters = [];
+    for (let i = 0; i < waiters.length; i += 1) waiters[i]();
+  }
+
+  _waitForGestureContext() {
+    if (this.ctx && this.ctx.state !== "closed") return Promise.resolve();
+    return new Promise((resolve) => {
+      if (this.ctx && this.ctx.state !== "closed") {
+        resolve();
+        return;
+      }
+      this._contextWaiters.push(resolve);
+    });
+  }
+
+  /** Zero-gain oscillator. start() in the tap is what WebKit keys off, not the proof noise. */
+  _clickUnlock(ctx) {
+    if (!ctx || ctx.state === "closed") return;
+    try {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(0);
+      osc.stop((Number.isFinite(ctx.currentTime) ? ctx.currentTime : 0) + 0.05);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
    * Start the looping beds during a user gesture.
    * Chrome allows AudioBuffer splashes once the context is running, but it
    * blocks HTML media playback unless play() is called in the gesture itself.
@@ -1074,8 +1141,8 @@ export class EchoScapeAudioEngine {
    * @param {'press' | 'lift'} [phase]
    */
   beginGesture(fromUser = false, phase = "press") {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if ((!this.ctx || this.ctx.state === "closed") && AC) this.ctx = new AC();
+    if (fromUser) this._openContextInGesture();
+    else if (!this.ctx || this.ctx.state === "closed") return;
     this._watchContext(this.ctx);
     const poke = () => {
       for (const corner of CORNERS) {
