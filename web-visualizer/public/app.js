@@ -662,7 +662,7 @@ function mountAudioTrace() {
   panel.style.cssText =
     "pointer-events:auto;align-self:stretch;width:min(100%,22rem);box-sizing:border-box;" +
     "display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:8px;" +
-    "font:10px/1.3 ui-monospace,Menlo,Consolas,monospace;color:#e8ffe8;background:rgba(0,0,0,.72);text-align:left";
+    "font:10px/1.3 \"Segoe UI\",system-ui,sans-serif;color:#e8ffe8;background:rgba(0,0,0,.72);text-align:left";
   const bar = document.createElement("div");
   bar.style.cssText = "display:flex;gap:8px;align-items:center";
   const status = document.createElement("span");
