@@ -817,9 +817,8 @@ export class EchoScapeAudioEngine {
     const line = {
       ctx: this.ctx?.state || "none",
       t: this.ctx ? Number(this.ctx.currentTime.toFixed(2)) : 0,
-      running: this.running,
-      unlocked: this._unlocked,
-      audible: this._audible,
+      run: this.running ? 1 : 0,
+      unl: this._unlocked ? 1 : 0,
       beds: beds.join(" "),
       ...facts,
     };
@@ -920,8 +919,30 @@ export class EchoScapeAudioEngine {
     const ctx = this.ctx;
     if (!ctx || ctx.state === "closed") return;
     if (!contextNeedsResume(ctx)) return;
+    const act = navigator.userActivation?.isActive;
+    const id = (this._resumeSeq = (this._resumeSeq || 0) + 1);
+    this._trace("resume", { id, act });
     const pending = ctx.resume();
-    if (pending && typeof pending.catch === "function") pending.catch(() => {});
+    if (!pending || typeof pending.then !== "function") return;
+    let settled = false;
+    pending.then(
+      () => {
+        settled = true;
+        this._trace("resumed", { id, ctx: ctx.state });
+      },
+      (err) => {
+        settled = true;
+        this._trace("resume-err", { id, err: err?.name || String(err) });
+      }
+    );
+    window.setTimeout(() => {
+      if (!settled) this._trace("resume-hang", { id, ctx: ctx.state });
+    }, 1500);
+  }
+
+  /** Public trace entry for the page layer. */
+  trace(event, facts) {
+    this._trace(event, facts);
   }
 
   /**
@@ -993,7 +1014,6 @@ export class EchoScapeAudioEngine {
     this._unlocked = true;
     this._pokeBeds();
     if (this._audible) this._resumeInGesture();
-    this._trace(phase, {});
   }
 
   /**
@@ -2474,7 +2494,11 @@ export class EchoScapeAudioEngine {
     const amount = Math.min(1, Math.max(0, Number(amount01) || 0));
     if (this._outputAmount === amount) return;
     this._outputAmount = amount;
+    const wasAudible = this._outputAudible;
     this._outputAudible = amount > 0.0001;
+    if (wasAudible !== this._outputAudible) {
+      this._trace(this._outputAudible ? "master-open" : "master-shut", { amount: Number(amount.toFixed(2)) });
+    }
     const target = this._outputOpen * amount;
     const t = this.ctx.currentTime;
     this._master.gain.cancelScheduledValues(t);
@@ -3700,6 +3724,18 @@ export class EchoScapeAudioEngine {
    */
   playSplash(hits) {
     if (!this.running || !this.ctx || !this._splashOut || !hits) return;
+    // The first few landings are traced so a silent phone shows whether sound was asked for.
+    if ((this._splashTraced || 0) < 4) {
+      this._splashTraced = (this._splashTraced || 0) + 1;
+      const corners = CORNERS.filter((c) => hits[c]?.length);
+      this._trace("splash", {
+        corners: corners.join("+") || "none",
+        buf: corners.map((c) => (this._strikeBuffers?.[c] ? 1 : 0)).join(""),
+        master: Number((this._master?.gain?.value ?? 0).toFixed(3)),
+        gate: Number((this._gate?.gain?.value ?? 0).toFixed(2)),
+        mode: this.splashMode,
+      });
+    }
     for (const corner of CORNERS) {
       const lives = hits[corner];
       if (!lives?.length) continue;

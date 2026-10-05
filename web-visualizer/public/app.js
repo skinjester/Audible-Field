@@ -1,5 +1,5 @@
 import { STEM_CORNERS, notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=110";
+import { audioEngine } from "./audio-engine.js?v=111";
 import { gamepadInput } from "./gamepad-input.js?v=19";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
@@ -476,15 +476,30 @@ function enqueueAudio(task) {
 
 function unlockBedsFromGesture(event, phase) {
   if (!event.isTrusted) return;
-  if (!audioEngine.isAudible()) return;
-  if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return;
+  const facts = {
+    ev: event.type,
+    act: navigator.userActivation?.isActive ?? "n/a",
+    tab: activeTab,
+  };
+  if (!audioEngine.isAudible()) {
+    audioEngine.trace(`${phase}-skip`, { ...facts, why: "switch-off" });
+    return;
+  }
+  if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) {
+    audioEngine.trace(`${phase}-skip`, { ...facts, why: "field-audio-off" });
+    return;
+  }
+  audioEngine.trace(phase, facts);
   audioEngine.beginGesture(true, phase);
   if (phase === "press") void ensureBrowserAudio();
 }
 
+// Press: the earliest trusted event. Lift: the events the HTML spec counts as
+// activation triggers (pointerup, touchend, click), in case the press was not one.
 document.addEventListener("touchstart", (event) => unlockBedsFromGesture(event, "press"), true);
 document.addEventListener("pointerdown", (event) => unlockBedsFromGesture(event, "press"), true);
 document.addEventListener("keydown", (event) => unlockBedsFromGesture(event, "press"), true);
+document.addEventListener("pointerup", (event) => unlockBedsFromGesture(event, "lift"), true);
 document.addEventListener("touchend", (event) => unlockBedsFromGesture(event, "lift"), true);
 document.addEventListener("click", (event) => unlockBedsFromGesture(event, "lift"), true);
 document.addEventListener("visibilitychange", () => {
@@ -512,9 +527,10 @@ function mountAudioTrace() {
     panel = document.createElement("pre");
     panel.setAttribute("data-audio-trace", "");
     panel.setAttribute("aria-hidden", "true");
+    // Newest line on top, so the latest event is never clipped off the bottom.
     panel.style.cssText =
-      "position:fixed;left:0;right:0;bottom:0;z-index:9999;margin:0;padding:6px 8px;max-height:38vh;overflow:hidden;" +
-      "font:11px/1.35 ui-monospace,Menlo,Consolas,monospace;color:#e8ffe8;background:rgba(0,0,0,.78);pointer-events:none;white-space:pre-wrap";
+      "position:fixed;left:0;right:0;bottom:0;z-index:9999;margin:0;padding:6px 8px;max-height:40vh;overflow:hidden;" +
+      "font:10px/1.3 ui-monospace,Menlo,Consolas,monospace;color:#e8ffe8;background:rgba(0,0,0,.8);pointer-events:none;white-space:pre-wrap";
     document.body.appendChild(panel);
   }
   audioEngine.onTrace = (event, facts) => {
@@ -525,8 +541,8 @@ function mountAudioTrace() {
     const line = `${at} ${event.padEnd(11)} ${rest}`;
     console.info("[EchoScape trace]", line);
     if (!panel) return;
-    lines.push(line);
-    if (lines.length > 14) lines.shift();
+    lines.unshift(line);
+    if (lines.length > 16) lines.pop();
     panel.textContent = lines.join("\n");
   };
 }
