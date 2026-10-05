@@ -341,7 +341,7 @@ function paintAudioHealth() {
     const voiceLine = splitVoiceLine(health.lines.voices);
     setAudioValue("splashes", `${health.splashesPerSec}/s`);
     setAudioValue("flow", `${health.flowAtomsPerSec} atoms/s`);
-    setAudioValue("voices", String(health.voices.total));
+    setAudioValue("voices", String(health.voices.audibleTotal ?? health.voices.total));
     setAudioValue("rising", health.rising == null ? "—" : String(health.rising));
     setAudioLine("voiceDetail", voiceLine.detail);
     if (audioLineEls.voiceDetail) audioLineEls.voiceDetail.hidden = !voiceLine.detail;
@@ -353,7 +353,7 @@ function paintAudioHealth() {
     sparkAt = now;
     rememberSpark("splashes", health.splashesPerSec);
     rememberSpark("flow", health.flowAtomsPerSec);
-    rememberSpark("voices", health.voices.total);
+    rememberSpark("voices", health.voices.audibleTotal ?? health.voices.total);
     rememberSpark("rising", health.rising);
     paintSpark("splashes");
     paintSpark("flow");
@@ -559,6 +559,9 @@ function syncAudioGate(now) {
 if (audioGateEl instanceof HTMLElement) {
   // Release events carry activation; the capture listeners above already called resume().
   const onLift = (event) => {
+    // A lift on the GitHub link is navigation, not the start gesture. Leave it
+    // alone so the tap still becomes a click on the link.
+    if (event.target instanceof Element && event.target.closest("a[href]")) return;
     audioEngine.trace("gate-tap", { ev: event.type, act: navigator.userActivation?.isActive ?? "n/a" });
     if (audioGateTitle) audioGateTitle.textContent = "Starting…";
     // A hold instead of a tap carries no activation. Ask again rather than sit on "Starting…".

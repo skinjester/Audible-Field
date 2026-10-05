@@ -132,6 +132,48 @@ function greyholeIdle(level, feedback, wet) {
   return level <= 0.001 && feedback <= 0.02 && wet <= 0.02;
 }
 
+/**
+ * A voice counts as audible only when its effective gain is above this.
+ * ~0.003 is roughly -50 dB: well below a quiet pile, well above a faded stem.
+ */
+const AUDIBLE_EPS = 0.003;
+
+/**
+ * Last requested value for a gain, not the lagging sampled `.value`.
+ * Falls back to `.value` for voices whose envelopes are scheduled directly
+ * (splash/flake one-shots) instead of through writeParam/glideParam.
+ */
+function readAudioParam(param, fallback = 0) {
+  if (!param) return fallback;
+  const target = paramTarget.get(param);
+  if (typeof target === "number") return target;
+  const written = paramWritten.get(param);
+  if (typeof written === "number") return written;
+  const value = param.value;
+  return Number.isFinite(value) ? value : fallback;
+}
+
+/** Strict gate for stem gains: untracked still reads the live `.value`. */
+function stemGainOpen(stem) {
+  if (!stem?.gain?.gain) return false;
+  return readAudioParam(stem.gain.gain) > AUDIBLE_EPS;
+}
+
+/**
+ * Gate for a voice-local gain. Tracked gains (beds via _glide, pile notes
+ * after their first glide, rise loops) must clear the threshold. Untracked
+ * gains belong to directly-scheduled envelopes (fresh pile notes, splash,
+ * flakes) whose release timer already bounds their life, so they count
+ * while alive instead of flickering on a stale `.value`.
+ */
+function voiceGainOpen(gainNode) {
+  if (!gainNode?.gain) return false;
+  const param = gainNode.gain;
+  if (paramTarget.has(param)) return paramTarget.get(param) > AUDIBLE_EPS;
+  if (paramWritten.has(param)) return paramWritten.get(param) > AUDIBLE_EPS;
+  return true;
+}
+
 /** Equal-power dry/wet. `mix` 0 is fully dry. */
 function equalPowerFade(mix) {
   const m = clamp01(mix);
@@ -1125,8 +1167,30 @@ export class EchoScapeAudioEngine {
    * How the live sources break down, and the cap on rising-atom voices.
    * Drift, loose, thread, and halo keep the loudest 8 loops.
    * Flake and shed share a cap of 16 overlapping one-shots.
+   *
+   * `total` / `liveTotal` count every running source (graph workload).
+   * `audible` / `audibleTotal` count only voices above AUDIBLE_EPS with the
+   * output gate open (what the listener can actually hear). The `beds`,
+   * `piles`, `splash`, and `rise` breakdowns are the audible ones, so the
+   * graph and debug line read as "voices I can hear".
    */
   _voiceDetail() {
+    const liveTotal = this._liveVoiceCount();
+    // Master gate closed (header switch or empty-grid trim): nothing is audible.
+    if (this._audible === false || this._outputAudible === false) {
+      const flakeMode = this.riseMode === "flake" || this.riseMode === "shed";
+      return {
+        total: liveTotal,
+        liveTotal,
+        audible: 0,
+        audibleTotal: 0,
+        beds: 0,
+        piles: 0,
+        splash: 0,
+        rise: 0,
+        riseCap: flakeMode ? RISE_FLAKE_CAP : RISE_LOOP_CAP,
+      };
+    }
     let beds = 0;
     let piles = 0;
     let splash = 0;
@@ -1135,12 +1199,15 @@ export class EchoScapeAudioEngine {
     for (const corner of CORNERS) {
       const stem = this.stems[corner];
       if (!stem) continue;
-      if (stem.bedVoice) beds += 1;
-      else if (stem.el && !stem.el.paused) beds += 1;
+      const stemOpen = stemGainOpen(stem);
+      if (stemOpen) {
+        if (stem.bedVoice) beds += 1;
+        else if (stem.el && !stem.el.paused) beds += 1;
+      }
       const notes = stem.notes;
       if (notes) {
         for (let i = 0; i < notes.length; i += 1) {
-          if (notes[i].voice) piles += 1;
+          if (notes[i].voice && stemOpen && voiceGainOpen(notes[i].gain)) piles += 1;
         }
       }
       const strikes = stem.strikes;
@@ -1148,29 +1215,35 @@ export class EchoScapeAudioEngine {
         for (let i = 0; i < strikes.length; i += 1) {
           const strike = strikes[i];
           if (strike.released) continue;
-          if (strike.voice) splash += 1;
-          if (strike.sparkVoice) splash += 1;
+          if (strike.voice && voiceGainOpen(strike.gain)) splash += 1;
+          if (strike.sparkVoice && strike.sparkGain && voiceGainOpen(strike.sparkGain)) splash += 1;
+          else if (strike.sparkVoice && !strike.sparkGain) splash += 1;
         }
       }
     }
     if (this._riseVoices) {
       for (const voice of this._riseVoices.values()) {
-        if (voice && !voice.released && voice.voice) rise += 1;
+        if (voice && !voice.released && voice.voice && voiceGainOpen(voice.gain)) rise += 1;
       }
     }
     if (this._riseFlakes) {
       for (let i = 0; i < this._riseFlakes.length; i += 1) {
         const flake = this._riseFlakes[i];
-        if (flake && !flake.released && flake.voice) flakes += 1;
+        if (flake && !flake.released && flake.voice && voiceGainOpen(flake.gain)) flakes += 1;
       }
     }
     const flakeMode = this.riseMode === "flake" || this.riseMode === "shed";
+    const riseAudible = flakeMode ? flakes : rise;
+    const audibleTotal = beds + piles + splash + riseAudible;
     return {
-      total: this._liveVoiceCount(),
+      total: liveTotal,
+      liveTotal,
+      audible: audibleTotal,
+      audibleTotal,
       beds,
       piles,
       splash,
-      rise: flakeMode ? flakes : rise,
+      rise: riseAudible,
       riseCap: flakeMode ? RISE_FLAKE_CAP : RISE_LOOP_CAP,
     };
   }
@@ -1190,7 +1263,8 @@ export class EchoScapeAudioEngine {
   /**
    * Snapshot for the header and Diagnostics readout.
    * Splashes and flow are simulation events over the last second.
-   * Voices are sources currently in the graph.
+   * `audible` is voices above the audibility threshold; `sources` is the
+   * live graph workload (beds keep running at gain 0 so piles fade in fast).
    */
   audioHealth() {
     const now = performance.now();
@@ -1200,7 +1274,8 @@ export class EchoScapeAudioEngine {
     const splashesPerSec = this._eventRate(this._splashMarks, now);
     const flowAtomsPerSec = this._eventRate(this._flowMarks, now);
     const voiceBits = [
-      `Audio voices ${voices.total}`,
+      `Audible voices ${voices.audibleTotal}`,
+      `sources ${voices.liveTotal}`,
       `rise ${voices.rise}/${voices.riseCap}`,
     ];
     if (voices.piles > 0) voiceBits.push(`piles ${voices.piles}`);
