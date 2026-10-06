@@ -2098,8 +2098,9 @@ html.is-yaw-zoom * {
   100% { transform: translateX(-50%) scale(1); }
 }
 
-@media (pointer: coarse) {
-  .falling-yaw {
+@media (pointer: coarse), (hover: none), (max-width: 720px) {
+  .falling-yaw,
+  .falling-yaw-pivot {
     display: none;
   }
 }
