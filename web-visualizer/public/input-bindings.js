@@ -22,6 +22,7 @@
  *
  * Left stick and D-pad move the emitter across the plane above the grid.
  * At the edge of the view they scroll the plane, so the whole surface stays reachable.
+ * Right stick turns the plane about the center of the view.
  *
  * Keyboard:
  *   X hold          → emit
@@ -108,7 +109,7 @@ export const inputBindings = {
     audioToggle: "square",
     cyclePrev: "l1",
     cycleNext: "r1",
-    /** Right-stick X → surface yaw rate (rad/s at full deflection). */
+    /** Right-stick X → yaw about the view center (rad/s at full deflection). */
     orbitStickRate: 1.15,
     /** Right-stick Y → zoom exp rate. */
     zoomStickRate: 1.15,

@@ -3,7 +3,7 @@ import { audioEngine } from "./audio-engine.js?v=115";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=78";
 import { inputBindings } from "./input-bindings.js?v=16";
-import { fallingInput } from "./falling-input.js?v=65";
+import { fallingInput } from "./falling-input.js?v=66";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -1364,10 +1364,21 @@ function placeEmitterAtPointer(pointer, liftPx = 0) {
   placeEmitterAtWorld(hit.x, hit.z);
 }
 
-/** Yaw the playfield around the emitter target. Mouse and stick use this. */
+/** Yaw the playfield around the emitter. Pointer yaw uses this. */
 function rotateSurface(deltaYaw) {
   if (!surface || !deltaYaw) return;
   setSurfaceYaw(surface.rotation.y + deltaYaw);
+}
+
+/** Yaw the playfield around the ground point at the center of the view. The emitter stays on its cell. */
+function yawAboutView(deltaYaw) {
+  if (!surface || !deltaYaw) return;
+  const focus = groundFocus();
+  if (!focus) return;
+  if (!yawAbout(deltaYaw, { x: focus.x, z: focus.z })) return;
+  setAimFromWorld();
+  syncEmitter();
+  syncSceneBackground();
 }
 
 function setSurfaceYaw(nextYaw) {
@@ -2224,6 +2235,7 @@ function applyInput(dt) {
   if (dragging || twisting) stickAimPointer = null;
 
   // A bare move places the emitter on the emit-height plane. Right-drag slides the grid.
+  // Pointer yaw turns about the emitter. Right-stick yaw turns about the view center.
   // One finger pans the field under the screen-center emitter. Two fingers yaw
   // about that point. Stick and D-pad move the emitter and are not snapped back
   // to a resting cursor, and a screen finger does not pull a stick aim to center.
@@ -2236,6 +2248,7 @@ function applyInput(dt) {
   if (twisting && !stickHoldsAim) twistGround(frame.touchTwist);
   if (stickAim) moveAim(frame.aimStickX, frame.aimStickY, dt);
   if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
+  if (frame.viewYaw) yawAboutView(frame.viewYaw);
   if (frame.zoomFactor !== 1) zoomCamera(frame.zoomFactor);
   if (!stickHoldsAim && frame.touchZoom !== 1) pinEmitterAtScreenCenter();
 

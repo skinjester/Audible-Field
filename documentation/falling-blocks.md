@@ -58,7 +58,7 @@ Moving the Emit control before the hold finishes restarts the 280 ms wait. The s
 | Cross or DualSense touchpad click | Pour the widest full-size clump |
 | Left trigger | Pour one half-size stream |
 | Right trigger | Pour a pressure-sensitive stream from narrow to wide |
-| Right stick left / right | Turn the plane |
+| Right stick left / right | Turn the plane about the center of the view |
 | Right stick up / down | Zoom |
 | L1 / R1 | Previous / next material |
 | Circle | Clear the field |
@@ -76,7 +76,7 @@ After the brush size changes, the footprint waits about 0.16 seconds before emit
 
 Atoms are 0.25 world units wide on a 16-unit plane. The camera stays at a 60-degree downward angle. Its default distance is 30, with a range from 10 to 60.
 
-Turning and sliding move the plane beneath the emitter. The camera does not orbit freely.
+Pointer yaw and a two-finger twist turn the plane beneath the emitter. Right-stick yaw turns it about the center of the view, and the emitter stays on its cell. Sliding moves the plane beneath the emitter. The camera does not orbit freely.
 
 The ground and sky stay near black. Each quadrant has a numbered label and the name of its current sample along one edge. Turning the plane moves those labels, but camera direction does not change stem loudness.
 

@@ -33,6 +33,7 @@ const EMIT_POINTER_DOUBT_MS = 700;
  *   analog: number,
  *   curveInvert: boolean,
  *   orbitDelta: number,
+ *   viewYaw: number,
  *   touchTwist: {
  *     a0: { x: number, y: number },
  *     b0: { x: number, y: number },
@@ -326,12 +327,14 @@ export class FallingInput {
     const rx = mergeAxis(axis(mixer?.rightX), padRx);
     const ry = mergeAxis(axis(mixer?.rightY), padRy);
     let orbitDelta = this._orbitAccum;
+    let viewYaw = 0;
     let zoomFactor = this._zoomAccum;
     this._orbitAccum = 0;
     this._zoomAccum = 1;
 
     if (dt > 0) {
-      if (rx) orbitDelta += -rx * g.orbitStickRate * dt;
+      // Pointer yaw stays on orbitDelta. Stick yaw is a separate gesture.
+      if (rx) viewYaw += -rx * g.orbitStickRate * dt;
       if (ry) zoomFactor *= Math.exp(-ry * g.zoomStickRate * dt);
     }
 
@@ -434,6 +437,7 @@ export class FallingInput {
       curveInvert,
       ltSingle,
       orbitDelta,
+      viewYaw,
       touchTwist: screen.twist,
       touchPan: screen.pan,
       touchActive: screen.active,
