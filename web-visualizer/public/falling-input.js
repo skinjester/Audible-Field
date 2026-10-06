@@ -879,6 +879,7 @@ export class FallingInput {
    * @param {PointerEvent} event
    */
   _onPointerDevice(event) {
+    if (event.type === "pointerdown") this._claimEmitPointer(event);
     const type = event.pointerType;
     if (type !== "mouse" && type !== "pen" && type !== "touch") return;
     if (event.type === "pointermove" && type !== "touch" && !event.movementX && !event.movementY) return;
@@ -989,10 +990,21 @@ export class FallingInput {
    * @param {Event} event
    */
   _onBlockBrowserGesture(event) {
-    if (event.type === "touchstart" && isEmitTarget(event.target)) {
-      const touch = event.changedTouches?.[0];
-      if (touch && this._emitTouchId == null) this._emitTouchId = touch.identifier;
-      if (event.cancelable) event.preventDefault();
+    if (event.type === "touchstart" || event.type === "touchmove") {
+      const touches = event.changedTouches;
+      if (touches) {
+        for (const touch of touches) {
+          if (event.type === "touchmove") {
+            if (touch.identifier !== this._emitTouchId) continue;
+            this._slideEmit(touch.clientY);
+            continue;
+          }
+          if (!this._emitUnderPoint(touch.clientX, touch.clientY)) continue;
+          if (this._emitTouchId == null) this._emitTouchId = touch.identifier;
+          if (!this._emitHeldDown) this._beginEmitAt(touch.clientY);
+          if (event.cancelable) event.preventDefault();
+        }
+      }
     }
     if (!event.cancelable) return;
     const target = event.target;
@@ -1120,6 +1132,7 @@ export class FallingInput {
 
   _onPointerMove(event) {
     if (event.pointerType === "touch") {
+      if (event.pointerId === this._emitPointerId) return;
       this._screenTouch.pointerMove(event);
       event.preventDefault();
       return;
@@ -1155,6 +1168,7 @@ export class FallingInput {
 
   _onPointerDown(event) {
     if (event.pointerType === "touch") {
+      if (event.pointerId === this._emitPointerId) return;
       this._screenTouch.pointerDown(event);
       event.preventDefault();
       this._canvas?.setPointerCapture?.(event.pointerId);
@@ -1194,6 +1208,7 @@ export class FallingInput {
 
   _onPointerUp(event) {
     if (event.pointerType === "touch") {
+      if (event.pointerId === this._emitPointerId) return;
       this._screenTouch.pointerUp(event);
       event.preventDefault();
       return;
@@ -1217,6 +1232,7 @@ export class FallingInput {
 
   _onPointerCancel(event) {
     if (event?.pointerType === "touch") {
+      if (event.pointerId === this._emitPointerId) return;
       this._screenTouch.pointerUp(event);
       return;
     }
@@ -1393,11 +1409,76 @@ export class FallingInput {
   }
 
   /**
+   * A finger already on the field makes the browser deliver the next touch to
+   * the canvas. If that contact is actually on Emit, pour with it and leave
+   * the view gesture on the other fingers.
+   * @param {PointerEvent} event
+   */
+  _claimEmitPointer(event) {
+    if (event.pointerType !== "touch") return;
+    if (isEmitTarget(event.target)) return;
+    if (!this._emitUnderPoint(event.clientX, event.clientY)) return;
+    this._onEmitPointerDown(event);
+  }
+
+  /**
+   * The expanded hit area matches the button's invisible pad.
+   * @param {number} x
+   * @param {number} y
+   */
+  _emitUnderPoint(x, y) {
+    const btn = this._emitButton;
+    if (!btn || !btn.offsetParent) return false;
+    const hit = document.elementFromPoint(x, y);
+    if (isEmitTarget(hit)) return true;
+    // A finger already down makes some browsers report the canvas for a touch
+    // that is actually on Emit. Other controls keep their own hits.
+    const canvas = this._canvas;
+    if (!(hit instanceof Node) || (hit !== canvas && !canvas?.contains(hit))) return false;
+    const rect = btn.getBoundingClientRect();
+    const pad = 24;
+    return x >= rect.left - pad && x <= rect.right + pad && y >= rect.top - pad && y <= rect.bottom + pad;
+  }
+
+  /**
+   * @param {number} clientY
+   * @param {number} [pointerId]
+   */
+  _beginEmitAt(clientY, pointerId = -1) {
+    this._clearEmitPointerDoubt();
+    this._touchEmit = true;
+    this._emitHeldDown = true;
+    this._emitDragging = false;
+    this._emitPointerId = pointerId;
+    this._emitDownY = clientY;
+    this._emitSettleY = clientY;
+    this._emitOriginY = clientY - (0.5 - this._emitAnalog) * EMIT_DRAG_SPAN;
+    this._emitButton?.classList.add("is-pressed", "is-held");
+    this._lockEmitFill();
+    this._emitButton?.setAttribute("aria-pressed", "true");
+    this._paintEmitDrag();
+    this._trackEmitPointer(true);
+  }
+
+  /**
+   * @param {number} clientY
+   */
+  _slideEmit(clientY) {
+    if (!this._emitHeldDown) return;
+    if (!this._emitDragging && Math.abs(clientY - this._emitDownY) <= EMIT_DRAG_START) return;
+    if (!this._emitDragging) {
+      this._emitDragging = true;
+      this._emitSizeLatched = true;
+    }
+    this._emitAnalog = clamp(0.5 - (clientY - this._emitOriginY) / EMIT_DRAG_SPAN, 0, 1);
+    this._paintEmitDrag();
+  }
+
+  /**
    * @param {PointerEvent} event
    */
   _onEmitPointerDown(event) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    this._clearEmitPointerDoubt();
     if (this._emitHeldDown) {
       // A navigation gesture may have dropped the first contact. This press is the thumb again.
       this._touchEmit = true;
@@ -1410,20 +1491,9 @@ export class FallingInput {
       event.stopPropagation();
       return;
     }
-    this._touchEmit = true;
-    this._emitHeldDown = true;
-    this._emitDragging = false;
-    this._emitPointerId = event.pointerId;
-    this._emitDownY = event.clientY;
-    this._emitSettleY = event.clientY;
-    this._emitOriginY = event.clientY - (0.5 - this._emitAnalog) * EMIT_DRAG_SPAN;
-    this._emitButton?.classList.add("is-pressed", "is-held");
-    this._lockEmitFill();
-    this._emitButton?.setAttribute("aria-pressed", "true");
-    this._paintEmitDrag();
+    this._beginEmitAt(event.clientY, event.pointerId);
     event.preventDefault();
     event.stopPropagation();
-    this._trackEmitPointer(true);
     this._emitButton?.setPointerCapture?.(event.pointerId);
   }
 
@@ -1433,13 +1503,7 @@ export class FallingInput {
    */
   _onEmitPointerMove(event) {
     if (!this._emitHeldDown || event.pointerId !== this._emitPointerId) return;
-    if (!this._emitDragging && Math.abs(event.clientY - this._emitDownY) <= EMIT_DRAG_START) return;
-    if (!this._emitDragging) {
-      this._emitDragging = true;
-      this._emitSizeLatched = true;
-    }
-    this._emitAnalog = clamp(0.5 - (event.clientY - this._emitOriginY) / EMIT_DRAG_SPAN, 0, 1);
-    this._paintEmitDrag();
+    this._slideEmit(event.clientY);
   }
 
   /** Keep the button at the size it was dragged to. */
@@ -1468,11 +1532,9 @@ export class FallingInput {
     // some browsers they are the only release. Don't drop the hold immediately.
     if (event?.type === "pointercancel" || event?.type === "lostpointercapture") {
       if (event.pointerId != null && event.pointerId !== this._emitPointerId) return;
-      if (this._emitTouchId != null) {
-        this._armEmitPointerDoubt();
-        return;
-      }
-      this._endEmitGesture();
+      // A second finger makes Safari cancel the button press before touchstart
+      // can name that contact. Wait and see if the touch is still down.
+      this._armEmitPointerDoubt();
       return;
     }
     if (this._emitTouchId != null) return;
@@ -1517,12 +1579,12 @@ export class FallingInput {
   }
 
   _armEmitPointerDoubt() {
-    if (!this._emitHeldDown || this._emitTouchId == null) return;
+    if (!this._emitHeldDown) return;
     this._emitPointerUncertain = true;
     if (this._emitDoubtTimer) return;
     this._emitDoubtTimer = window.setTimeout(() => {
       this._emitDoubtTimer = 0;
-      if (!this._emitPointerUncertain || this._emitTouchId == null) return;
+      if (!this._emitPointerUncertain) return;
       this._endEmitGesture();
     }, EMIT_POINTER_DOUBT_MS);
   }
