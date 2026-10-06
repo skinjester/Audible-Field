@@ -2,8 +2,6 @@
 
 Audible Field is a browser instrument that turns activity in a three-dimensional field into sound. It began as a browser version of Mike Wilcox's Max/MSP patch for interactive audio installations at Colgate University. The browser version uses the Web Audio API and local [Web Audio Modules](https://www.webaudiomodules.org/) (WAMs) in place of the original VST effects.
 
-The repository keeps the older EchoScape name in some folder names and code identifiers. In this documentation, **Audible Field** means the browser application.
-
 ## Features
 
 - Four sound samples mixed across four corners

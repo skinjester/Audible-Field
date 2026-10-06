@@ -79,6 +79,13 @@ function writeParam(param, value, eps = 1e-4) {
   if (typeof prev === "number" && Math.abs(prev - value) <= eps) return;
   paramWritten.set(param, value);
   paramTarget.set(param, value);
+  // A Falling Blocks glide is still in the timeline. Leave it and the snap
+  // is pulled back toward the field, including down to silence.
+  try {
+    param.cancelScheduledValues(0);
+  } catch {
+    /* ignore */
+  }
   param.value = value;
 }
 
@@ -3259,6 +3266,44 @@ export class EchoScapeAudioEngine {
   }
 
   /**
+   * Pile notes replace the looping bed. Bring that bed back when the notes end.
+   * Position is read first, while a pile voice is still the clock.
+   * @param {string} corner
+   */
+  _ensureBed(corner) {
+    const stem = this.stems[corner];
+    if (!stem || stem.bedVoice) return;
+    const buffer = stem.bedBuffer || this._strikeBuffers?.[corner] || null;
+    if (buffer) {
+      const offset = this._bedPosition(stem);
+      this._adoptBufferBed(corner, buffer, offset);
+      return;
+    }
+    const el = stem.el;
+    if (el?.paused) this._playEl(el, true);
+  }
+
+  /**
+   * Leave pile-note mode and play the quadrant bed at `rate`.
+   * @param {string} corner
+   * @param {number | null | undefined} rate
+   */
+  _releasePileNotesToBed(corner, rate) {
+    const stem = this.stems[corner];
+    if (!stem) return;
+    const next = this._clampRate(rate);
+    const el = stem.el;
+    if (el) {
+      if (el.preservesPitch !== false) el.preservesPitch = false;
+      if (Math.abs(el.playbackRate - next) > 0.002) el.playbackRate = next;
+    }
+    if (!stem.bedVoice) this._ensureBed(corner);
+    this._stopPileNotes(stem);
+    const voice = stem.bedVoice;
+    if (voice && Math.abs(voice.playbackRate.value - next) > 0.002) voice.playbackRate.value = next;
+  }
+
+  /**
    * One looping copy of the quadrant sample per connected pile.
    * @param {string} corner
    * @param {{ id: number, rate: number, share: number }[]} notes
@@ -3269,7 +3314,7 @@ export class EchoScapeAudioEngine {
     if (!stem.notes) stem.notes = [];
     const wanted = notes.filter((note) => note && note.id != null);
     if (!wanted.length) {
-      this._stopPileNotes(stem);
+      this._releasePileNotesToBed(corner, 1);
       stem.noteSeen?.clear();
       stem.noteGone?.clear();
       return;
@@ -3392,7 +3437,8 @@ export class EchoScapeAudioEngine {
   /**
    * Pitch each quadrant's bed.
    * An array of `{ id, rate, share }` is one note per connected pile.
-   * A number keeps the older single rate. Null returns every bed to its original pitch.
+   * A number keeps the older single rate. Null returns every bed to its original pitch
+   * and starts the looping bed again if pile notes had taken its place.
    * @param {{ tl?: number | { id: number, rate: number, share: number }[], tr?: number | { id: number, rate: number, share: number }[], bl?: number | { id: number, rate: number, share: number }[], br?: number | { id: number, rate: number, share: number }[] } | null} rates
    */
   setStemPitch(rates) {
@@ -3405,17 +3451,7 @@ export class EchoScapeAudioEngine {
         this._syncPileNotes(corner, raw);
         continue;
       }
-      this._stopPileNotes(stem);
-      const next = this._clampRate(raw);
-      const voice = stem.bedVoice;
-      if (voice) {
-        if (Math.abs(voice.playbackRate.value - next) > 0.002) voice.playbackRate.value = next;
-        continue;
-      }
-      const el = stem.el;
-      if (!el) continue;
-      if (el.preservesPitch !== false) el.preservesPitch = false;
-      if (Math.abs(el.playbackRate - next) > 0.002) el.playbackRate = next;
+      this._releasePileNotesToBed(corner, raw);
     }
   }
 

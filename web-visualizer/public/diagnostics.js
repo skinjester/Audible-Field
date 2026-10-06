@@ -14,7 +14,7 @@ import {
   state,
   STEM_CORNERS,
 } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=114";
+import { audioEngine } from "./audio-engine.js?v=115";
 import { DualsenseHid } from "./dualsense-hid.js?v=5";
 import { openStemDropdown } from "./sample-picker.js?v=19";
 import { openFxDropdown } from "./fx-picker.js?v=6";
@@ -1064,6 +1064,8 @@ export function syncDualsenseHidUi() {
 export function tickXyAudio() {
   if (!deps || !audioEngine.running) return;
   audioEngine.setStemPitch(null);
+  audioEngine.setPileBody(null, null);
+  audioEngine.setDiffuseGreyhole(null);
   audioEngine.setOutputLevel(1);
   audioEngine.setCameraPresence(0, 0);
   audioEngine.sync(state, controller);

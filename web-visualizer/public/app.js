@@ -1,11 +1,11 @@
 import { STEM_CORNERS, notify, tickMixer } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=114";
+import { audioEngine } from "./audio-engine.js?v=115";
 import { gamepadInput } from "./gamepad-input.js?v=20";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=60";
-import * as fallingTab from "./falling-tab.js?v=119";
-import * as visualizeTab from "./visualize-tab.js?v=51";
+import * as diagnostics from "./diagnostics.js?v=61";
+import * as fallingTab from "./falling-tab.js?v=120";
+import * as visualizeTab from "./visualize-tab.js?v=52";
 
 const statusEl = document.querySelector(".status");
 const audioLineEls = {
@@ -559,9 +559,6 @@ function syncAudioGate(now) {
 if (audioGateEl instanceof HTMLElement) {
   // Release events carry activation; the capture listeners above already called resume().
   const onLift = (event) => {
-    // A lift on the GitHub link is navigation, not the start gesture. Leave it
-    // alone so the tap still becomes a click on the link.
-    if (event.target instanceof Element && event.target.closest("a[href]")) return;
     audioEngine.trace("gate-tap", { ev: event.type, act: navigator.userActivation?.isActive ?? "n/a" });
     if (audioGateTitle) audioGateTitle.textContent = "Starting…";
     // A hold instead of a tap carries no activation. Ask again rather than sit on "Starting…".
