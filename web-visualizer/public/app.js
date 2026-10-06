@@ -549,6 +549,7 @@ function syncAudioGate(now) {
   if (gateShownOnce && now - gateBlockedSince < 400) return;
   if (audioGateEl.hidden) {
     audioGateEl.hidden = false;
+    audioGateEl.classList.toggle("is-resume", gateShownOnce);
     if (audioGateTitle) audioGateTitle.textContent = gateShownOnce ? "Tap to resume sound" : "Tap to begin";
     audioEngine.trace("gate-show", { again: gateShownOnce ? 1 : 0 });
     gateShownOnce = true;

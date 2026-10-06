@@ -76,11 +76,12 @@ img {
 }
 
 .app {
+  --app-pad-x: clamp(12px, 1.6vw, 24px);
   width: min(100%, 1680px);
   max-width: 1680px;
   height: 100dvh;
   margin: 0 auto;
-  padding: 12px clamp(12px, 1.6vw, 24px) 12px;
+  padding: 12px var(--app-pad-x) 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -343,6 +344,13 @@ h1 {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* The playfield meets the viewport. Header and tabs keep the page inset. */
+[data-panel="falling-blocks"] {
+  width: calc(100% + var(--app-pad-x) * 2);
+  margin-left: calc(var(--app-pad-x) * -1);
+  margin-right: calc(var(--app-pad-x) * -1);
 }
 
 /* Visualize uses the same shell chrome as Diagnostics; only the panel fills. */
@@ -1534,6 +1542,9 @@ dd {
 }
 
 [data-panel="falling-blocks"] .viz-canvas-wrap {
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
   container: falling-stage / inline-size;
   /* Common ancestor of the field and Emit. Without this, a thumb plus a
      dragging finger is a page pinch, and the browser cancels the thumb. */
@@ -2887,7 +2898,8 @@ body:not(.has-dualsense) .pad-glyph {
 
 @media (max-height: 860px) and (min-width: 1180px) {
   .app {
-    padding: 8px 12px 10px;
+    --app-pad-x: 12px;
+    padding: 8px var(--app-pad-x) 10px;
     gap: 8px;
   }
 
@@ -2931,7 +2943,8 @@ body:not(.has-dualsense) .pad-glyph {
 
 @media (max-width: 720px) {
   .app {
-    padding: 8px 10px 10px;
+    --app-pad-x: 10px;
+    padding: 8px var(--app-pad-x) 10px;
     gap: 8px;
   }
 
@@ -3368,7 +3381,7 @@ body:not(.has-dualsense) .pad-glyph {
   z-index: 60;
   display: grid;
   place-items: center;
-  padding: 32px 24px;
+  padding: 36px 28px;
   background: radial-gradient(900px 600px at 50% 30%, #181818 0%, rgba(8, 8, 8, 0.97) 70%);
   touch-action: manipulation;
   -webkit-touch-callout: none;
@@ -3385,9 +3398,17 @@ body:not(.has-dualsense) .pad-glyph {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  max-width: 18rem;
+  width: min(26rem, 100%);
+  max-width: 100%;
+  min-width: 0;
   text-align: center;
+}
+
+.start-screen-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
 }
 
 .start-screen-kicker {
@@ -3417,6 +3438,107 @@ body:not(.has-dualsense) .pad-glyph {
   line-height: 1.35;
   letter-spacing: 0.01em;
   color: var(--muted);
+}
+
+.start-help {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: clamp(18px, 6vw, 40px);
+  width: 100%;
+  min-width: 0;
+  margin: 0 0 clamp(44px, 7vh, 72px);
+  padding: 0;
+  list-style: none;
+}
+
+.start-screen.is-resume .start-help {
+  display: none;
+}
+
+.start-help li {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+}
+
+.start-help-icon {
+  width: 52px;
+  height: 58px;
+  display: block;
+  flex: 0 0 auto;
+}
+
+.start-help-line,
+.start-help-mark {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2px;
+}
+
+.start-help-line {
+  stroke: #f4f4f4;
+}
+
+.start-help-mark {
+  stroke: #3ee98a;
+}
+
+.start-help-atom {
+  color: #f0a33a;
+}
+
+.start-help span {
+  max-width: 8.5rem;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+}
+
+@media (max-width: 420px) {
+  .start-help {
+    column-gap: 14px;
+  }
+
+  .start-help-icon {
+    width: 46px;
+    height: 52px;
+  }
+
+  .start-help span {
+    font-size: 11px;
+  }
+}
+
+@media (max-height: 700px) {
+  .start-help {
+    margin-bottom: 32px;
+  }
+
+  .start-help-icon {
+    width: 44px;
+    height: 50px;
+  }
+}
+
+@media (max-height: 520px) {
+  .start-help {
+    margin-bottom: 18px;
+  }
+
+  .start-help li {
+    gap: 6px;
+  }
+
+  .start-help-icon {
+    width: 36px;
+    height: 42px;
+  }
 }
 
 @keyframes start-screen-breathe {
