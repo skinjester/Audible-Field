@@ -35,7 +35,7 @@
       }
     </script>
   </head>
-  <body>
+  <body class="mode-falling-blocks">
     <main class="app">
       <header class="top">
         <div class="brand">
@@ -67,18 +67,18 @@
       </header>
 
       <nav class="tabs" aria-label="EchoScape views">
-        <button type="button" data-tab="diagnostics" aria-selected="true">
+        <button type="button" data-tab="diagnostics" aria-selected="false">
           Diagnostics
         </button>
         <button type="button" data-tab="visualize" aria-selected="false">
           Visualize
         </button>
-        <button type="button" data-tab="falling-blocks" aria-selected="false">
+        <button type="button" data-tab="falling-blocks" aria-selected="true">
           Falling Blocks
         </button>
       </nav>
 
-      <div data-panel="diagnostics">
+      <div data-panel="diagnostics" hidden>
         <div class="diag-top">
         <div class="mixer-col">
           <div class="pad-slot">
@@ -296,7 +296,7 @@
         </section>
       </div>
 
-      <div data-panel="falling-blocks" hidden>
+      <div data-panel="falling-blocks">
         <section class="viz-stage">
           <div class="viz-canvas-wrap">
             <canvas data-falling-canvas aria-label="Falling Blocks playfield"></canvas>
@@ -584,6 +584,6 @@
         <p class="start-screen-note">A field of falling material, heard where it settles.</p>
       </div>
     </div>
-    <script type="module" src="/app.js?v=502"></script>
+    <script type="module" src="/app.js?v=504"></script>
   </body>
 </html>

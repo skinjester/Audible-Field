@@ -25,18 +25,13 @@ async function launchBrowser() {
 }
 
 async function prepare(context, tab) {
-  await context.addInitScript((tabId) => {
-    try {
-      localStorage.setItem("audible-field.tab", tabId);
-    } catch {
-      /* ignore */
-    }
-  }, tab);
   await context.addInitScript({ content: SHIM });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (err) => errors.push(err.message));
-  await page.goto(BASE, { waitUntil: "domcontentloaded" });
+  const url = new URL(BASE);
+  if (tab) url.hash = tab;
+  await page.goto(url.href, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => {
     const probe = window.__audioLaunchProbe?.();
     const text = `${probe?.detail || ""} ${probe?.health || ""} ${probe?.status || ""}`;

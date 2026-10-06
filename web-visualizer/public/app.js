@@ -72,7 +72,6 @@ const tabButtons = document.querySelectorAll("[data-tab]");
 const panels = document.querySelectorAll("[data-panel]");
 
 const TAB_IDS = new Set(["diagnostics", "visualize", "falling-blocks"]);
-const TAB_STORAGE_KEY = "audible-field.tab";
 /** @type {"diagnostics" | "visualize" | "falling-blocks"} */
 let activeTab = "falling-blocks";
 let audioStarting = false;
@@ -843,29 +842,10 @@ function tick(now) {
   window.requestAnimationFrame(tick);
 }
 
-function storedTab() {
-  try {
-    const saved = localStorage.getItem(TAB_STORAGE_KEY);
-    if (TAB_IDS.has(saved)) return saved;
-  } catch {
-    /* storage unavailable */
-  }
-  return "falling-blocks";
-}
-
-function rememberTab(tabId) {
-  try {
-    localStorage.setItem(TAB_STORAGE_KEY, tabId);
-  } catch {
-    /* storage unavailable */
-  }
-}
-
 function setActiveTab(tabId) {
   if (!TAB_IDS.has(tabId)) return;
   const prevTab = activeTab;
   activeTab = tabId;
-  rememberTab(tabId);
 
   document.body.classList.toggle("mode-visualize", tabId === "visualize");
   document.body.classList.toggle("mode-falling-blocks", tabId === "falling-blocks");
@@ -916,5 +896,5 @@ diagnostics.renderDiagnostics();
 window.requestAnimationFrame(tick);
 void loadCatalogCounts();
 const hashTab = location.hash.replace("#", "");
-setActiveTab(TAB_IDS.has(hashTab) ? hashTab : storedTab());
+setActiveTab(TAB_IDS.has(hashTab) ? hashTab : "falling-blocks");
 void startBrowserAudio();
