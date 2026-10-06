@@ -1847,6 +1847,11 @@ dd {
   transition-timing-function: linear;
 }
 
+.falling-touch-emit.is-pouring .falling-emit-fill {
+  transform: scale(1);
+  transition: none;
+}
+
 .falling-emit-chevron {
   display: block;
   width: 22px;

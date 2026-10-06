@@ -617,7 +617,7 @@ export class FallingInput {
     this._emitDragging = false;
     this._emitSizeLatched = false;
     this._emitAnalog = 0.5;
-    this._emitButton?.classList.remove("is-pressed", "is-held", "is-charging", "is-filling");
+    this._emitButton?.classList.remove("is-pressed", "is-held", "is-charging", "is-filling", "is-pouring");
     this._emitButton?.setAttribute("aria-pressed", "false");
     this._screenTouch.reset();
     this._shiftHeld = false;
@@ -1327,13 +1327,16 @@ export class FallingInput {
     this._emitPointerId = -1;
     this._emitTouchId = null;
     this._emitSettleY = 0;
-    btn.classList.remove("is-pressed", "is-held", "is-charging", "is-filling");
+    btn.classList.remove("is-pressed", "is-held", "is-charging", "is-filling", "is-pouring");
     btn.setAttribute("aria-pressed", "false");
     this._emitAnalog = 0.5;
     const face = btn.querySelector(".falling-emit-face");
     if (face) face.style.transform = "";
     const fill = btn.querySelector(".falling-emit-fill");
-    if (fill) fill.style.transition = "";
+    if (fill) {
+      fill.style.transition = "";
+      fill.style.transform = "";
+    }
     btn.removeAttribute("data-drag");
     const dock = btn.parentElement;
     dock?.querySelector(".falling-emit-clump")?.classList.remove("is-lit");
@@ -1355,14 +1358,26 @@ export class FallingInput {
       this._emitHoldTimer = 0;
       if (!this._emitHeldDown) return;
       this._touchEmit = true;
+      this._lockEmitFill();
       this._emitButton?.setAttribute("aria-pressed", "true");
     }, EMIT_HOLD_MS);
+  }
+
+  /** Keep the circle full, with no grow animation, for the rest of the pour. */
+  _lockEmitFill() {
+    const btn = this._emitButton;
+    if (!btn) return;
+    btn.classList.add("is-pouring", "is-charging", "is-filling");
+    const fill = btn.querySelector(".falling-emit-fill");
+    if (!fill) return;
+    fill.style.transition = "none";
+    fill.style.transform = "scale(1)";
   }
 
   /** Snap the fill shut and grow it again for a fresh hold. */
   _kickEmitCharge() {
     const btn = this._emitButton;
-    if (!btn || !this._emitHeldDown || this._touchEmit) return;
+    if (!btn || !this._emitHeldDown || this._touchEmit || btn.classList.contains("is-pouring")) return;
     const fill = btn.querySelector(".falling-emit-fill");
     if (fill) fill.style.transition = "none";
     btn.classList.remove("is-charging");
@@ -1380,7 +1395,7 @@ export class FallingInput {
   /** Drop the charge. The circle scales back, then the ink class leaves. */
   _hideEmitFill() {
     const btn = this._emitButton;
-    btn?.classList.remove("is-charging");
+    btn?.classList.remove("is-charging", "is-pouring");
     const gen = ++this._emitFillGen;
     window.setTimeout(() => {
       if (gen !== this._emitFillGen) return;
@@ -1399,7 +1414,10 @@ export class FallingInput {
     this._emitTouchId = null;
     this._emitSettleY = 0;
     const fill = this._emitButton?.querySelector(".falling-emit-fill");
-    if (fill) fill.style.transition = "";
+    if (fill) {
+      fill.style.transition = "";
+      fill.style.transform = "";
+    }
     this._emitButton?.classList.remove("is-pressed", "is-held");
     this._emitButton?.setAttribute("aria-pressed", "false");
     this._hideEmitFill();
