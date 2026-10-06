@@ -7,10 +7,8 @@ import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=18";
 import { TouchInput } from "./touch-input.js?v=4";
 
-/** How long Emit must be held still before atoms pour. Matches --emit-hold. */
+/** Charge duration kept for the stylesheet. A press pours immediately. */
 const EMIT_HOLD_MS = 280;
-/** Movement that counts as still dragging, so the hold waits until the finger rests. */
-const EMIT_REST_PX = 6;
 /** Finger travel across the whole emitter size, from a single stream to a clump. */
 const EMIT_DRAG_SPAN = 36;
 /** Motion that starts a size change, so a tap can still pour at the current size. */
@@ -1351,18 +1349,6 @@ export class FallingInput {
     this._emitHoldTimer = 0;
   }
 
-  /** Circle grows while the finger rests. Motion before the pour restarts that wait. */
-  _armEmitHold() {
-    this._clearEmitHold();
-    this._emitHoldTimer = window.setTimeout(() => {
-      this._emitHoldTimer = 0;
-      if (!this._emitHeldDown) return;
-      this._touchEmit = true;
-      this._lockEmitFill();
-      this._emitButton?.setAttribute("aria-pressed", "true");
-    }, EMIT_HOLD_MS);
-  }
-
   /** Keep the circle full, with no grow animation, for the rest of the pour. */
   _lockEmitFill() {
     const btn = this._emitButton;
@@ -1372,24 +1358,6 @@ export class FallingInput {
     if (!fill) return;
     fill.style.transition = "none";
     fill.style.transform = "scale(1)";
-  }
-
-  /** Snap the fill shut and grow it again for a fresh hold. */
-  _kickEmitCharge() {
-    const btn = this._emitButton;
-    if (!btn || !this._emitHeldDown || this._touchEmit || btn.classList.contains("is-pouring")) return;
-    const fill = btn.querySelector(".falling-emit-fill");
-    if (fill) fill.style.transition = "none";
-    btn.classList.remove("is-charging");
-    if (fill) void fill.offsetWidth;
-    if (fill) fill.style.transition = "";
-    this._showEmitFill();
-    this._armEmitHold();
-  }
-
-  _showEmitFill() {
-    this._emitFillGen += 1;
-    this._emitButton?.classList.add("is-charging", "is-filling");
   }
 
   /** Drop the charge. The circle scales back, then the ink class leaves. */
@@ -1432,14 +1400,17 @@ export class FallingInput {
     this._clearEmitPointerDoubt();
     if (this._emitHeldDown) {
       // A navigation gesture may have dropped the first contact. This press is the thumb again.
+      this._touchEmit = true;
       this._emitPointerId = event.pointerId;
+      this._lockEmitFill();
+      this._emitButton?.setAttribute("aria-pressed", "true");
       this._trackEmitPointer(true);
       this._emitButton?.setPointerCapture?.(event.pointerId);
       event.preventDefault();
       event.stopPropagation();
       return;
     }
-    this._touchEmit = false;
+    this._touchEmit = true;
     this._emitHeldDown = true;
     this._emitDragging = false;
     this._emitPointerId = event.pointerId;
@@ -1447,7 +1418,8 @@ export class FallingInput {
     this._emitSettleY = event.clientY;
     this._emitOriginY = event.clientY - (0.5 - this._emitAnalog) * EMIT_DRAG_SPAN;
     this._emitButton?.classList.add("is-pressed", "is-held");
-    this._kickEmitCharge();
+    this._lockEmitFill();
+    this._emitButton?.setAttribute("aria-pressed", "true");
     this._paintEmitDrag();
     event.preventDefault();
     event.stopPropagation();
@@ -1468,10 +1440,6 @@ export class FallingInput {
     }
     this._emitAnalog = clamp(0.5 - (event.clientY - this._emitOriginY) / EMIT_DRAG_SPAN, 0, 1);
     this._paintEmitDrag();
-    if (this._touchEmit) return;
-    if (Math.abs(event.clientY - this._emitSettleY) < EMIT_REST_PX) return;
-    this._emitSettleY = event.clientY;
-    this._kickEmitCharge();
   }
 
   /** Keep the button at the size it was dragged to. */
