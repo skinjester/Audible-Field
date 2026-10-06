@@ -76,7 +76,7 @@ After the brush size changes, the footprint waits about 0.16 seconds before emit
 
 Atoms are 0.25 world units wide on a 16-unit plane. The camera stays at a 60-degree downward angle. Its default distance is 30, with a range from 10 to 60.
 
-Pointer yaw and a two-finger twist turn the plane beneath the emitter. Right-stick yaw turns it about the center of the view, and the emitter stays on its cell. Sliding moves the plane beneath the emitter. The camera does not orbit freely.
+Pointer yaw and right-stick yaw turn the plane about the center of the view, and the emitter stays on its cell. The Mouse turn setting can put pointer yaw back on the emitter. A two-finger twist turns the plane beneath the emitter. Sliding moves the plane beneath the emitter. The camera does not orbit freely.
 
 The ground and sky stay near black. Each quadrant has a numbered label and the name of its current sample along one edge. Turning the plane moves those labels, but camera direction does not change stem loudness.
 

@@ -1974,6 +1974,135 @@ dd {
   pointer-events: none;
 }
 
+.falling-yaw {
+  appearance: none;
+  position: absolute;
+  left: 50%;
+  top: 0;
+  z-index: 1;
+  display: block;
+  width: 72px;
+  height: 72px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--live);
+  font: inherit;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+
+.falling-yaw:focus-visible {
+  outline: none;
+}
+
+.falling-yaw svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.falling-yaw-disc {
+  fill: rgba(0, 0, 0, 0.8);
+}
+
+.falling-yaw-ring {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 1.25;
+}
+
+.falling-yaw-tick {
+  stroke: rgba(255, 255, 255, 0.82);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.falling-yaw:hover .falling-yaw-ring,
+.falling-yaw:focus-visible .falling-yaw-ring,
+.falling-yaw.is-dragging .falling-yaw-ring {
+  stroke: var(--live-line);
+}
+
+.falling-yaw:hover .falling-yaw-tick,
+.falling-yaw:focus-visible .falling-yaw-tick {
+  stroke: var(--live);
+}
+
+.falling-yaw.is-dragging .falling-yaw-tick {
+  opacity: 0;
+}
+
+.falling-yaw-gesture,
+.falling-yaw-readout {
+  opacity: 0;
+}
+
+.falling-yaw.is-dragging .falling-yaw-gesture,
+.falling-yaw.is-dragging .falling-yaw-readout {
+  opacity: 1;
+}
+
+.falling-yaw.is-fading .falling-yaw-gesture,
+.falling-yaw.is-fading .falling-yaw-readout {
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+[data-falling-yaw-wedge] {
+  fill: color-mix(in srgb, var(--live) 32%, transparent);
+}
+
+[data-falling-yaw-arc] {
+  fill: none;
+  stroke: var(--live);
+  stroke-width: 2.25;
+  stroke-linecap: round;
+}
+
+[data-falling-yaw-start] {
+  stroke: rgba(255, 255, 255, 0.9);
+  stroke-width: 1.25;
+  stroke-linecap: round;
+}
+
+[data-falling-yaw-now] {
+  stroke: var(--live);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.falling-yaw-readout {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+html.is-yaw-ring,
+html.is-yaw-ring * {
+  cursor: grabbing !important;
+}
+
+@media (pointer: coarse) {
+  .falling-yaw {
+    display: none;
+  }
+}
+
 .falling-icon-btn {
   appearance: none;
   display: grid;
@@ -2359,6 +2488,10 @@ dd {
   font-size: 12px;
   line-height: 1.35;
   min-height: calc(2em * 1.35);
+}
+
+.falling-yaw-pivot .falling-rise-hint {
+  min-height: 0;
 }
 
 .falling-diffuse-reverb {

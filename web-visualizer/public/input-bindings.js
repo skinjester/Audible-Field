@@ -10,6 +10,7 @@
  *   RMB drag             → slide the playfield
  *   Shift+RMB or Alt+RMB → yaw the playfield
  *   MMB drag             → yaw the playfield
+ *   top-center ring      → drag to yaw; double-click resets the heading
  *   wheel           → zoom
  *
  * Touchpad (DualSense, after Connect touchpad):
@@ -83,7 +84,7 @@ export const inputBindings = {
     /** A move on the view places the emitter. Right-drag slides the grid. */
     moveAimsEmitter: true,
     wheelZooms: true,
-    /** Yaw drag: radians of surface yaw per pixel (grid rotates under emitter). */
+    /** Yaw drag: radians of surface yaw per pixel. The Mouse turn setting picks the pivot. */
     orbitRadiansPerPx: 0.005,
     wheelZoomExp: 0.0012,
   },

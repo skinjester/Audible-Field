@@ -3,7 +3,7 @@ import { audioEngine } from "./audio-engine.js?v=115";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=78";
 import { inputBindings } from "./input-bindings.js?v=16";
-import { fallingInput } from "./falling-input.js?v=66";
+import { fallingInput } from "./falling-input.js?v=67";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -110,6 +110,8 @@ let sizeTries = 0;
 let lastNow = 0;
 let ruleAcc = 0;
 let cameraDist = CAMERA_DIST_DEFAULT;
+/** Pointer yaw about the view center. Off keeps that turn on the emitter. */
+let pointerYawAboutCenter = true;
 /** Fixed look-at. Zoom changes distance; the ground offset does the traveling. */
 const CAMERA_LOOK = new THREE.Vector3(0, 0.35, 0);
 /** Travel while closer than this fraction of the full-grid distance. */
@@ -1364,7 +1366,7 @@ function placeEmitterAtPointer(pointer, liftPx = 0) {
   placeEmitterAtWorld(hit.x, hit.z);
 }
 
-/** Yaw the playfield around the emitter. Pointer yaw uses this. */
+/** Pointer yaw, including the compass ring. The settings switch chooses the pivot. */
 function rotateSurface(deltaYaw) {
   if (!surface || !deltaYaw) return;
   setSurfaceYaw(surface.rotation.y + deltaYaw);
@@ -1384,7 +1386,9 @@ function yawAboutView(deltaYaw) {
 function setSurfaceYaw(nextYaw) {
   if (!surface) return;
   const applied = nextYaw - surface.rotation.y;
-  if (!yawAbout(applied, { x: aimWorldX, z: aimWorldZ })) return;
+  const focus = pointerYawAboutCenter ? groundFocus() : null;
+  const pivot = focus || { x: aimWorldX, z: aimWorldZ };
+  if (!yawAbout(applied, pivot)) return;
   setAimFromWorld();
   syncEmitter();
   syncSceneBackground();
@@ -2062,6 +2066,40 @@ function bindFpsUi() {
   });
 }
 
+const POINTER_YAW_CENTER_KEY = "echoscape.pointerYawAboutCenter";
+
+function bindYawPivotUi() {
+  const button = document.querySelector("[data-falling-yaw-center]");
+  const hint = document.querySelector("[data-falling-yaw-hint]");
+  if (!(button instanceof HTMLButtonElement) || button.dataset.bound === "1") return;
+  button.dataset.bound = "1";
+  const apply = (on) => {
+    pointerYawAboutCenter = on;
+    button.setAttribute("aria-checked", on ? "true" : "false");
+    button.title = on ? "Turn about the emitter" : "Turn about the center of the view";
+    if (hint instanceof HTMLElement) {
+      hint.textContent = on
+        ? "The plane turns about the center of the view."
+        : "The plane turns about the emitter.";
+    }
+    try {
+      sessionStorage.setItem(POINTER_YAW_CENTER_KEY, on ? "1" : "0");
+    } catch {
+      /* private mode */
+    }
+  };
+  let stored = "1";
+  try {
+    stored = sessionStorage.getItem(POINTER_YAW_CENTER_KEY) || "1";
+  } catch {
+    /* private mode */
+  }
+  apply(stored !== "0");
+  onFieldPress(button, () => {
+    apply(button.getAttribute("aria-checked") !== "true");
+  });
+}
+
 function bindSettingsUi() {
   const btn = document.querySelector("[data-falling-settings]");
   const panel = document.querySelector("[data-falling-settings-panel]");
@@ -2235,7 +2273,8 @@ function applyInput(dt) {
   if (dragging || twisting) stickAimPointer = null;
 
   // A bare move places the emitter on the emit-height plane. Right-drag slides the grid.
-  // Pointer yaw turns about the emitter. Right-stick yaw turns about the view center.
+  // Pointer yaw turns about the emitter unless the settings switch uses the view center.
+  // Right-stick yaw turns about the view center.
   // One finger pans the field under the screen-center emitter. Two fingers yaw
   // about that point. Stick and D-pad move the emitter and are not snapped back
   // to a resting cursor, and a screen finger does not pull a stick aim to center.
@@ -2248,6 +2287,7 @@ function applyInput(dt) {
   if (twisting && !stickHoldsAim) twistGround(frame.touchTwist);
   if (stickAim) moveAim(frame.aimStickX, frame.aimStickY, dt);
   if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
+  if (frame.yawHome) setSurfaceYaw(0);
   if (frame.viewYaw) yawAboutView(frame.viewYaw);
   if (frame.zoomFactor !== 1) zoomCamera(frame.zoomFactor);
   if (!stickHoldsAim && frame.touchZoom !== 1) pinEmitterAtScreenCenter();
@@ -4614,6 +4654,7 @@ export async function showFallingBlocks(nextCanvas, isCurrent = () => true) {
     bindAboutUi();
     bindFpsUi();
     bindSettingsUi();
+    bindYawPivotUi();
     bindClearUi();
     fallingInput.attach(canvas);
     installSimHook();

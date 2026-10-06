@@ -18,6 +18,67 @@ const EMIT_DRAG_SLIDE = 12;
  * Emit finger. Silence means the lift never arrived, so the hold ends.
  */
 const EMIT_POINTER_DOUBT_MS = 700;
+/** Ring artwork is a 72 viewBox. The wedge meets the stroke. */
+const YAW_RING_CX = 36;
+const YAW_RING_CY = 36;
+const YAW_RING_R = 27;
+const YAW_RING_TICK = 12;
+
+/**
+ * @param {number} angle
+ * @param {number} radius
+ */
+function yawPoint(angle, radius) {
+  return {
+    x: (YAW_RING_CX + radius * Math.cos(angle)).toFixed(2),
+    y: (YAW_RING_CY + radius * Math.sin(angle)).toFixed(2),
+  };
+}
+
+/**
+ * @param {number} angle
+ * @param {number} radius
+ */
+function yawPolar(angle, radius) {
+  const point = yawPoint(angle, radius);
+  return `${point.x} ${point.y}`;
+}
+
+/**
+ * @param {SVGLineElement | null} line
+ * @param {number} angle
+ */
+function setYawRay(line, angle) {
+  if (!line) return;
+  const inner = yawPoint(angle, YAW_RING_TICK);
+  const outer = yawPoint(angle, YAW_RING_R);
+  line.setAttribute("x1", inner.x);
+  line.setAttribute("y1", inner.y);
+  line.setAttribute("x2", outer.x);
+  line.setAttribute("y2", outer.y);
+}
+
+/**
+ * Shortest step from the previous ring angle to the next.
+ * @param {number} delta
+ */
+function wrapTurn(delta) {
+  const turn = Math.PI * 2;
+  let wrapped = delta % turn;
+  if (wrapped > Math.PI) wrapped -= turn;
+  if (wrapped < -Math.PI) wrapped += turn;
+  return wrapped;
+}
+
+/**
+ * Signed degrees for the drag. Positive is clockwise on the ring.
+ * @param {number} radians
+ */
+function formatYawDegrees(radians) {
+  const deg = Math.round((radians * 180) / Math.PI);
+  if (deg > 0) return `+${deg}°`;
+  return `${deg}°`;
+}
 
 /** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
 
@@ -33,6 +94,7 @@ const EMIT_POINTER_DOUBT_MS = 700;
  *   analog: number,
  *   curveInvert: boolean,
  *   orbitDelta: number,
+ *   yawHome: boolean,
  *   viewYaw: number,
  *   touchTwist: {
  *     a0: { x: number, y: number },
@@ -94,6 +156,24 @@ export class FallingInput {
     this._mouseLight = false;
     this._rightHeld = false;
     this._yawHeld = false;
+    this._yawRingHeld = false;
+    this._yawRingPointer = -1;
+    this._yawRingStart = 0;
+    this._yawRingAngle = 0;
+    this._yawRingTotal = 0;
+    this._yawHome = false;
+    /** @type {HTMLElement | null} */
+    this._yawRing = null;
+    /** @type {SVGPathElement | null} */
+    this._yawWedge = null;
+    /** @type {SVGPathElement | null} */
+    this._yawArc = null;
+    /** @type {SVGLineElement | null} */
+    this._yawStart = null;
+    /** @type {SVGLineElement | null} */
+    this._yawNow = null;
+    /** @type {HTMLElement | null} */
+    this._yawReadout = null;
     this._keyEmit = false;
     this._orbitAccum = 0;
     this._zoomAccum = 1;
@@ -147,6 +227,11 @@ export class FallingInput {
     this._onEmitContextMenu = this._onEmitContextMenu.bind(this);
     this._onPointerDevice = this._onPointerDevice.bind(this);
     this._onWheelDevice = this._onWheelDevice.bind(this);
+    this._onYawRingDown = this._onYawRingDown.bind(this);
+    this._onYawRingMove = this._onYawRingMove.bind(this);
+    this._onYawRingUp = this._onYawRingUp.bind(this);
+    this._onYawRingDblClick = this._onYawRingDblClick.bind(this);
+    this._onYawRingFade = this._onYawRingFade.bind(this);
   }
 
   /** True while PlayStation glyphs should be on screen. */
@@ -204,6 +289,7 @@ export class FallingInput {
     document.addEventListener("pointermove", this._onPointerDevice, true);
     document.addEventListener("wheel", this._onWheelDevice, { capture: true, passive: true });
     this._bindEmitButton();
+    this._bindYawRing();
   }
 
   detach() {
@@ -236,6 +322,8 @@ export class FallingInput {
     document.removeEventListener("pointerdown", this._onPointerDevice, true);
     document.removeEventListener("pointermove", this._onPointerDevice, true);
     document.removeEventListener("wheel", this._onWheelDevice, { capture: true });
+    this._releaseYawRing(false);
+    this._unbindYawRing();
     this._unbindEmitButton();
     dualsenseHid.routeTouchToMixer = true;
     if (document.pointerLockElement) document.exitPointerLock();
@@ -259,6 +347,10 @@ export class FallingInput {
     this._mouseLight = false;
     this._rightHeld = false;
     this._yawHeld = false;
+    this._yawRingHeld = false;
+    this._yawRingPointer = -1;
+    this._yawRingTotal = 0;
+    this._yawHome = false;
     this._keyEmit = false;
     this._orbitAccum = 0;
     this._zoomAccum = 1;
@@ -327,6 +419,8 @@ export class FallingInput {
     const rx = mergeAxis(axis(mixer?.rightX), padRx);
     const ry = mergeAxis(axis(mixer?.rightY), padRy);
     let orbitDelta = this._orbitAccum;
+    const yawHome = this._yawHome;
+    this._yawHome = false;
     let viewYaw = 0;
     let zoomFactor = this._zoomAccum;
     this._orbitAccum = 0;
@@ -437,6 +531,7 @@ export class FallingInput {
       curveInvert,
       ltSingle,
       orbitDelta,
+      yawHome,
       viewYaw,
       touchTwist: screen.twist,
       touchPan: screen.pan,
@@ -532,6 +627,7 @@ export class FallingInput {
    * @param {Event} [event]
    */
   _onPointerGone(event) {
+    if (event?.type === "blur") this._releaseYawRing(true);
     if (event?.type === "pointerleave" && this._emitHeldDown) {
       const pointerId = /** @type {PointerEvent} */ (event).pointerId;
       if (pointerId !== this._emitPointerId) this._screenTouch.pointerUp(/** @type {PointerEvent} */ (event));
@@ -1013,6 +1109,187 @@ export class FallingInput {
    */
   _onEmitContextMenu(event) {
     event.preventDefault();
+  }
+
+  _bindYawRing() {
+    const ring = document.querySelector("[data-falling-yaw]");
+    this._yawRing = ring instanceof HTMLElement ? ring : null;
+    const root = this._yawRing;
+    if (!root) return;
+    this._yawWedge = root.querySelector("[data-falling-yaw-wedge]");
+    this._yawArc = root.querySelector("[data-falling-yaw-arc]");
+    this._yawStart = root.querySelector("[data-falling-yaw-start]");
+    this._yawNow = root.querySelector("[data-falling-yaw-now]");
+    this._yawReadout = root.querySelector("[data-falling-yaw-readout]");
+    root.addEventListener("pointerdown", this._onYawRingDown);
+    root.addEventListener("pointermove", this._onYawRingMove);
+    root.addEventListener("pointerup", this._onYawRingUp);
+    root.addEventListener("pointercancel", this._onYawRingUp);
+    root.addEventListener("dblclick", this._onYawRingDblClick);
+    root.addEventListener("contextmenu", this._onContextMenu);
+    root.addEventListener("transitionend", this._onYawRingFade);
+  }
+
+  _unbindYawRing() {
+    const root = this._yawRing;
+    if (!root) return;
+    root.removeEventListener("pointerdown", this._onYawRingDown);
+    root.removeEventListener("pointermove", this._onYawRingMove);
+    root.removeEventListener("pointerup", this._onYawRingUp);
+    root.removeEventListener("pointercancel", this._onYawRingUp);
+    root.removeEventListener("dblclick", this._onYawRingDblClick);
+    root.removeEventListener("contextmenu", this._onContextMenu);
+    root.removeEventListener("transitionend", this._onYawRingFade);
+    root.classList.remove("is-dragging", "is-fading");
+    document.documentElement.classList.remove("is-yaw-ring");
+    this._yawRing = null;
+    this._yawWedge = null;
+    this._yawArc = null;
+    this._yawStart = null;
+    this._yawNow = null;
+    this._yawReadout = null;
+  }
+
+  /**
+   * Angle of the pointer around the ring center. 0 is screen-right, and
+   * clockwise increases it.
+   * @param {PointerEvent} event
+   */
+  _yawRingPointerAngle(event) {
+    const rect = this._yawRing.getBoundingClientRect();
+    return Math.atan2(
+      event.clientY - (rect.top + rect.height / 2),
+      event.clientX - (rect.left + rect.width / 2),
+    );
+  }
+
+  /**
+   * @param {PointerEvent} event
+   */
+  _onYawRingDown(event) {
+    if (event.pointerType === "touch" || event.button !== 0) return;
+    const root = this._yawRing;
+    if (!root) return;
+    this._yawRingHeld = true;
+    this._yawRingPointer = event.pointerId;
+    this._yawRingStart = this._yawRingPointerAngle(event);
+    this._yawRingAngle = this._yawRingStart;
+    this._yawRingTotal = 0;
+    root.classList.remove("is-fading");
+    root.classList.add("is-dragging");
+    document.documentElement.classList.add("is-yaw-ring");
+    this._paintYawRing();
+    root.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  }
+
+  /**
+   * @param {PointerEvent} event
+   */
+  _onYawRingMove(event) {
+    if (!this._yawRingHeld || event.pointerId !== this._yawRingPointer) return;
+    if (event.pointerType === "touch") return;
+    const angle = this._yawRingPointerAngle(event);
+    const delta = wrapTurn(angle - this._yawRingAngle);
+    this._yawRingAngle = angle;
+    if (!delta) return;
+    this._yawRingTotal += delta;
+    // The wedge follows the pointer. Positive surface yaw turns the other way
+    // on this camera, so clockwise drag applies a negative yaw.
+    this._orbitAccum += -delta;
+    this._paintYawRing();
+  }
+
+  /**
+   * @param {PointerEvent} event
+   */
+  _onYawRingUp(event) {
+    if (!this._yawRingHeld) return;
+    if (event.pointerId !== this._yawRingPointer && event.type !== "pointercancel") return;
+    this._releaseYawRing(Math.abs(this._yawRingTotal) > 1e-4);
+  }
+
+  /**
+   * @param {MouseEvent} event
+   */
+  _onYawRingDblClick(event) {
+    event.preventDefault();
+    this._orbitAccum = 0;
+    this._yawHome = true;
+    this._yawRingHeld = false;
+    this._yawRingPointer = -1;
+    this._yawRingTotal = 0;
+    document.documentElement.classList.remove("is-yaw-ring");
+    this._yawRing?.classList.remove("is-dragging", "is-fading");
+    this._clearYawRingPaint();
+  }
+
+  /**
+   * @param {TransitionEvent} event
+   */
+  _onYawRingFade(event) {
+    if (event.propertyName !== "opacity") return;
+    const root = this._yawRing;
+    if (!root || this._yawRingHeld || !root.classList.contains("is-fading")) return;
+    root.classList.remove("is-fading");
+    this._clearYawRingPaint();
+  }
+
+  /**
+   * @param {boolean} fade
+   */
+  _releaseYawRing(fade) {
+    if (!this._yawRingHeld && !this._yawRing?.classList.contains("is-dragging")) {
+      document.documentElement.classList.remove("is-yaw-ring");
+      return;
+    }
+    this._yawRingHeld = false;
+    this._yawRingPointer = -1;
+    document.documentElement.classList.remove("is-yaw-ring");
+    const root = this._yawRing;
+    if (!root) return;
+    root.classList.remove("is-dragging");
+    if (fade) root.classList.add("is-fading");
+    else {
+      root.classList.remove("is-fading");
+      this._clearYawRingPaint();
+    }
+  }
+
+  _paintYawRing() {
+    const total = this._yawRingTotal;
+    const start = this._yawRingStart;
+    const turn = Math.PI * 2;
+    let mag = Math.abs(total) % turn;
+    if (Math.abs(total) > 1e-4 && mag < 0.001) mag = turn - 0.001;
+    const dir = total < 0 ? -1 : 1;
+    const end = start + dir * mag;
+    setYawRay(this._yawStart, start);
+    setYawRay(this._yawNow, end);
+    if (this._yawReadout) this._yawReadout.textContent = formatYawDegrees(total);
+    if (mag < 0.001) {
+      this._yawWedge?.setAttribute("d", "");
+      this._yawArc?.setAttribute("d", "");
+      return;
+    }
+    const large = mag > Math.PI ? 1 : 0;
+    const sweep = dir > 0 ? 1 : 0;
+    const p0 = yawPolar(start, YAW_RING_R);
+    const p1 = yawPolar(end, YAW_RING_R);
+    const arc = `M ${p0} A ${YAW_RING_R} ${YAW_RING_R} 0 ${large} ${sweep} ${p1}`;
+    this._yawWedge?.setAttribute("d", `M ${YAW_RING_CX} ${YAW_RING_CY} L ${p0} A ${YAW_RING_R} ${YAW_RING_R} 0 ${large} ${sweep} ${p1} Z`);
+    this._yawArc?.setAttribute("d", arc);
+  }
+
+  _clearYawRingPaint() {
+    this._yawWedge?.setAttribute("d", "");
+    this._yawArc?.setAttribute("d", "");
+    this._yawStart?.setAttribute("x2", this._yawStart.getAttribute("x1") || "0");
+    this._yawStart?.setAttribute("y2", this._yawStart.getAttribute("y1") || "0");
+    this._yawNow?.setAttribute("x2", this._yawNow.getAttribute("x1") || "0");
+    this._yawNow?.setAttribute("y2", this._yawNow.getAttribute("y1") || "0");
+    if (this._yawReadout) this._yawReadout.textContent = "";
+    this._yawRingTotal = 0;
   }
 }
 
