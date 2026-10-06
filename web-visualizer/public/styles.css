@@ -1843,7 +1843,8 @@ dd {
 
 .falling-touch-emit.is-charging .falling-emit-fill {
   transform: scale(1);
-  transition-duration: 0ms;
+  transition-duration: var(--emit-hold, 280ms);
+  transition-timing-function: linear;
 }
 
 .falling-emit-chevron {
@@ -1978,7 +1979,7 @@ dd {
   appearance: none;
   position: absolute;
   left: 50%;
-  top: 0;
+  top: calc((var(--falling-control, 48px) - 72px) / 2);
   z-index: 1;
   display: block;
   width: 72px;
@@ -1990,7 +1991,8 @@ dd {
   background: transparent;
   color: var(--live);
   font: inherit;
-  transform: translateX(-50%);
+  transform: translateX(-50%) scale(1);
+  transform-origin: center;
   pointer-events: auto;
   touch-action: none;
   user-select: none;
@@ -2008,93 +2010,92 @@ dd {
   overflow: visible;
 }
 
-.falling-yaw-disc {
-  fill: rgba(0, 0, 0, 0.8);
+.falling-yaw-sphere-wrap {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 180ms ease;
 }
 
-.falling-yaw-ring {
+.falling-yaw.is-zooming .falling-yaw-sphere-wrap {
+  transition: none;
+}
+
+.falling-yaw-wire {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.35);
+  stroke: rgba(255, 255, 255, 0.5);
+  stroke-width: 0.85;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke 120ms ease;
+}
+
+.falling-yaw-track,
+.falling-yaw-fill {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.falling-yaw-track {
+  stroke: rgba(255, 255, 255, 0.18);
   stroke-width: 1.25;
+}
+
+.falling-yaw:hover .falling-yaw-wire {
+  stroke: rgba(255, 255, 255, 0.92);
+}
+
+.falling-yaw-fill,
+.falling-yaw-tick {
+  stroke: var(--live);
+  stroke-linecap: round;
+}
+
+.falling-yaw-fill {
+  stroke-width: 2.4;
 }
 
 .falling-yaw-tick {
-  stroke: rgba(255, 255, 255, 0.82);
-  stroke-width: 1.5;
-  stroke-linecap: round;
+  stroke-width: 1.75;
 }
 
-.falling-yaw:hover .falling-yaw-ring,
-.falling-yaw:focus-visible .falling-yaw-ring,
-.falling-yaw.is-dragging .falling-yaw-ring {
-  stroke: var(--live-line);
+html.is-yaw-turn,
+html.is-yaw-turn * {
+  cursor: ew-resize !important;
 }
 
-.falling-yaw:hover .falling-yaw-tick,
-.falling-yaw:focus-visible .falling-yaw-tick {
-  stroke: var(--live);
+html.is-yaw-zoom,
+html.is-yaw-zoom * {
+  cursor: ns-resize !important;
 }
 
-.falling-yaw.is-dragging .falling-yaw-tick {
-  opacity: 0;
-}
-
-.falling-yaw-gesture,
-.falling-yaw-readout {
-  opacity: 0;
-}
-
-.falling-yaw.is-dragging .falling-yaw-gesture,
-.falling-yaw.is-dragging .falling-yaw-readout {
-  opacity: 1;
-}
-
-.falling-yaw.is-fading .falling-yaw-gesture,
-.falling-yaw.is-fading .falling-yaw-readout {
-  opacity: 0;
-  transition: opacity 180ms ease;
-}
-
-[data-falling-yaw-wedge] {
-  fill: color-mix(in srgb, var(--live) 32%, transparent);
-}
-
-[data-falling-yaw-arc] {
-  fill: none;
-  stroke: var(--live);
-  stroke-width: 2.25;
-  stroke-linecap: round;
-}
-
-[data-falling-yaw-start] {
-  stroke: rgba(255, 255, 255, 0.9);
-  stroke-width: 1.25;
-  stroke-linecap: round;
-}
-
-[data-falling-yaw-now] {
-  stroke: var(--live);
-  stroke-width: 1.5;
-  stroke-linecap: round;
-}
-
-.falling-yaw-readout {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
+.falling-yaw.is-leaving,
+.falling-yaw.is-arriving {
   pointer-events: none;
-  white-space: nowrap;
 }
 
-html.is-yaw-ring,
-html.is-yaw-ring * {
-  cursor: grabbing !important;
+.falling-yaw.is-leaving {
+  animation: falling-yaw-leave 420ms cubic-bezier(0.45, 0, 0.2, 1) forwards;
+}
+
+.falling-yaw.is-arriving {
+  animation: falling-yaw-arrive 520ms cubic-bezier(0.22, 0.9, 0.3, 1) forwards;
+}
+
+.falling-yaw.is-hidden {
+  display: none;
+}
+
+@keyframes falling-yaw-leave {
+  0% { transform: translateX(-50%) scale(1); }
+  36% { transform: translateX(-50%) scale(1.16); }
+  100% { transform: translateX(-50%) scale(0); }
+}
+
+@keyframes falling-yaw-arrive {
+  0% { transform: translateX(-50%) scale(0); }
+  58% { transform: translateX(-50%) scale(1.16); }
+  100% { transform: translateX(-50%) scale(1); }
 }
 
 @media (pointer: coarse) {
@@ -3691,4 +3692,6 @@ body:not(.has-dualsense) .pad-glyph {
 
 @media (prefers-reduced-motion: reduce) {
   .start-screen-title { animation: none; }
+  .falling-yaw.is-leaving,
+  .falling-yaw.is-arriving { animation: none; }
 }

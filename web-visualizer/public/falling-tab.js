@@ -1,4 +1,4 @@
-import { audioEngine } from "./audio-engine.js?v=115";
+import { audioEngine } from "./audio-engine.js?v=116";
 import {
   clearBoard,
   hideFallingBlocks,
@@ -6,8 +6,8 @@ import {
   onFieldPress,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=402";
-import { fieldDebug, fieldFrame, resetFieldSonify, setDiffuseReverb } from "./grid-sonify.js?v=55";
+} from "./falling-blocks.js?v=415";
+import { fieldDebug, fieldFrame, resetFieldSonify, setDiffuseReverb } from "./grid-sonify.js?v=56";
 import { STEM_CORNERS, controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
@@ -91,11 +91,11 @@ function bindRiseModeUi() {
   const inputs = group.querySelectorAll("input[name='falling-rise-mode']");
   let stored = "";
   try {
-    stored = sessionStorage.getItem("echoscape.riseMode") || "";
+    stored = sessionStorage.getItem("echoscape.diffusionMode") || "";
   } catch {
     /* private mode */
   }
-  const initial = Object.prototype.hasOwnProperty.call(RISE_MODES, stored) ? stored : "drift";
+  const initial = Object.prototype.hasOwnProperty.call(RISE_MODES, stored) ? stored : "thread";
   audioEngine.setRiseMode(initial);
   // A label click never arrives: the playfield cancels touchstart.
   group.addEventListener("pointerdown", (event) => {
@@ -115,11 +115,11 @@ function bindRiseModeUi() {
     input.checked = input.value === initial;
     input.addEventListener("change", () => {
       if (!input.checked) return;
-      const mode = Object.prototype.hasOwnProperty.call(RISE_MODES, input.value) ? input.value : "drift";
+      const mode = Object.prototype.hasOwnProperty.call(RISE_MODES, input.value) ? input.value : "thread";
       audioEngine.setRiseMode(mode);
       if (hint) hint.textContent = RISE_MODES[mode];
       try {
-        sessionStorage.setItem("echoscape.riseMode", mode);
+        sessionStorage.setItem("echoscape.diffusionMode", mode);
       } catch {
         /* private mode */
       }
@@ -128,7 +128,7 @@ function bindRiseModeUi() {
   if (hint) hint.textContent = RISE_MODES[initial];
 }
 
-const DIFFUSE_REVERB_KEY = "echoscape.diffuseReverb";
+const DIFFUSE_REVERB_KEY = "echoscape.diffuseReverbOn";
 
 function bindDiffuseReverbUi() {
   const button = document.querySelector("[data-falling-diffuse-reverb]");
@@ -144,13 +144,13 @@ function bindDiffuseReverbUi() {
       /* private mode */
     }
   };
-  let stored = "1";
+  let stored = "0";
   try {
-    stored = sessionStorage.getItem(DIFFUSE_REVERB_KEY) || "1";
+    stored = sessionStorage.getItem(DIFFUSE_REVERB_KEY) || "0";
   } catch {
     /* private mode */
   }
-  apply(stored !== "0");
+  apply(stored === "1");
   onFieldPress(button, () => {
     apply(button.getAttribute("aria-checked") !== "true");
   });

@@ -4,9 +4,13 @@
  */
 
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
-import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=16";
+import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=18";
 import { TouchInput } from "./touch-input.js?v=4";
 
+/** How long Emit must be held still before atoms pour. Matches --emit-hold. */
+const EMIT_HOLD_MS = 280;
+/** Movement that counts as still dragging, so the hold waits until the finger rests. */
+const EMIT_REST_PX = 6;
 /** Finger travel across the whole emitter size, from a single stream to a clump. */
 const EMIT_DRAG_SPAN = 36;
 /** Motion that starts a size change, so a tap can still pour at the current size. */
@@ -18,66 +22,308 @@ const EMIT_DRAG_SLIDE = 12;
  * Emit finger. Silence means the lift never arrived, so the hold ends.
  */
 const EMIT_POINTER_DOUBT_MS = 700;
-/** Ring artwork is a 72 viewBox. The wedge meets the stroke. */
-const YAW_RING_CX = 36;
-const YAW_RING_CY = 36;
-const YAW_RING_R = 27;
-const YAW_RING_TICK = 12;
+/**
+ * Quiet after the last wheel tick. A turn does not start while a zoom
+ * is still inside this window.
+ */
+const WHEEL_GESTURE_MS = 180;
+/**
+ * One detent, or less, landing as the middle button goes down is the
+ * wheel clicking through. A larger burst is a zoom and keeps the view.
+ */
+const WHEEL_ACCIDENT_NOTCHES = 1.25;
+/** How close that stray detent has to be to the middle-button press. */
+const WHEEL_ACCIDENT_MS = 50;
+/**
+ * Miniature of the playfield camera: 60° down, so the ring is the ground
+ * plane seen from the same height. The far side is the top of the ellipse.
+ */
+const YAW_PLANE_PITCH = Math.PI / 3;
+const YAW_CX = 36;
+const YAW_CY = 36;
+const YAW_RING_R = 26;
+const YAW_FAR = -Math.PI / 2;
+/** Horizontal drag. 96 pixels is a quarter turn. */
+const YAW_DRAG_RAD_PER_PX = Math.PI / 2 / 96;
+/**
+ * Vertical drag on the sphere. Slower than the wheel so the ball can keep
+ * changing size for the whole zoom the grid still allows.
+ */
+const YAW_ZOOM_PER_PX = 0.0016;
+/** Pixels of travel before the drag commits to turn or zoom. */
+const YAW_AXIS_SLOP = 6;
+/** Closest zoom. This size is the ceiling. */
+const YAW_ZOOM_SCALE_IN = 0.14;
+/** Farthest zoom. A little smaller than the zoom-in nudge. */
+const YAW_ZOOM_SCALE_OUT = 0.26;
+const YAW_ZOOM_NEUTRAL = 30;
 
 /**
- * @param {number} angle
- * @param {number} radius
+ * Wheel distance in detents. Pixel mode is about 100 units per notch.
+ * @param {number} deltaY
+ * @param {number} deltaMode
  */
-function yawPoint(angle, radius) {
+function wheelNotches(deltaY, deltaMode) {
+  const dy = deltaY || 0;
+  if (deltaMode === 1) return dy;
+  if (deltaMode === 2) return dy * 20;
+  return dy / 100;
+}
+
+/**
+ * MouseEvent.buttons is not `1 << button`. Middle is 4, right is 2.
+ * @param {number | undefined} buttons
+ * @param {number} button
+ */
+function pointerButtonDown(buttons, button) {
+  if (typeof buttons !== "number") return false;
+  let mask = 1 << button;
+  if (button === 1) mask = 4;
+  else if (button === 2) mask = 2;
+  return (buttons & mask) !== 0;
+}
+
+/**
+ * A point on the horizontal ring. θ = 0 is screen-right, and positive θ
+ * moves through the near side (the bottom of the ellipse).
+ * @param {number} theta
+ * @param {number} [radius]
+ */
+function ringPoint(theta, radius = YAW_RING_R) {
   return {
-    x: (YAW_RING_CX + radius * Math.cos(angle)).toFixed(2),
-    y: (YAW_RING_CY + radius * Math.sin(angle)).toFixed(2),
+    x: YAW_CX + radius * Math.cos(theta),
+    y: YAW_CY + radius * Math.sin(YAW_PLANE_PITCH) * Math.sin(theta),
   };
 }
 
 /**
- * @param {number} angle
- * @param {number} radius
+ * The lower half of the ellipse is in front of the sphere.
+ * @param {number} theta
  */
-function yawPolar(angle, radius) {
-  const point = yawPoint(angle, radius);
-  return `${point.x} ${point.y}`;
+function isRingFront(theta) {
+  const turn = Math.PI * 2;
+  const wrapped = ((theta % turn) + turn) % turn;
+  return wrapped <= Math.PI;
+}
+
+/**
+ * One open run of the ring, used for the faint track.
+ * @param {number} theta0
+ * @param {number} theta1
+ */
+function ringOpen(theta0, theta1) {
+  const steps = 28;
+  const pts = [];
+  for (let i = 0; i <= steps; i += 1) {
+    const t = theta0 + (theta1 - theta0) * (i / steps);
+    const p = ringPoint(t);
+    pts.push(`${p.x.toFixed(2)} ${p.y.toFixed(2)}`);
+  }
+  return `M ${pts.join(" L ")}`;
+}
+
+/**
+ * Sweep split where it passes behind the sphere.
+ * @param {number} theta0
+ * @param {number} theta1
+ */
+function ringSweep(theta0, theta1) {
+  const span = theta1 - theta0;
+  const steps = Math.max(2, Math.ceil(Math.abs(span) / (Math.PI / 32)));
+  /** @type {string[][]} */
+  const front = [];
+  /** @type {string[][]} */
+  const back = [];
+  /** @type {{ front: boolean, pts: string[] } | null} */
+  let run = null;
+  /**
+   * @param {boolean} frontSide
+   * @param {number} theta
+   */
+  const add = (frontSide, theta) => {
+    const p = ringPoint(theta);
+    const cmd = `${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
+    if (!run || run.front !== frontSide) {
+      run = { front: frontSide, pts: [] };
+      (frontSide ? front : back).push(run.pts);
+    }
+    run.pts.push(cmd);
+  };
+  /** @type {boolean | null} */
+  let prevFront = null;
+  for (let i = 0; i <= steps; i += 1) {
+    const t = theta0 + span * (i / steps);
+    const frontSide = isRingFront(t);
+    if (prevFront !== null && prevFront !== frontSide) {
+      add(prevFront, t);
+      run = null;
+    }
+    add(frontSide, t);
+    prevFront = frontSide;
+  }
+  const path = (parts) => parts
+    .filter((pts) => pts.length >= 2)
+    .map((pts) => `M ${pts.join(" L ")}`)
+    .join(" ");
+  return { front: path(front), back: path(back) };
+}
+
+/**
+ * Short outward tick on the ring.
+ * @param {SVGLineElement | null} line
+ * @param {number} theta
+ */
+function setRingTick(line, theta) {
+  if (!line) return;
+  const inner = ringPoint(theta, YAW_RING_R - 0.5);
+  const outer = ringPoint(theta, YAW_RING_R + 4.5);
+  line.setAttribute("x1", inner.x.toFixed(2));
+  line.setAttribute("y1", inner.y.toFixed(2));
+  line.setAttribute("x2", outer.x.toFixed(2));
+  line.setAttribute("y2", outer.y.toFixed(2));
 }
 
 /**
  * @param {SVGLineElement | null} line
- * @param {number} angle
  */
-function setYawRay(line, angle) {
+function hideRingTick(line) {
   if (!line) return;
-  const inner = yawPoint(angle, YAW_RING_TICK);
-  const outer = yawPoint(angle, YAW_RING_R);
-  line.setAttribute("x1", inner.x);
-  line.setAttribute("y1", inner.y);
-  line.setAttribute("x2", outer.x);
-  line.setAttribute("y2", outer.y);
+  line.setAttribute("x1", "0");
+  line.setAttribute("y1", "0");
+  line.setAttribute("x2", "0");
+  line.setAttribute("y2", "0");
 }
 
 /**
- * Shortest step from the previous ring angle to the next.
- * @param {number} delta
+ * Pull a stick toward the nearer axis without changing its length.
+ * `bias` 1 leaves it linear. Above 1, a mostly-horizontal push keeps
+ * its yaw and sheds zoom, and a mostly-vertical push does the reverse.
+ * A 45° push is unchanged, so both actions still combine.
+ * @param {number} x
+ * @param {number} y
+ * @param {number} bias
+ * @returns {{ x: number, y: number }}
  */
-function wrapTurn(delta) {
+function biasCardinalStick(x, y, bias) {
+  const len = Math.hypot(x, y);
+  if (!(len > 1e-6) || !(bias > 1)) return { x, y };
+  const px = Math.pow(Math.abs(x) / len, bias);
+  const py = Math.pow(Math.abs(y) / len, bias);
+  const plen = Math.hypot(px, py) || 1;
+  return {
+    x: Math.sign(x) * (px / plen) * len,
+    y: Math.sign(y) * (py / plen) * len,
+  };
+}
+
+/**
+ * Sphere size from the live camera distance. It keeps changing until the
+ * grid's near limit or the far limit, and it rests at 1 on the default view.
+ * @param {number} dist
+ * @param {number} min
+ * @param {number} max
+ */
+function sphereZoomScale(dist, min, max) {
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  const d = Math.min(hi, Math.max(lo, dist));
+  const neutral = Math.min(hi, Math.max(lo, YAW_ZOOM_NEUTRAL));
+  if (d <= neutral) {
+    const span = Math.log(neutral) - Math.log(lo);
+    const t = span > 1e-6 ? (Math.log(neutral) - Math.log(d)) / span : 0;
+    return 1 + t * YAW_ZOOM_SCALE_IN;
+  }
+  const span = Math.log(hi) - Math.log(neutral);
+  const t = span > 1e-6 ? (Math.log(d) - Math.log(neutral)) / span : 0;
+  return 1 - t * YAW_ZOOM_SCALE_OUT;
+}
+
+/**
+ * Signed travel of the heading mark from the far side of the ring, in −2π…2π.
+ * Positive is clockwise (a right drag). Negative walks back the other way,
+ * so a left drag fills only that segment instead of the long way around.
+ * @param {number} yaw
+ */
+function headingSweep(yaw) {
   const turn = Math.PI * 2;
-  let wrapped = delta % turn;
-  if (wrapped > Math.PI) wrapped -= turn;
-  if (wrapped < -Math.PI) wrapped += turn;
-  return wrapped;
+  let sweep = (-yaw) % turn;
+  if (Math.abs(sweep) < 0.02) return 0;
+  if (sweep > 0 && turn - sweep < 0.02) return 0;
+  if (sweep < 0 && turn + sweep < 0.02) return 0;
+  return sweep;
 }
 
+const YAW_SPHERE_R = 14;
+const YAW_SPHERE_LATS = [-60, -30, 0, 30, 60].map((deg) => deg * Math.PI / 180);
+const YAW_SPHERE_LONS = [15, 45, 75, 105, 135, 165].map((deg) => deg * Math.PI / 180);
+
 /**
- * Signed degrees for the drag. Positive is clockwise on the ring.
- * @param {number} radians
+ * Hidden-line wireframe, turned with the playfield. Positive surface yaw
+ * walks the near side to the right, matching a left drag on the ring.
+ * @param {number} yaw
  */
-function formatYawDegrees(radians) {
-  const deg = Math.round((radians * 180) / Math.PI);
-  if (deg > 0) return `+${deg}°`;
-  return `${deg}°`;
+function sphereWirePath(yaw) {
+  const sP = Math.sin(YAW_PLANE_PITCH);
+  const cP = Math.cos(YAW_PLANE_PITCH);
+  const cY = Math.cos(-yaw);
+  const sY = Math.sin(-yaw);
+  const steps = 40;
+  /**
+   * @param {number} x
+   * @param {number} y
+   * @param {number} z
+   */
+  const project = (x, y, z) => {
+    const xr = x * cY - z * sY;
+    const zr = x * sY + z * cY;
+    return {
+      x: YAW_CX + YAW_SPHERE_R * xr,
+      y: YAW_CY + YAW_SPHERE_R * (sP * zr - cP * y),
+      on: y * sP + zr * cP > 0.06,
+    };
+  };
+  /** @type {string[]} */
+  const runs = [];
+  /**
+   * @param {Array<{ x: number, y: number, on: boolean }>} samples
+   */
+  const chain = (samples) => {
+    /** @type {string[] | null} */
+    let run = null;
+    for (const sample of samples) {
+      if (!sample.on) {
+        run = null;
+        continue;
+      }
+      if (!run) {
+        run = [];
+        runs.push("");
+      }
+      run.push(`${sample.x.toFixed(2)} ${sample.y.toFixed(2)}`);
+      runs[runs.length - 1] = run.length >= 5 ? `M ${run.join(" L ")}` : "";
+    }
+  };
+  for (const lat of YAW_SPHERE_LATS) {
+    const y = Math.sin(lat);
+    const c = Math.cos(lat);
+    /** @type {Array<{ x: number, y: number, on: boolean }>} */
+    const samples = [];
+    for (let i = 0; i <= steps; i += 1) {
+      const t = Math.PI * 2 * (i / steps);
+      samples.push(project(c * Math.cos(t), y, c * Math.sin(t)));
+    }
+    chain(samples);
+  }
+  for (const lon of YAW_SPHERE_LONS) {
+    /** @type {Array<{ x: number, y: number, on: boolean }>} */
+    const samples = [];
+    for (let i = 0; i <= steps; i += 1) {
+      const t = Math.PI * 2 * (i / steps);
+      samples.push(project(Math.sin(t) * Math.cos(lon), Math.cos(t), Math.sin(t) * Math.sin(lon)));
+    }
+    chain(samples);
+  }
+  return runs.filter(Boolean).join(" ");
 }
 
 /** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
@@ -135,9 +381,10 @@ export class FallingInput {
     /** @type {HTMLElement | null} */
     this._emitButton = null;
     this._emitHeld = false;
-    /** Press has started the pour. Further drags keep pouring and size the plane. */
+    /** Long-press has committed. Further drags keep pouring and size the plane. */
     this._touchEmit = false;
     this._emitHeldDown = false;
+    this._emitHoldTimer = 0;
     this._emitFillGen = 0;
     this._emitPointerId = -1;
     /** Touch.identifier for the thumb. Distinct from the pointer id. */
@@ -150,6 +397,7 @@ export class FallingInput {
     this._emitAnalog = 0.5;
     this._emitOriginY = 0;
     this._emitDownY = 0;
+    this._emitSettleY = 0;
     this._shiftHeld = false;
     this._altHeld = false;
     this._mouseFull = false;
@@ -158,25 +406,49 @@ export class FallingInput {
     this._yawHeld = false;
     this._yawRingHeld = false;
     this._yawRingPointer = -1;
-    this._yawRingStart = 0;
-    this._yawRingAngle = 0;
+    /** @type {null | "yaw" | "zoom"} */
+    this._yawRingMode = null;
+    this._yawOriginX = 0;
+    this._yawOriginY = 0;
+    this._yawLastX = 0;
+    this._yawLastY = 0;
+    this._yawZoomDrag = 0;
     this._yawRingTotal = 0;
+    /** Playfield yaw the ring is showing. */
+    this._surfaceYaw = 0;
     this._yawHome = false;
     /** @type {HTMLElement | null} */
     this._yawRing = null;
     /** @type {SVGPathElement | null} */
-    this._yawWedge = null;
+    this._yawTrackBack = null;
     /** @type {SVGPathElement | null} */
-    this._yawArc = null;
+    this._yawTrackFront = null;
+    /** @type {SVGPathElement | null} */
+    this._yawRingBack = null;
+    /** @type {SVGPathElement | null} */
+    this._yawRingFront = null;
+    /** @type {SVGPathElement | null} */
+    this._yawArcBack = null;
+    /** @type {SVGPathElement | null} */
+    this._yawArcFront = null;
     /** @type {SVGLineElement | null} */
-    this._yawStart = null;
+    this._yawNowBack = null;
     /** @type {SVGLineElement | null} */
-    this._yawNow = null;
-    /** @type {HTMLElement | null} */
-    this._yawReadout = null;
+    this._yawNowFront = null;
+    /** @type {SVGGElement | null} */
+    this._yawSphere = null;
+    /** @type {SVGPathElement | null} */
+    this._yawWire = null;
     this._keyEmit = false;
     this._orbitAccum = 0;
     this._zoomAccum = 1;
+    /** Wheel burst since the last quiet gap. A middle-click yields to it. */
+    this._wheelNotches = 0;
+    this._wheelFactor = 1;
+    this._wheelGestureAt = 0;
+    /** Wheel zoom shown on the sphere, in the same units as a vertical drag. */
+    this._wheelZoomVisual = 0;
+    this._wheelZoomVisualTimer = 0;
     /** @type {{ x: number, y: number } | null} */
     this._pointer = null;
     /** True only for frames where the pointer actually moved (or clicked). */
@@ -205,6 +477,11 @@ export class FallingInput {
     this._pointerKind = null;
     this._pointerActivity = false;
     this._padWasUsing = false;
+    this._padWasDriving = false;
+    /** The yaw orb stays up until a gamepad is actually driven. */
+    this._yawOrbHidden = false;
+    /** Last hide state applied to the orb, so the pop only plays on a change. */
+    this._yawOrbApplied = false;
     this._showPadGlyphs = false;
     this._onPointerMove = this._onPointerMove.bind(this);
     this._onPointerOut = this._onPointerOut.bind(this);
@@ -232,6 +509,7 @@ export class FallingInput {
     this._onYawRingUp = this._onYawRingUp.bind(this);
     this._onYawRingDblClick = this._onYawRingDblClick.bind(this);
     this._onYawRingFade = this._onYawRingFade.bind(this);
+    this._onYawOrbMotion = this._onYawOrbMotion.bind(this);
   }
 
   /** True while PlayStation glyphs should be on screen. */
@@ -334,6 +612,7 @@ export class FallingInput {
   resetTransient() {
     this._emitHeld = false;
     this._touchEmit = false;
+    this._clearEmitHold();
     this._emitHeldDown = false;
     this._emitDragging = false;
     this._emitSizeLatched = false;
@@ -349,11 +628,17 @@ export class FallingInput {
     this._yawHeld = false;
     this._yawRingHeld = false;
     this._yawRingPointer = -1;
+    this._yawRingMode = null;
+    this._yawZoomDrag = 0;
     this._yawRingTotal = 0;
     this._yawHome = false;
     this._keyEmit = false;
     this._orbitAccum = 0;
     this._zoomAccum = 1;
+    this._wheelNotches = 0;
+    this._wheelFactor = 1;
+    this._wheelGestureAt = 0;
+    this._releaseWheelZoomVisual();
     this._pointer = null;
     this._pointerFresh = false;
     this._pointerAt = null;
@@ -371,7 +656,11 @@ export class FallingInput {
     this._pointerKind = null;
     this._pointerActivity = false;
     this._padWasUsing = false;
+    this._padWasDriving = false;
+    this._yawOrbHidden = false;
+    this._yawOrbApplied = false;
     this._showPadGlyphs = false;
+    this._applyYawOrb();
   }
 
   /**
@@ -418,6 +707,7 @@ export class FallingInput {
 
     const rx = mergeAxis(axis(mixer?.rightX), padRx);
     const ry = mergeAxis(axis(mixer?.rightY), padRy);
+    const rightStick = biasCardinalStick(rx, ry, g.rightStickAxialBias);
     let orbitDelta = this._orbitAccum;
     const yawHome = this._yawHome;
     this._yawHome = false;
@@ -428,8 +718,8 @@ export class FallingInput {
 
     if (dt > 0) {
       // Pointer yaw stays on orbitDelta. Stick yaw is a separate gesture.
-      if (rx) viewYaw += -rx * g.orbitStickRate * dt;
-      if (ry) zoomFactor *= Math.exp(-ry * g.zoomStickRate * dt);
+      if (rightStick.x) viewYaw += -rightStick.x * g.orbitStickRate * dt;
+      if (rightStick.y) zoomFactor *= Math.exp(-rightStick.y * g.zoomStickRate * dt);
     }
 
     const screen = this._screenTouch.consume();
@@ -606,18 +896,67 @@ export class FallingInput {
   /**
    * Glyphs come on with a PlayStation gesture and stay until a mouse, trackpad,
    * or touchscreen takes over. A pad that is only connected never turns them on.
+   * The yaw orb follows any gamepad the same way: hidden once it is driven,
+   * back when a pointer takes over.
    * @param {Gamepad | null} pad
    */
   _syncGlyphDevice(pad) {
-    const using = playstationDriving(pad, this.bindings.gamepad.stickDeadzone);
+    const dead = this.bindings.gamepad.stickDeadzone;
+    const using = playstationDriving(pad, dead);
+    const driving = gamepadDriving(pad, dead);
     if (this._pointerActivity) {
       this._device = "pointer";
+      this._yawOrbHidden = false;
       this._pointerActivity = false;
     } else if (using && !this._padWasUsing) {
       this._device = "pad";
     }
+    if (driving && !this._padWasDriving) this._yawOrbHidden = true;
     this._padWasUsing = using;
+    this._padWasDriving = driving;
     this._showPadGlyphs = this._device === "pad";
+    this._applyYawOrb();
+  }
+
+  _applyYawOrb() {
+    const root = this._yawRing;
+    if (!root) return;
+    const hide = this._yawOrbHidden;
+    if (hide === this._yawOrbApplied) return;
+    this._yawOrbApplied = hide;
+    if (hide && this._yawRingHeld) this._releaseYawRing(false);
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+    root.classList.remove("is-leaving", "is-arriving");
+    if (reduce) {
+      root.classList.toggle("is-hidden", hide);
+      return;
+    }
+    if (hide) {
+      root.classList.remove("is-hidden");
+      void root.offsetWidth;
+      root.classList.add("is-leaving");
+      return;
+    }
+    void root.offsetWidth;
+    root.classList.add("is-arriving");
+    root.classList.remove("is-hidden");
+  }
+
+  /**
+   * @param {AnimationEvent} event
+   */
+  _onYawOrbMotion(event) {
+    if (event.target !== this._yawRing) return;
+    const root = this._yawRing;
+    if (!root) return;
+    if (event.animationName === "falling-yaw-leave" && this._yawOrbHidden) {
+      root.classList.remove("is-leaving");
+      root.classList.add("is-hidden");
+      return;
+    }
+    if (event.animationName === "falling-yaw-arrive" && !this._yawOrbHidden) {
+      root.classList.remove("is-arriving");
+    }
   }
 
   /**
@@ -699,6 +1038,67 @@ export class FallingInput {
     return this._yawHeld || modified;
   }
 
+  /** A zoom burst still in progress. A middle click must not turn the view. */
+  _wheelGestureOwnsView(now = performance.now()) {
+    return (
+      now - this._wheelGestureAt <= WHEEL_GESTURE_MS &&
+      Math.abs(this._wheelNotches) > WHEEL_ACCIDENT_NOTCHES
+    );
+  }
+
+  /**
+   * One detent in the same instant as a turn is the wheel clicking
+   * through. Pull that zoom back out once the drag actually moves,
+   * including a tick the sampler already applied.
+   */
+  _undoStrayWheel(now = performance.now()) {
+    if (now - this._wheelGestureAt > WHEEL_ACCIDENT_MS) return;
+    if (!(Math.abs(this._wheelNotches) > 0)) return;
+    if (Math.abs(this._wheelNotches) > WHEEL_ACCIDENT_NOTCHES) return;
+    if (this._wheelFactor !== 1) this._zoomAccum /= this._wheelFactor;
+    this._wheelNotches = 0;
+    this._wheelFactor = 1;
+    this._wheelGestureAt = 0;
+    this._releaseWheelZoomVisual();
+  }
+
+  /**
+   * @param {WheelEvent} event
+   */
+  _noteWheel(event) {
+    const dy = event.deltaY || 0;
+    if (!dy) return;
+    const now = performance.now();
+    if (now - this._wheelGestureAt > WHEEL_GESTURE_MS) {
+      this._wheelNotches = 0;
+      this._wheelFactor = 1;
+    }
+    const factor = Math.exp(dy * this.bindings.mouse.wheelZoomExp);
+    this._wheelNotches += wheelNotches(dy, event.deltaMode);
+    this._wheelFactor *= factor;
+    this._wheelGestureAt = now;
+    this._zoomAccum *= factor;
+  }
+
+  /**
+   * The sphere follows the camera. Size keeps changing until zoom itself stops.
+   * @param {number} dist
+   * @param {number} min
+   * @param {number} max
+   */
+  syncCameraZoom(dist, min, max) {
+    if (!Number.isFinite(dist) || !Number.isFinite(min) || !Number.isFinite(max)) return;
+    this._setYawSphereScale(sphereZoomScale(dist, min, max));
+  }
+
+  _releaseWheelZoomVisual() {
+    window.clearTimeout(this._wheelZoomVisualTimer);
+    this._wheelZoomVisualTimer = 0;
+    this._wheelZoomVisual = 0;
+    if (this._yawRingMode === "zoom") return;
+    this._yawRing?.classList.remove("is-zooming");
+  }
+
   /**
    * @param {string} name
    */
@@ -729,6 +1129,7 @@ export class FallingInput {
     const m = this.bindings.mouse;
     this._noteModifiers(event);
     if (this._yawing()) {
+      if (event.movementX || event.movementY) this._undoStrayWheel();
       this._aimAt = null;
       this._setDragCursor("yaw");
       this._orbitAccum += -event.movementX * m.orbitRadiansPerPx;
@@ -764,10 +1165,11 @@ export class FallingInput {
     const m = this.bindings.mouse;
     const canvas = this._canvas;
     if (event.button === m.yawButton) {
+      event.preventDefault();
+      if (this._wheelGestureOwnsView()) return;
       this._yawHeld = true;
       this._aimAt = null;
       this._setDragCursor("yaw");
-      event.preventDefault();
       canvas?.setPointerCapture?.(event.pointerId);
       return;
     }
@@ -830,7 +1232,10 @@ export class FallingInput {
   _onWheel(event) {
     if (!this.bindings.mouse.wheelZooms) return;
     event.preventDefault();
-    this._zoomAccum *= Math.exp(event.deltaY * this.bindings.mouse.wheelZoomExp);
+    if (this._yawing()) return;
+    const yawDown = pointerButtonDown(event.buttons, this.bindings.mouse.yawButton);
+    if (yawDown && !this._wheelGestureOwnsView()) return;
+    this._noteWheel(event);
   }
 
   _onContextMenu(event) {
@@ -889,6 +1294,7 @@ export class FallingInput {
     const btn = this._canvas?.parentElement?.querySelector("[data-falling-touch-emit]");
     if (!(btn instanceof HTMLElement)) return;
     this._emitButton = btn;
+    btn.style.setProperty("--emit-hold", `${EMIT_HOLD_MS}ms`);
     btn.addEventListener("pointerdown", this._onEmitPointerDown);
     btn.addEventListener("touchstart", this._onBlockBrowserGesture, { passive: false });
     btn.addEventListener("touchmove", this._onBlockBrowserGesture, { passive: false });
@@ -915,10 +1321,12 @@ export class FallingInput {
     btn.removeEventListener("touchmove", this._onBlockBrowserGesture);
     btn.removeEventListener("contextmenu", this._onEmitContextMenu);
     this._trackEmitPointer(false);
+    this._clearEmitHold();
     this._clearEmitPointerDoubt();
     this._emitFillGen += 1;
     this._emitPointerId = -1;
     this._emitTouchId = null;
+    this._emitSettleY = 0;
     btn.classList.remove("is-pressed", "is-held", "is-charging", "is-filling");
     btn.setAttribute("aria-pressed", "false");
     this._emitAnalog = 0.5;
@@ -932,6 +1340,36 @@ export class FallingInput {
     dock?.querySelector(".falling-emit-single")?.classList.remove("is-lit");
     dock?.querySelector(".falling-emit-stem")?.style.removeProperty("--emit-notch");
     this._emitButton = null;
+  }
+
+  _clearEmitHold() {
+    if (!this._emitHoldTimer) return;
+    clearTimeout(this._emitHoldTimer);
+    this._emitHoldTimer = 0;
+  }
+
+  /** Circle grows while the finger rests. Motion before the pour restarts that wait. */
+  _armEmitHold() {
+    this._clearEmitHold();
+    this._emitHoldTimer = window.setTimeout(() => {
+      this._emitHoldTimer = 0;
+      if (!this._emitHeldDown) return;
+      this._touchEmit = true;
+      this._emitButton?.setAttribute("aria-pressed", "true");
+    }, EMIT_HOLD_MS);
+  }
+
+  /** Snap the fill shut and grow it again for a fresh hold. */
+  _kickEmitCharge() {
+    const btn = this._emitButton;
+    if (!btn || !this._emitHeldDown || this._touchEmit) return;
+    const fill = btn.querySelector(".falling-emit-fill");
+    if (fill) fill.style.transition = "none";
+    btn.classList.remove("is-charging");
+    if (fill) void fill.offsetWidth;
+    if (fill) fill.style.transition = "";
+    this._showEmitFill();
+    this._armEmitHold();
   }
 
   _showEmitFill() {
@@ -952,12 +1390,14 @@ export class FallingInput {
 
   _endEmitGesture() {
     this._trackEmitPointer(false);
+    this._clearEmitHold();
     this._clearEmitPointerDoubt();
     this._touchEmit = false;
     this._emitHeldDown = false;
     this._emitDragging = false;
     this._emitPointerId = -1;
     this._emitTouchId = null;
+    this._emitSettleY = 0;
     const fill = this._emitButton?.querySelector(".falling-emit-fill");
     if (fill) fill.style.transition = "";
     this._emitButton?.classList.remove("is-pressed", "is-held");
@@ -981,15 +1421,15 @@ export class FallingInput {
       event.stopPropagation();
       return;
     }
-    this._touchEmit = true;
+    this._touchEmit = false;
     this._emitHeldDown = true;
     this._emitDragging = false;
     this._emitPointerId = event.pointerId;
     this._emitDownY = event.clientY;
+    this._emitSettleY = event.clientY;
     this._emitOriginY = event.clientY - (0.5 - this._emitAnalog) * EMIT_DRAG_SPAN;
     this._emitButton?.classList.add("is-pressed", "is-held");
-    this._emitButton?.setAttribute("aria-pressed", "true");
-    this._showEmitFill();
+    this._kickEmitCharge();
     this._paintEmitDrag();
     event.preventDefault();
     event.stopPropagation();
@@ -1010,6 +1450,10 @@ export class FallingInput {
     }
     this._emitAnalog = clamp(0.5 - (event.clientY - this._emitOriginY) / EMIT_DRAG_SPAN, 0, 1);
     this._paintEmitDrag();
+    if (this._touchEmit) return;
+    if (Math.abs(event.clientY - this._emitSettleY) < EMIT_REST_PX) return;
+    this._emitSettleY = event.clientY;
+    this._kickEmitCharge();
   }
 
   /** Keep the button at the size it was dragged to. */
@@ -1116,11 +1560,17 @@ export class FallingInput {
     this._yawRing = ring instanceof HTMLElement ? ring : null;
     const root = this._yawRing;
     if (!root) return;
-    this._yawWedge = root.querySelector("[data-falling-yaw-wedge]");
-    this._yawArc = root.querySelector("[data-falling-yaw-arc]");
-    this._yawStart = root.querySelector("[data-falling-yaw-start]");
-    this._yawNow = root.querySelector("[data-falling-yaw-now]");
-    this._yawReadout = root.querySelector("[data-falling-yaw-readout]");
+    this._yawTrackBack = root.querySelector("[data-falling-yaw-track-back]");
+    this._yawTrackFront = root.querySelector("[data-falling-yaw-track-front]");
+    this._yawRingBack = root.querySelector("[data-falling-yaw-ring-back]");
+    this._yawRingFront = root.querySelector("[data-falling-yaw-ring-front]");
+    this._yawNowBack = root.querySelector("[data-falling-yaw-tick-back]");
+    this._yawNowFront = root.querySelector("[data-falling-yaw-tick-front]");
+    this._yawSphere = root.querySelector("[data-falling-yaw-sphere]");
+    this._yawWire = root.querySelector("[data-falling-yaw-wire]");
+    this._paintTrack();
+    this._paintHeading();
+    this._applyYawOrb();
     root.addEventListener("pointerdown", this._onYawRingDown);
     root.addEventListener("pointermove", this._onYawRingMove);
     root.addEventListener("pointerup", this._onYawRingUp);
@@ -1128,6 +1578,7 @@ export class FallingInput {
     root.addEventListener("dblclick", this._onYawRingDblClick);
     root.addEventListener("contextmenu", this._onContextMenu);
     root.addEventListener("transitionend", this._onYawRingFade);
+    root.addEventListener("animationend", this._onYawOrbMotion);
   }
 
   _unbindYawRing() {
@@ -1140,27 +1591,38 @@ export class FallingInput {
     root.removeEventListener("dblclick", this._onYawRingDblClick);
     root.removeEventListener("contextmenu", this._onContextMenu);
     root.removeEventListener("transitionend", this._onYawRingFade);
-    root.classList.remove("is-dragging", "is-fading");
-    document.documentElement.classList.remove("is-yaw-ring");
+    root.removeEventListener("animationend", this._onYawOrbMotion);
+    root.classList.remove("is-dragging", "is-fading", "is-zooming", "is-leaving", "is-arriving", "is-hidden");
+    document.documentElement.classList.remove("is-yaw-turn", "is-yaw-zoom");
+    window.clearTimeout(this._wheelZoomVisualTimer);
+    this._wheelZoomVisualTimer = 0;
+    this._wheelZoomVisual = 0;
+    this._setYawSphereScale(1);
     this._yawRing = null;
-    this._yawWedge = null;
-    this._yawArc = null;
-    this._yawStart = null;
-    this._yawNow = null;
-    this._yawReadout = null;
+    this._yawTrackBack = null;
+    this._yawTrackFront = null;
+    this._yawRingBack = null;
+    this._yawRingFront = null;
+    this._yawNowBack = null;
+    this._yawNowFront = null;
+    this._yawSphere = null;
+    this._yawWire = null;
+  }
+
+  _paintTrack() {
+    this._yawTrackBack?.setAttribute("d", ringOpen(Math.PI, Math.PI * 2));
+    this._yawTrackFront?.setAttribute("d", ringOpen(0, Math.PI));
   }
 
   /**
-   * Angle of the pointer around the ring center. 0 is screen-right, and
-   * clockwise increases it.
-   * @param {PointerEvent} event
+   * The ring is the playfield heading. Other turns (stick, middle-drag) update it too.
+   * @param {number} yaw
    */
-  _yawRingPointerAngle(event) {
-    const rect = this._yawRing.getBoundingClientRect();
-    return Math.atan2(
-      event.clientY - (rect.top + rect.height / 2),
-      event.clientX - (rect.left + rect.width / 2),
-    );
+  syncSurfaceYaw(yaw) {
+    if (!Number.isFinite(yaw)) return;
+    if (Math.abs(yaw - this._surfaceYaw) < 1e-5) return;
+    this._surfaceYaw = yaw;
+    this._paintHeading();
   }
 
   /**
@@ -1172,32 +1634,65 @@ export class FallingInput {
     if (!root) return;
     this._yawRingHeld = true;
     this._yawRingPointer = event.pointerId;
-    this._yawRingStart = this._yawRingPointerAngle(event);
-    this._yawRingAngle = this._yawRingStart;
+    this._yawRingMode = null;
+    this._yawOriginX = event.clientX;
+    this._yawOriginY = event.clientY;
+    this._yawLastX = event.clientX;
+    this._yawLastY = event.clientY;
     this._yawRingTotal = 0;
-    root.classList.remove("is-fading");
-    root.classList.add("is-dragging");
-    document.documentElement.classList.add("is-yaw-ring");
-    this._paintYawRing();
+    this._yawZoomDrag = 0;
+    root.classList.remove("is-fading", "is-dragging", "is-zooming");
+    this._setYawSphereScale(1);
     root.setPointerCapture?.(event.pointerId);
     event.preventDefault();
   }
 
   /**
+   * Sideways drag turns the field. Up and down zoom, and the sphere
+   * grows or shrinks a little so that mode is visible. The first few
+   * pixels pick one axis and the gesture stays there.
    * @param {PointerEvent} event
    */
   _onYawRingMove(event) {
     if (!this._yawRingHeld || event.pointerId !== this._yawRingPointer) return;
     if (event.pointerType === "touch") return;
-    const angle = this._yawRingPointerAngle(event);
-    const delta = wrapTurn(angle - this._yawRingAngle);
-    this._yawRingAngle = angle;
-    if (!delta) return;
-    this._yawRingTotal += delta;
-    // The wedge follows the pointer. Positive surface yaw turns the other way
-    // on this camera, so clockwise drag applies a negative yaw.
-    this._orbitAccum += -delta;
-    this._paintYawRing();
+    let dx = event.clientX - this._yawLastX;
+    let dy = event.clientY - this._yawLastY;
+    this._yawLastX = event.clientX;
+    this._yawLastY = event.clientY;
+    if (!this._yawRingMode) {
+      const adx = Math.abs(event.clientX - this._yawOriginX);
+      const ady = Math.abs(event.clientY - this._yawOriginY);
+      if (Math.max(adx, ady) < YAW_AXIS_SLOP) return;
+      this._yawRingMode = adx >= ady ? "yaw" : "zoom";
+      dx = event.clientX - this._yawOriginX;
+      dy = event.clientY - this._yawOriginY;
+      const root = this._yawRing;
+      if (this._yawRingMode === "yaw") {
+        root?.classList.add("is-dragging");
+        document.documentElement.classList.add("is-yaw-turn");
+      } else {
+        window.clearTimeout(this._wheelZoomVisualTimer);
+        this._wheelZoomVisualTimer = 0;
+        this._wheelZoomVisual = 0;
+        root?.classList.add("is-zooming");
+        document.documentElement.classList.add("is-yaw-zoom");
+      }
+    }
+    if (this._yawRingMode === "yaw") {
+      if (!dx) return;
+      const delta = dx * YAW_DRAG_RAD_PER_PX;
+      this._yawRingTotal += delta;
+      // Dragging right sweeps the ring clockwise. Positive surface yaw
+      // turns the other way on this camera.
+      this._orbitAccum += -delta;
+      this._surfaceYaw -= delta;
+      this._paintHeading();
+      return;
+    }
+    if (!dy) return;
+    this._yawZoomDrag += dy;
+    this._zoomAccum *= Math.exp(dy * YAW_ZOOM_PER_PX);
   }
 
   /**
@@ -1206,7 +1701,7 @@ export class FallingInput {
   _onYawRingUp(event) {
     if (!this._yawRingHeld) return;
     if (event.pointerId !== this._yawRingPointer && event.type !== "pointercancel") return;
-    this._releaseYawRing(Math.abs(this._yawRingTotal) > 1e-4);
+    this._releaseYawRing(false);
   }
 
   /**
@@ -1215,13 +1710,17 @@ export class FallingInput {
   _onYawRingDblClick(event) {
     event.preventDefault();
     this._orbitAccum = 0;
+    this._zoomAccum = 1;
     this._yawHome = true;
     this._yawRingHeld = false;
     this._yawRingPointer = -1;
+    this._yawRingMode = null;
     this._yawRingTotal = 0;
-    document.documentElement.classList.remove("is-yaw-ring");
-    this._yawRing?.classList.remove("is-dragging", "is-fading");
-    this._clearYawRingPaint();
+    this._yawZoomDrag = 0;
+    this._surfaceYaw = 0;
+    document.documentElement.classList.remove("is-yaw-turn", "is-yaw-zoom");
+    this._yawRing?.classList.remove("is-dragging", "is-fading", "is-zooming");
+    this._paintHeading();
   }
 
   /**
@@ -1232,64 +1731,56 @@ export class FallingInput {
     const root = this._yawRing;
     if (!root || this._yawRingHeld || !root.classList.contains("is-fading")) return;
     root.classList.remove("is-fading");
-    this._clearYawRingPaint();
   }
 
   /**
    * @param {boolean} fade
    */
   _releaseYawRing(fade) {
-    if (!this._yawRingHeld && !this._yawRing?.classList.contains("is-dragging")) {
-      document.documentElement.classList.remove("is-yaw-ring");
+    const root = this._yawRing;
+    if (!this._yawRingHeld && !root?.classList.contains("is-dragging") && !root?.classList.contains("is-zooming")) {
+      document.documentElement.classList.remove("is-yaw-turn", "is-yaw-zoom");
       return;
     }
     this._yawRingHeld = false;
     this._yawRingPointer = -1;
-    document.documentElement.classList.remove("is-yaw-ring");
-    const root = this._yawRing;
+    this._yawRingMode = null;
+    this._yawZoomDrag = 0;
+    document.documentElement.classList.remove("is-yaw-turn", "is-yaw-zoom");
     if (!root) return;
-    root.classList.remove("is-dragging");
-    if (fade) root.classList.add("is-fading");
-    else {
-      root.classList.remove("is-fading");
-      this._clearYawRingPaint();
-    }
+    root.classList.remove("is-dragging", "is-zooming");
+    root.classList.remove("is-fading");
   }
 
-  _paintYawRing() {
-    const total = this._yawRingTotal;
-    const start = this._yawRingStart;
-    const turn = Math.PI * 2;
-    let mag = Math.abs(total) % turn;
-    if (Math.abs(total) > 1e-4 && mag < 0.001) mag = turn - 0.001;
-    const dir = total < 0 ? -1 : 1;
-    const end = start + dir * mag;
-    setYawRay(this._yawStart, start);
-    setYawRay(this._yawNow, end);
-    if (this._yawReadout) this._yawReadout.textContent = formatYawDegrees(total);
-    if (mag < 0.001) {
-      this._yawWedge?.setAttribute("d", "");
-      this._yawArc?.setAttribute("d", "");
+  /**
+   * @param {number} scale
+   */
+  _setYawSphereScale(scale) {
+    const sphere = this._yawSphere;
+    if (!sphere) return;
+    sphere.style.transform = `scale(${scale})`;
+  }
+
+  _paintSphere() {
+    this._yawWire?.setAttribute("d", sphereWirePath(this._surfaceYaw));
+  }
+
+  _paintHeading() {
+    this._paintSphere();
+    const sweep = headingSweep(this._surfaceYaw);
+    const end = YAW_FAR + sweep;
+    hideRingTick(this._yawNowBack);
+    hideRingTick(this._yawNowFront);
+    const cap = isRingFront(end) ? this._yawNowFront : this._yawNowBack;
+    setRingTick(cap, end);
+    if (sweep === 0) {
+      this._yawRingBack?.setAttribute("d", "");
+      this._yawRingFront?.setAttribute("d", "");
       return;
     }
-    const large = mag > Math.PI ? 1 : 0;
-    const sweep = dir > 0 ? 1 : 0;
-    const p0 = yawPolar(start, YAW_RING_R);
-    const p1 = yawPolar(end, YAW_RING_R);
-    const arc = `M ${p0} A ${YAW_RING_R} ${YAW_RING_R} 0 ${large} ${sweep} ${p1}`;
-    this._yawWedge?.setAttribute("d", `M ${YAW_RING_CX} ${YAW_RING_CY} L ${p0} A ${YAW_RING_R} ${YAW_RING_R} 0 ${large} ${sweep} ${p1} Z`);
-    this._yawArc?.setAttribute("d", arc);
-  }
-
-  _clearYawRingPaint() {
-    this._yawWedge?.setAttribute("d", "");
-    this._yawArc?.setAttribute("d", "");
-    this._yawStart?.setAttribute("x2", this._yawStart.getAttribute("x1") || "0");
-    this._yawStart?.setAttribute("y2", this._yawStart.getAttribute("y1") || "0");
-    this._yawNow?.setAttribute("x2", this._yawNow.getAttribute("x1") || "0");
-    this._yawNow?.setAttribute("y2", this._yawNow.getAttribute("y1") || "0");
-    if (this._yawReadout) this._yawReadout.textContent = "";
-    this._yawRingTotal = 0;
+    const path = ringSweep(YAW_FAR, end);
+    this._yawRingBack?.setAttribute("d", path.back);
+    this._yawRingFront?.setAttribute("d", path.front);
   }
 }
 
@@ -1374,15 +1865,25 @@ function isPlayStationPad(pad) {
  * @param {number} dead
  */
 function playstationDriving(pad, dead) {
-  if (!isPlayStationPad(pad)) return false;
-  const axes = pad.axes || [];
-  for (let i = 0; i < axes.length; i += 1) {
-    if (Math.abs(Number(axes[i]) || 0) >= dead) return true;
-  }
-  const buttons = pad.buttons || [];
-  for (let i = 0; i < buttons.length; i += 1) {
-    const button = buttons[i];
-    if (button && (button.pressed || button.value > 0.15)) return true;
+  return isPlayStationPad(pad) && gamepadDriving(pad, dead);
+}
+
+/**
+ * Any gamepad that is being driven, not one that is only plugged in.
+ * @param {Gamepad | null | undefined} pad
+ * @param {number} dead
+ */
+function gamepadDriving(pad, dead) {
+  if (pad) {
+    const axes = pad.axes || [];
+    for (let i = 0; i < axes.length; i += 1) {
+      if (Math.abs(Number(axes[i]) || 0) >= dead) return true;
+    }
+    const buttons = pad.buttons || [];
+    for (let i = 0; i < buttons.length; i += 1) {
+      const button = buttons[i];
+      if (button && (button.pressed || button.value > 0.15)) return true;
+    }
   }
   return !!(dualsenseHid.enabled && dualsenseHid.connected && dualsenseHid.touch?.active);
 }

@@ -1,9 +1,9 @@
 import * as THREE from "three";
-import { audioEngine } from "./audio-engine.js?v=115";
+import { audioEngine } from "./audio-engine.js?v=116";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=78";
-import { inputBindings } from "./input-bindings.js?v=16";
-import { fallingInput } from "./falling-input.js?v=67";
+import { inputBindings } from "./input-bindings.js?v=17";
+import { fallingInput } from "./falling-input.js?v=80";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -1166,6 +1166,7 @@ function setCameraDist(next) {
   if (Math.abs(clamped - cameraDist) < 1e-4) return cameraDist;
   cameraDist = clamped;
   syncCamera();
+  fallingInput.syncCameraZoom(cameraDist, minDist, CAMERA_DIST_MAX);
   return cameraDist;
 }
 
@@ -2289,6 +2290,7 @@ function applyInput(dt) {
   if (frame.orbitDelta) rotateSurface(frame.orbitDelta);
   if (frame.yawHome) setSurfaceYaw(0);
   if (frame.viewYaw) yawAboutView(frame.viewYaw);
+  fallingInput.syncSurfaceYaw(surface ? surface.rotation.y : 0);
   if (frame.zoomFactor !== 1) zoomCamera(frame.zoomFactor);
   if (!stickHoldsAim && frame.touchZoom !== 1) pinEmitterAtScreenCenter();
 
@@ -3669,6 +3671,7 @@ function initScene(nextCanvas) {
 
   camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
   syncCamera();
+  fallingInput.syncCameraZoom(cameraDist, CAMERA_DIST_MIN, CAMERA_DIST_MAX);
 
   renderer = new THREE.WebGLRenderer({
     canvas,

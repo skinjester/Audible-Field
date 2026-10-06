@@ -605,7 +605,7 @@ export class EchoScapeAudioEngine {
     /** Landing voice. Phrase restarts the sample in phase with the bed. */
     this.splashMode = "phrase";
     /** Dry voice of a rising atom: a scrap of its quadrant's bed. */
-    this.riseMode = "drift";
+    this.riseMode = "thread";
     /** @type {Map<number, object>} */
     this._riseVoices = new Map();
     /** Cell ids that already played their one-shot flake. */
@@ -3460,7 +3460,7 @@ export class EchoScapeAudioEngine {
    * @param {string} mode
    */
   setRiseMode(mode) {
-    const next = RISE_MODE_IDS.has(mode) ? mode : "drift";
+    const next = RISE_MODE_IDS.has(mode) ? mode : "thread";
     if (this.riseMode === next) return;
     this.riseMode = next;
     this._clearRiseGrains();
@@ -3483,7 +3483,7 @@ export class EchoScapeAudioEngine {
       this._clearRiseGrains();
       return;
     }
-    const mode = RISE_MODE_IDS.has(this.riseMode) ? this.riseMode : "drift";
+    const mode = RISE_MODE_IDS.has(this.riseMode) ? this.riseMode : "thread";
     const list = Array.isArray(atoms) ? atoms : [];
     if (mode === "flake") {
       this._clearRiseLoops();

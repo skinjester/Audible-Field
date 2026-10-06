@@ -71,7 +71,7 @@ const BED_RING = 2.6;
 /** After this, the corner's reverb, send, and held notes are shut off so the next pile does not inherit a live tank. */
 const RING_LIMIT = 3.4;
 /** Settings switch. Off closes the Diffuse Greyhole send, feedback, and wet return. */
-let diffuseReverb = true;
+let diffuseReverb = false;
 
 export function setDiffuseReverb(enabled) {
   diffuseReverb = !!enabled;

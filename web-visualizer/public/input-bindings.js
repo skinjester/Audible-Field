@@ -9,9 +9,9 @@
  *   Shift+LMB hold  → smallest emitter (one half-size column)
  *   RMB drag             → slide the playfield
  *   Shift+RMB or Alt+RMB → yaw the playfield
- *   MMB drag             → yaw the playfield
- *   top-center ring      → drag to yaw; double-click resets the heading
- *   wheel           → zoom
+ *   MMB drag             → yaw the playfield (the wheel is ignored while it is held)
+ *   top-center ring      → drag sideways to yaw, up or down to zoom; double-click resets the heading
+ *   wheel           → zoom (a middle click does not yaw while the wheel is moving)
  *
  * Touchpad (DualSense, after Connect touchpad):
  *   finger          → aim the emitter on the emit-height plane
@@ -23,7 +23,8 @@
  *
  * Left stick and D-pad move the emitter across the plane above the grid.
  * At the edge of the view they scroll the plane, so the whole surface stays reachable.
- * Right stick turns the plane about the center of the view.
+ * Right stick X turns the plane about the center of the view. Right stick Y zooms.
+ * A push nearer one axis favors that action. A diagonal still does both.
  *
  * Keyboard:
  *   X hold          → emit
@@ -34,7 +35,7 @@
  *   one-finger drag  → pan the field under the emitter (a tap, or the first of two fingers, does not)
  *   two-finger twist → yaw the field around the emitter at screen center
  *   pinch            → zoom toward and away from that emitter
- *   Emit button      → press to emit; drag up or down sizes the plane while pouring.
+ *   Emit button      → hold still to emit; drag sizes the plane, and a resting hold while dragging starts the pour. Once pouring, a drag keeps emitting.
  */
 
 /** @typedef {"pressure" | "max" | "single"} BrushMode */
@@ -114,6 +115,12 @@ export const inputBindings = {
     orbitStickRate: 1.15,
     /** Right-stick Y → zoom exp rate. */
     zoomStickRate: 1.15,
+    /**
+     * How hard the right stick favors the nearer axis. 1 is linear.
+     * Higher quiets the lesser axis on a mostly-straight push (yaw without
+     * much zoom, or zoom without much yaw). A 45° push is unchanged.
+     */
+    rightStickAxialBias: 2.2,
   },
   touch: {
     /** 1 matches the pinch ratio to camera distance. Above 1 is more sensitive. */
