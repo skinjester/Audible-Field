@@ -2496,6 +2496,12 @@ html.is-yaw-zoom * {
   min-height: 0;
 }
 
+@media (pointer: coarse), (hover: none), (max-width: 720px) {
+  .falling-rise-modes.falling-yaw-pivot {
+    display: none;
+  }
+}
+
 .falling-diffuse-reverb {
   flex: 0 0 auto;
   font-size: 11px;
