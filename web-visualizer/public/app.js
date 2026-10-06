@@ -4,7 +4,7 @@ import { gamepadInput } from "./gamepad-input.js?v=20";
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
 import * as diagnostics from "./diagnostics.js?v=61";
-import * as fallingTab from "./falling-tab.js?v=120";
+import * as fallingTab from "./falling-tab.js?v=122";
 import * as visualizeTab from "./visualize-tab.js?v=52";
 
 const statusEl = document.querySelector(".status");

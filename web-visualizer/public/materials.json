@@ -5,6 +5,7 @@
     {
       "id": "block",
       "label": "Block",
+      "blurb": "Sinks under what is below",
       "color": "#c4624e",
       "surface": "solid",
       "rules": [
@@ -31,6 +32,7 @@
     {
       "id": "sand",
       "label": "Sand",
+      "blurb": "Piles into gaps and spreads",
       "color": "#e0a84a",
       "surface": "solid",
       "rules": [
@@ -55,6 +57,7 @@
     {
       "id": "diffuse",
       "label": "Diffuse",
+      "blurb": "Converts, then floats away",
       "color": "#f4d59a",
       "surface": "solid",
       "rules": [
@@ -87,6 +90,7 @@
     {
       "id": "erode",
       "label": "Erode",
+      "blurb": "Clears, then shrinks the rest",
       "color": "#7a9e6a",
       "surface": "solid",
       "sonify": false,

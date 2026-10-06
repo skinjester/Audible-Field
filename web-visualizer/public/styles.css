@@ -336,6 +336,8 @@ h1 {
 
 [data-panel="visualize"],
 [data-panel="falling-blocks"] {
+  --falling-control: 48px;
+  --falling-control-icon: 26px;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
@@ -1643,6 +1645,7 @@ dd {
 @media (pointer: coarse) {
   [data-panel="falling-blocks"] {
     --falling-edge: 8px;
+    --emit-size: 112px;
   }
 
   .falling-emit-dock {
@@ -1664,8 +1667,8 @@ dd {
     right: auto;
     bottom: auto;
     z-index: 1;
-    width: 84px;
-    height: 84px;
+    width: var(--emit-size, 112px);
+    height: var(--emit-size, 112px);
     min-width: 0;
     padding: 0;
     border: 0;
@@ -1698,9 +1701,9 @@ dd {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 3px;
-    width: 84px;
-    height: 84px;
+    gap: 4px;
+    width: var(--emit-size, 112px);
+    height: var(--emit-size, 112px);
     border-radius: 50%;
     background: rgba(0, 0, 0, 0.8);
     border: 1px solid rgba(255, 255, 255, 0.55);
@@ -1726,7 +1729,10 @@ dd {
   }
 
   .falling-material-bar {
-    max-width: calc(100% - 208px - env(safe-area-inset-right, 0px));
+    left: max(var(--falling-edge), env(safe-area-inset-left));
+    right: auto;
+    width: max-content;
+    max-width: calc(100% - var(--emit-size, 112px) - 48px - env(safe-area-inset-right, 0px));
     bottom: max(16px, env(safe-area-inset-bottom));
   }
 
@@ -1739,7 +1745,7 @@ dd {
   display: flex;
   flex-direction: column;
   align-items: center;
-  height: 84px;
+  height: 64px;
   color: rgba(255, 255, 255, 0.45);
 }
 
@@ -1823,8 +1829,8 @@ dd {
 
 .falling-emit-chevron {
   display: block;
-  width: 16px;
-  height: 8px;
+  width: 22px;
+  height: 11px;
   color: rgba(255, 255, 255, 0.55);
   position: relative;
   z-index: 1;
@@ -1833,7 +1839,7 @@ dd {
 .falling-emit-label {
   position: relative;
   z-index: 1;
-  font-size: 10px;
+  font-size: 13px;
   line-height: 1;
 }
 
@@ -1953,21 +1959,21 @@ dd {
   appearance: none;
   display: grid;
   place-items: center;
-  flex: 0 0 48px;
+  flex: 0 0 var(--falling-control, 48px);
   box-sizing: border-box;
-  width: 48px;
-  height: 48px;
-  min-width: 48px;
-  min-height: 48px;
-  max-width: 48px;
-  max-height: 48px;
+  width: var(--falling-control, 48px);
+  height: var(--falling-control, 48px);
+  min-width: var(--falling-control, 48px);
+  min-height: var(--falling-control, 48px);
+  max-width: var(--falling-control, 48px);
+  max-height: var(--falling-control, 48px);
   padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.8);
   color: rgba(255, 255, 255, 0.82);
   font: inherit;
-  font-size: 26px;
+  font-size: var(--falling-control-icon, 26px);
   font-weight: 500;
   line-height: 1;
   pointer-events: auto;
@@ -1975,8 +1981,8 @@ dd {
 }
 
 .falling-icon-btn svg {
-  width: 26px;
-  height: 26px;
+  width: var(--falling-control-icon, 26px);
+  height: var(--falling-control-icon, 26px);
   display: block;
 }
 
@@ -2586,7 +2592,7 @@ dd {
 .falling-side {
   position: absolute;
   /* Below the stats chevron, which stacks under the about button. */
-  top: calc(12px + 48px + 10px + 48px + 12px);
+  top: calc(12px + var(--falling-control, 48px) + 10px + var(--falling-control, 48px) + 12px);
   right: 12px;
   z-index: 4;
   display: flex;
@@ -2616,7 +2622,7 @@ dd {
 
 .falling-material-bar {
   position: absolute;
-  left: 16px;
+  left: 12px;
   bottom: 20px;
   z-index: 2;
   display: flex;
@@ -2625,7 +2631,7 @@ dd {
   justify-content: flex-end;
   gap: 6px;
   width: max-content;
-  max-width: calc(100% - 32px);
+  max-width: calc(100% - 24px);
   pointer-events: none;
 }
 
@@ -2633,6 +2639,10 @@ dd {
   display: grid;
   grid-template-columns: auto auto auto;
   align-items: center;
+  justify-content: start;
+  justify-items: start;
+  width: max-content;
+  max-width: 100%;
   column-gap: 12px;
   row-gap: 8px;
 }
@@ -2655,15 +2665,39 @@ dd {
 .falling-material-current {
   grid-column: 2;
   grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
   margin: 4px 0 0;
-  min-height: 1em;
+  min-width: 0;
   font-size: 10px;
   font-weight: 500;
-  line-height: 1;
+  line-height: 1.2;
   letter-spacing: 0.01em;
   color: rgba(255, 255, 255, 0.92);
   text-align: left;
+}
+
+.falling-material-current [data-falling-material-name] {
+  display: block;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1;
   text-transform: uppercase;
+}
+
+.falling-material-blurb {
+  display: block;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+  text-transform: none;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.falling-material-blurb:empty {
+  display: none;
 }
 
 .falling-material-bar .pad-glyph {
@@ -2766,15 +2800,19 @@ body:not(.has-dualsense) .pad-glyph {
 .falling-material-swatch {
   box-sizing: border-box;
   appearance: none;
-  flex: 0 0 auto;
+  flex: 0 0 var(--falling-control, 48px);
   display: grid;
   place-items: center;
-  width: 48px;
-  height: 48px;
+  width: var(--falling-control, 48px);
+  height: var(--falling-control, 48px);
+  min-width: var(--falling-control, 48px);
+  min-height: var(--falling-control, 48px);
+  max-width: var(--falling-control, 48px);
+  max-height: var(--falling-control, 48px);
   padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.8);
   color: rgba(255, 255, 255, 0.55);
   box-shadow: none;
   cursor: pointer;
@@ -2784,53 +2822,65 @@ body:not(.has-dualsense) .pad-glyph {
 .falling-material-glyph {
   display: grid;
   place-items: center;
-  width: 48px;
-  height: 48px;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.8);
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
   box-sizing: border-box;
+  pointer-events: none;
 }
 
 .falling-material-glyph svg {
-  width: 26px;
-  height: 26px;
+  width: var(--falling-control-icon, 26px);
+  height: var(--falling-control-icon, 26px);
   display: block;
 }
 
 .falling-material-swatch:hover,
 .falling-material-swatch:focus-visible {
   color: #fff;
-  outline: none;
-}
-
-.falling-material-swatch:hover .falling-material-glyph,
-.falling-material-swatch:focus-visible .falling-material-glyph {
   border-color: rgba(255, 255, 255, 0.7);
+  outline: none;
 }
 
 .falling-material-swatch[aria-pressed="true"] {
   color: var(--swatch, #fff);
-}
-
-.falling-material-swatch[aria-pressed="true"] .falling-material-glyph {
   border-color: #fff;
-  box-shadow: 0 0 0 1px #fff;
 }
 
 @media (pointer: coarse) {
   [data-panel="falling-blocks"] .falling-material-bar {
     left: max(var(--falling-edge, 8px), env(safe-area-inset-left));
-    right: calc(164px + env(safe-area-inset-right, 0px));
-    width: auto;
-    max-width: none;
+    right: auto;
+    width: max-content;
   }
 
-  [data-panel="falling-blocks"] .falling-material-row,
+  [data-panel="falling-blocks"] .falling-material-row {
+    width: max-content;
+    max-width: 100%;
+    min-width: 0;
+    justify-content: start;
+    gap: 4px;
+  }
+
   [data-panel="falling-blocks"] .falling-palette {
     width: auto;
     min-width: 0;
-    gap: 6px;
+    gap: 4px;
+  }
+
+  [data-panel="falling-blocks"] .falling-material-current {
+    grid-column: 2;
+    max-width: 100%;
+    font-size: 13px;
+    line-height: 1.25;
+  }
+
+  [data-panel="falling-blocks"] .falling-material-current [data-falling-material-name] {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 

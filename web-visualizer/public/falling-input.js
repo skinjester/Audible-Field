@@ -11,6 +11,12 @@ import { TouchInput } from "./touch-input.js?v=4";
 const EMIT_HOLD_MS = 280;
 /** Movement that counts as still dragging, so the hold waits until the finger rests. */
 const EMIT_REST_PX = 6;
+/** Finger travel across the whole emitter size, from a single stream to a clump. */
+const EMIT_DRAG_SPAN = 36;
+/** Motion that starts a size change, so a tap can still pour at the current size. */
+const EMIT_DRAG_START = 6;
+/** How far the button face slides across the same range. The thumb stays on the control. */
+const EMIT_DRAG_SLIDE = 12;
 
 /** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
 
@@ -907,8 +913,7 @@ export class FallingInput {
     this._emitPointerId = event.pointerId;
     this._emitDownY = event.clientY;
     this._emitSettleY = event.clientY;
-    const span = 72;
-    this._emitOriginY = event.clientY - (0.5 - this._emitAnalog) * span;
+    this._emitOriginY = event.clientY - (0.5 - this._emitAnalog) * EMIT_DRAG_SPAN;
     this._emitButton?.classList.add("is-pressed", "is-held");
     this._kickEmitCharge();
     this._paintEmitDrag();
@@ -924,13 +929,12 @@ export class FallingInput {
    */
   _onEmitPointerMove(event) {
     if (!this._emitHeldDown || event.pointerId !== this._emitPointerId) return;
-    if (!this._emitDragging && Math.abs(event.clientY - this._emitDownY) <= 10) return;
+    if (!this._emitDragging && Math.abs(event.clientY - this._emitDownY) <= EMIT_DRAG_START) return;
     if (!this._emitDragging) {
       this._emitDragging = true;
       this._emitSizeLatched = true;
     }
-    const span = 72;
-    this._emitAnalog = clamp(0.5 - (event.clientY - this._emitOriginY) / span, 0, 1);
+    this._emitAnalog = clamp(0.5 - (event.clientY - this._emitOriginY) / EMIT_DRAG_SPAN, 0, 1);
     this._paintEmitDrag();
     if (this._touchEmit) return;
     if (Math.abs(event.clientY - this._emitSettleY) < EMIT_REST_PX) return;
@@ -943,7 +947,7 @@ export class FallingInput {
     const btn = this._emitButton;
     if (!btn) return;
     const dock = btn.parentElement;
-    const shift = (0.5 - this._emitAnalog) * 28;
+    const shift = (0.5 - this._emitAnalog) * EMIT_DRAG_SLIDE;
     const face = btn.querySelector(".falling-emit-face");
     if (face) face.style.transform = `translateY(${shift}px)`;
     const dir = this._emitAnalog > 0.62 ? "up" : this._emitAnalog < 0.38 ? "down" : "mid";

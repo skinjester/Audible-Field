@@ -25,7 +25,7 @@
       content="Interactive browser instrument where simulated materials fall, spread, collide, and shape sound in real time."
     />
     <meta name="twitter:image" content="https://audible-field.vercel.app/og-image-2026-10-05.png" />
-    <link rel="stylesheet" href="/styles.css?v=282" />
+    <link rel="stylesheet" href="/styles.css?v=288" />
     <script type="importmap">
       {
         "imports": {
@@ -569,7 +569,10 @@
                   <span class="pad-glyph" data-falling-shoulder="prev" role="img" aria-label="L2">&#x011A;</span>
                   <div class="falling-palette" data-falling-palette role="group" aria-label="Materials"></div>
                   <span class="pad-glyph" data-falling-shoulder="next" role="img" aria-label="R2">&#x011B;</span>
-                  <p class="falling-material-current" data-falling-material-name></p>
+                  <p class="falling-material-current">
+                    <span data-falling-material-name></span>
+                    <span class="falling-material-blurb" data-falling-material-blurb></span>
+                  </p>
                 </div>
               </div>
           </div>
@@ -584,6 +587,6 @@
         <p class="start-screen-note">A field of falling material, heard where it settles.</p>
       </div>
     </div>
-    <script type="module" src="/app.js?v=504"></script>
+    <script type="module" src="/app.js?v=507"></script>
   </body>
 </html>

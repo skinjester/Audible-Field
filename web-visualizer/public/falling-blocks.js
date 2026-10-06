@@ -1,9 +1,9 @@
 import * as THREE from "three";
 import { audioEngine } from "./audio-engine.js?v=115";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
-import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=77";
+import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=78";
 import { inputBindings } from "./input-bindings.js?v=15";
-import { fallingInput } from "./falling-input.js?v=62";
+import { fallingInput } from "./falling-input.js?v=63";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 /**
@@ -1632,6 +1632,22 @@ function emitScaleFromMode(mode, analog, invert) {
   return emitScaleFromTrigger(analog, invert);
 }
 
+/**
+ * On-screen Emit drag. 0 is a single stream and 1 is the full field.
+ * The middle of the drag is the middle size. The trigger curve is not used
+ * here; that curve keeps a light pull thin across most of its travel.
+ */
+function brushSizeFromSlider(amount) {
+  const steps = ((BRUSH_MAX - 1) >> 1) + 1;
+  const i = Math.min(steps - 1, Math.round(clamp01(amount) * (steps - 1)));
+  return 1 + i * 2;
+}
+
+function emitScaleFromSlider(amount) {
+  const t = clamp01(amount);
+  return ATOM_SCALE_MIN + t * (1 - ATOM_SCALE_MIN);
+}
+
 /** Coarse enough that analog noise does not keep resetting the settle wait. */
 function quantSizeKey(brush, scale) {
   return brush * 1000 + Math.round(scale * 40);
@@ -1816,7 +1832,9 @@ function syncPaletteUi() {
     if (on) label = btn.getAttribute("aria-label") || "";
   }
   const nameEl = document.querySelector("[data-falling-material-name]");
-  if (nameEl) nameEl.textContent = label;
+  const blurbEl = document.querySelector("[data-falling-material-blurb]");
+  if (nameEl) nameEl.textContent = mat?.label || label;
+  if (blurbEl) blurbEl.textContent = mat?.blurb || "";
 }
 
 function syncShoulderGlyphs(prevHeld, nextHeld) {
@@ -2235,12 +2253,12 @@ function applyInput(dt) {
   } else if (frame.rtHeld) {
     brush = brushSizeFromTrigger(frame.analog, false);
     scale = emitScaleFromTrigger(frame.analog, false);
+  } else if (frame.touchPour || frame.emitSizing) {
+    brush = brushSizeFromSlider(frame.analog);
+    scale = emitScaleFromSlider(frame.analog);
   } else if (frame.emit) {
     brush = brushSizeFromMode(frame.brushMode, frame.analog, frame.curveInvert);
     scale = emitScaleFromMode(frame.brushMode, frame.analog, frame.curveInvert);
-  } else if (frame.emitSizing) {
-    brush = brushSizeFromTrigger(frame.analog, false);
-    scale = emitScaleFromTrigger(frame.analog, false);
   }
   const settled = emitterSizeSettled(dt, brush, scale);
   // A pressed Emit button keeps pouring. Navigation must not pause it, and
@@ -3278,7 +3296,7 @@ function startRenderLoop() {
 }
 
 async function loadCatalog() {
-  const res = await fetch(`/materials.json?v=87`);
+  const res = await fetch(`/materials.json?v=88`);
   if (!res.ok) throw new Error(`materials.json ${res.status}`);
   const prev = activeMaterialId;
   catalog = compileMaterials(parseMaterialsJson(await res.text()));

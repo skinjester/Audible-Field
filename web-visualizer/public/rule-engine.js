@@ -87,7 +87,7 @@ const ROTATIONS_XZ = [
 ];
 
 /**
- * @typedef {{ id: string, label: string, color: string, opacity: number, surface: "solid" | "liquid", sonify: boolean, pushPower: number, slideOpen: boolean, rules: object[], effects: object[] }} MaterialDef
+ * @typedef {{ id: string, label: string, blurb: string, color: string, opacity: number, surface: "solid" | "liquid", sonify: boolean, pushPower: number, slideOpen: boolean, rules: object[], effects: object[] }} MaterialDef
  * @typedef {{
  *   get: (x: number, y: number, z: number) => number,
  *   set: (x: number, y: number, z: number, v: number) => void,
@@ -201,6 +201,7 @@ export function compileMaterials(raw) {
     const def = {
       id: item.id,
       label: String(item.label || item.id),
+      blurb: String(item.blurb || item.label || item.id),
       color: String(item.color || "#cccccc"),
       opacity,
       surface,
