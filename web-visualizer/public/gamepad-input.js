@@ -14,7 +14,7 @@ import {
   setTrigger,
   setFxStick,
 } from "./mixer-core.js?v=67";
-import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=15";
+import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=16";
 
 function lerp(inMin, inMax, outMin, outMax, value) {
   if (inMax === inMin) return outMin;

@@ -4,19 +4,20 @@
  */
 
 import { dualsenseHid } from "./dualsense-hid.js?v=5";
-import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=15";
+import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=16";
 import { TouchInput } from "./touch-input.js?v=4";
 
-/** How long Emit must be held still before atoms pour. Matches --emit-hold. */
-const EMIT_HOLD_MS = 280;
-/** Movement that counts as still dragging, so the hold waits until the finger rests. */
-const EMIT_REST_PX = 6;
 /** Finger travel across the whole emitter size, from a single stream to a clump. */
 const EMIT_DRAG_SPAN = 36;
 /** Motion that starts a size change, so a tap can still pour at the current size. */
 const EMIT_DRAG_START = 6;
 /** How far the button face slides across the same range. The thumb stays on the control. */
 const EMIT_DRAG_SLIDE = 12;
+/**
+ * After pointercancel or lost capture, wait for a touch that still lists the
+ * Emit finger. Silence means the lift never arrived, so the hold ends.
+ */
+const EMIT_POINTER_DOUBT_MS = 700;
 
 /** @typedef {import("./input-bindings.js").BrushMode} BrushMode */
 
@@ -71,20 +72,21 @@ export class FallingInput {
     /** @type {HTMLElement | null} */
     this._emitButton = null;
     this._emitHeld = false;
-    /** Long-press has committed. Further drags keep pouring and size the plane. */
+    /** Press has started the pour. Further drags keep pouring and size the plane. */
     this._touchEmit = false;
     this._emitHeldDown = false;
-    this._emitHoldTimer = 0;
     this._emitFillGen = 0;
     this._emitPointerId = -1;
     /** Touch.identifier for the thumb. Distinct from the pointer id. */
     this._emitTouchId = null;
+    /** pointercancel or lost capture, until a touch event confirms the finger. */
+    this._emitPointerUncertain = false;
+    this._emitDoubtTimer = 0;
     this._emitDragging = false;
     this._emitSizeLatched = false;
     this._emitAnalog = 0.5;
     this._emitOriginY = 0;
     this._emitDownY = 0;
-    this._emitSettleY = 0;
     this._shiftHeld = false;
     this._altHeld = false;
     this._mouseFull = false;
@@ -140,6 +142,7 @@ export class FallingInput {
     this._onEmitPointerMove = this._onEmitPointerMove.bind(this);
     this._onEmitPointerUp = this._onEmitPointerUp.bind(this);
     this._onEmitTouchEnd = this._onEmitTouchEnd.bind(this);
+    this._onEmitTouchActive = this._onEmitTouchActive.bind(this);
     this._onEmitContextMenu = this._onEmitContextMenu.bind(this);
     this._onPointerDevice = this._onPointerDevice.bind(this);
     this._onWheelDevice = this._onWheelDevice.bind(this);
@@ -242,7 +245,6 @@ export class FallingInput {
   resetTransient() {
     this._emitHeld = false;
     this._touchEmit = false;
-    this._clearEmitHold();
     this._emitHeldDown = false;
     this._emitDragging = false;
     this._emitSizeLatched = false;
@@ -787,7 +789,6 @@ export class FallingInput {
     const btn = this._canvas?.parentElement?.querySelector("[data-falling-touch-emit]");
     if (!(btn instanceof HTMLElement)) return;
     this._emitButton = btn;
-    btn.style.setProperty("--emit-hold", `${EMIT_HOLD_MS}ms`);
     btn.addEventListener("pointerdown", this._onEmitPointerDown);
     btn.addEventListener("touchstart", this._onBlockBrowserGesture, { passive: false });
     btn.addEventListener("touchmove", this._onBlockBrowserGesture, { passive: false });
@@ -799,7 +800,11 @@ export class FallingInput {
     window[method]("pointermove", this._onEmitPointerMove);
     window[method]("pointerup", this._onEmitPointerUp);
     window[method]("pointercancel", this._onEmitPointerUp);
+    window[method]("lostpointercapture", this._onEmitPointerUp);
     document[method]("touchend", this._onEmitTouchEnd, true);
+    document[method]("touchcancel", this._onEmitTouchEnd, true);
+    document[method]("touchstart", this._onEmitTouchActive, true);
+    document[method]("touchmove", this._onEmitTouchActive, true);
   }
 
   _unbindEmitButton() {
@@ -810,11 +815,10 @@ export class FallingInput {
     btn.removeEventListener("touchmove", this._onBlockBrowserGesture);
     btn.removeEventListener("contextmenu", this._onEmitContextMenu);
     this._trackEmitPointer(false);
-    this._clearEmitHold();
+    this._clearEmitPointerDoubt();
     this._emitFillGen += 1;
     this._emitPointerId = -1;
     this._emitTouchId = null;
-    this._emitSettleY = 0;
     btn.classList.remove("is-pressed", "is-held", "is-charging", "is-filling");
     btn.setAttribute("aria-pressed", "false");
     this._emitAnalog = 0.5;
@@ -828,36 +832,6 @@ export class FallingInput {
     dock?.querySelector(".falling-emit-single")?.classList.remove("is-lit");
     dock?.querySelector(".falling-emit-stem")?.style.removeProperty("--emit-notch");
     this._emitButton = null;
-  }
-
-  _clearEmitHold() {
-    if (!this._emitHoldTimer) return;
-    clearTimeout(this._emitHoldTimer);
-    this._emitHoldTimer = 0;
-  }
-
-  /** Circle grows while the finger rests. Motion before the pour restarts that wait. */
-  _armEmitHold() {
-    this._clearEmitHold();
-    this._emitHoldTimer = window.setTimeout(() => {
-      this._emitHoldTimer = 0;
-      if (!this._emitHeldDown) return;
-      this._touchEmit = true;
-      this._emitButton?.setAttribute("aria-pressed", "true");
-    }, EMIT_HOLD_MS);
-  }
-
-  /** Snap the fill shut and grow it again for a fresh hold. */
-  _kickEmitCharge() {
-    const btn = this._emitButton;
-    if (!btn || !this._emitHeldDown || this._touchEmit) return;
-    const fill = btn.querySelector(".falling-emit-fill");
-    if (fill) fill.style.transition = "none";
-    btn.classList.remove("is-charging");
-    if (fill) void fill.offsetWidth;
-    if (fill) fill.style.transition = "";
-    this._showEmitFill();
-    this._armEmitHold();
   }
 
   _showEmitFill() {
@@ -878,13 +852,12 @@ export class FallingInput {
 
   _endEmitGesture() {
     this._trackEmitPointer(false);
-    this._clearEmitHold();
+    this._clearEmitPointerDoubt();
     this._touchEmit = false;
     this._emitHeldDown = false;
     this._emitDragging = false;
     this._emitPointerId = -1;
     this._emitTouchId = null;
-    this._emitSettleY = 0;
     const fill = this._emitButton?.querySelector(".falling-emit-fill");
     if (fill) fill.style.transition = "";
     this._emitButton?.classList.remove("is-pressed", "is-held");
@@ -898,6 +871,7 @@ export class FallingInput {
    */
   _onEmitPointerDown(event) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    this._clearEmitPointerDoubt();
     if (this._emitHeldDown) {
       // A navigation gesture may have dropped the first contact. This press is the thumb again.
       this._emitPointerId = event.pointerId;
@@ -907,15 +881,15 @@ export class FallingInput {
       event.stopPropagation();
       return;
     }
-    this._touchEmit = false;
+    this._touchEmit = true;
     this._emitHeldDown = true;
     this._emitDragging = false;
     this._emitPointerId = event.pointerId;
     this._emitDownY = event.clientY;
-    this._emitSettleY = event.clientY;
     this._emitOriginY = event.clientY - (0.5 - this._emitAnalog) * EMIT_DRAG_SPAN;
     this._emitButton?.classList.add("is-pressed", "is-held");
-    this._kickEmitCharge();
+    this._emitButton?.setAttribute("aria-pressed", "true");
+    this._showEmitFill();
     this._paintEmitDrag();
     event.preventDefault();
     event.stopPropagation();
@@ -936,10 +910,6 @@ export class FallingInput {
     }
     this._emitAnalog = clamp(0.5 - (event.clientY - this._emitOriginY) / EMIT_DRAG_SPAN, 0, 1);
     this._paintEmitDrag();
-    if (this._touchEmit) return;
-    if (Math.abs(event.clientY - this._emitSettleY) < EMIT_REST_PX) return;
-    this._emitSettleY = event.clientY;
-    this._kickEmitCharge();
   }
 
   /** Keep the button at the size it was dragged to. */
@@ -964,29 +934,74 @@ export class FallingInput {
     // Ending a pan, pinch, or material tap makes iOS fire pointerup for the
     // thumb too, sometimes as a compatibility mouse event. The thumb is still
     // down. A real lift arrives later as touchend for its identifier.
-    if (event?.type === "pointercancel") return;
+    // pointercancel and lost capture are the same report on Safari, and on
+    // some browsers they are the only release. Don't drop the hold immediately.
+    if (event?.type === "pointercancel" || event?.type === "lostpointercapture") {
+      if (event.pointerId != null && event.pointerId !== this._emitPointerId) return;
+      if (this._emitTouchId != null) {
+        this._armEmitPointerDoubt();
+        return;
+      }
+      this._endEmitGesture();
+      return;
+    }
     if (this._emitTouchId != null) return;
     if (event?.pointerId != null && event.pointerId !== this._emitPointerId) return;
     this._endEmitGesture();
   }
 
   /**
-   * The thumb lifted. A touchend aimed at the field or a material does not count,
-   * even if the phone folds the thumb's identifier into that event.
+   * The Emit finger left, or the browser cancelled it. Release follows the
+   * touch identifier: a retargeted touchend still counts when that finger is
+   * no longer in event.touches.
    * @param {TouchEvent} event
    */
   _onEmitTouchEnd(event) {
+    this._reconcileEmitTouch(event);
+  }
+
+  /**
+   * A touch after a cancelled pointer shows whether the thumb is still down.
+   * @param {TouchEvent} event
+   */
+  _onEmitTouchActive(event) {
+    if (!this._emitPointerUncertain) return;
+    this._reconcileEmitTouch(event);
+  }
+
+  /**
+   * @param {TouchEvent} event
+   */
+  _reconcileEmitTouch(event) {
     if (this._emitTouchId == null) return;
-    if (!isEmitTarget(event.target)) return;
-    let ended = false;
-    for (const touch of event.changedTouches) {
-      if (touch.identifier === this._emitTouchId) ended = true;
-    }
-    if (!ended) return;
-    for (const touch of event.touches) {
-      if (touch.identifier === this._emitTouchId) return;
+    const touches = event.touches;
+    if (touches) {
+      for (const touch of touches) {
+        if (touch.identifier === this._emitTouchId) {
+          this._clearEmitPointerDoubt();
+          return;
+        }
+      }
     }
     this._endEmitGesture();
+  }
+
+  _armEmitPointerDoubt() {
+    if (!this._emitHeldDown || this._emitTouchId == null) return;
+    this._emitPointerUncertain = true;
+    if (this._emitDoubtTimer) return;
+    this._emitDoubtTimer = window.setTimeout(() => {
+      this._emitDoubtTimer = 0;
+      if (!this._emitPointerUncertain || this._emitTouchId == null) return;
+      this._endEmitGesture();
+    }, EMIT_POINTER_DOUBT_MS);
+  }
+
+  _clearEmitPointerDoubt() {
+    this._emitPointerUncertain = false;
+    if (!this._emitDoubtTimer) return;
+    clearTimeout(this._emitDoubtTimer);
+    this._emitDoubtTimer = 0;
   }
 
   /**

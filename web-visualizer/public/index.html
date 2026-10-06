@@ -25,7 +25,7 @@
       content="Interactive browser instrument where simulated materials fall, spread, collide, and shape sound in real time."
     />
     <meta name="twitter:image" content="https://audible-field.vercel.app/og-image-2026-10-05.png" />
-    <link rel="stylesheet" href="/styles.css?v=297" />
+    <link rel="stylesheet" href="/styles.css?v=302" />
     <script type="importmap">
       {
         "imports": {
@@ -308,7 +308,7 @@
                 <span class="falling-emit-stem"><i class="falling-emit-notch"></i></span>
                 <span class="falling-emit-single"></span>
               </span>
-              <div role="button" tabindex="0" class="falling-pill falling-touch-emit" data-falling-touch-emit aria-pressed="false" aria-label="Hold to emit atoms. Drag up for a clump, down for a single stream.">
+              <div role="button" tabindex="0" class="falling-pill falling-touch-emit" data-falling-touch-emit aria-pressed="false" aria-label="Press to emit atoms. Drag up for a clump, down for a single stream.">
                 <span class="falling-emit-face">
                   <span class="falling-emit-fill" aria-hidden="true"></span>
                   <svg class="falling-emit-chevron" viewBox="0 0 16 8" aria-hidden="true">
@@ -383,7 +383,7 @@
                         </div>
                         <div>
                           <h4>Emit</h4>
-                          <p>Press and hold the Emit button to pour atoms.</p>
+                          <p>Press the Emit button to pour atoms.</p>
                         </div>
                         <div>
                           <h4>Emitter size</h4>
@@ -445,8 +445,8 @@
                 <div class="falling-topbar-start">
                   <button type="button" class="falling-icon-btn falling-about" data-falling-about aria-label="About">?</button>
                   <button type="button" class="falling-icon-btn falling-fps" data-falling-fps-toggle aria-expanded="false" aria-controls="falling-frame" aria-label="Frame and GPU stats">
-                    <svg class="falling-fps-chevron" viewBox="0 0 24 24" aria-hidden="true">
-                      <path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/>
+                    <svg viewBox="0 -960 960 960" aria-hidden="true">
+                      <path fill="currentColor" d="M120-120v-76l60-60v136h-60Zm165 0v-236l60-60v296h-60Zm165 0v-296l60 61v235h-60Zm165 0v-235l60-60v295h-60Zm165 0v-396l60-60v456h-60ZM120-356v-85l280-278 160 160 280-281v85L560-474 400-634 120-356Z"/>
                     </svg>
                   </button>
                   <div class="falling-frame" id="falling-frame">
@@ -634,6 +634,6 @@
         </div>
       </div>
     </div>
-    <script type="module" src="/app.js?v=508"></script>
+    <script type="module" src="/app.js?v=510"></script>
   </body>
 </html>
