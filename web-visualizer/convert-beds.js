@@ -12,7 +12,6 @@ const FILES = [
   "Beach-rx.wav",
   "Forest-rx.wav",
   "River-rx.wav",
-  "Meditation Synth-rx.wav",
 ];
 
 function readU32(buf, off) {
