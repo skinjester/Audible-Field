@@ -2414,6 +2414,11 @@ html.is-yaw-zoom * {
   display: none;
 }
 
+.falling-settings-panel .is-pad-focus {
+  outline: 2px solid var(--live);
+  outline-offset: 2px;
+}
+
 .falling-settings-panel .falling-hud {
   position: static;
   bottom: auto;

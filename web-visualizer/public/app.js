@@ -1,11 +1,11 @@
 import { STEM_CORNERS, notify, tickMixer } from "./mixer-core.js?v=67";
 import { audioEngine } from "./audio-engine.js?v=116";
 import { gamepadInput } from "./gamepad-input.js?v=22";
-import { dualsenseHid } from "./dualsense-hid.js?v=5";
+import { dualsenseHid } from "./dualsense-hid.js?v=8";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=61";
-import * as fallingTab from "./falling-tab.js?v=145";
-import * as visualizeTab from "./visualize-tab.js?v=52";
+import * as diagnostics from "./diagnostics.js?v=64";
+import * as fallingTab from "./falling-tab.js?v=158";
+import * as visualizeTab from "./visualize-tab.js?v=55";
 
 const statusEl = document.querySelector(".status");
 const audioLineEls = {

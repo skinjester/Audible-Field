@@ -3,8 +3,8 @@
  * The sim only consumes FallingInput.sample() each frame.
  */
 
-import { dualsenseHid } from "./dualsense-hid.js?v=5";
-import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=18";
+import { dualsenseHid } from "./dualsense-hid.js?v=8";
+import { gamepadAxes, gamepadButtons, inputBindings } from "./input-bindings.js?v=19";
 import { TouchInput } from "./touch-input.js?v=4";
 
 /** Charge duration kept for the stylesheet. A press pours immediately. */
@@ -329,6 +329,8 @@ function sphereWirePath(yaw) {
 /**
  * @typedef {{
  *   pointerDelta: { x: number, y: number } | null,
+ *   padDelta: { x: number, y: number } | null,
+ *   padDown: boolean,
  *   pointerAt: { x: number, y: number } | null,
  *   aimAt: { x: number, y: number } | null,
  *   emit: boolean,
@@ -364,6 +366,11 @@ function sphereWirePath(yaw) {
  *   shiftHeld: boolean,
  *   touchAim: boolean,
  *   fingerAim: boolean,
+ *   settingsEdge: boolean,
+ *   debugEdge: boolean,
+ *   menuNavX: number,
+ *   menuNavY: number,
+ *   menuConfirm: boolean,
  * }} FallingInputFrame
  */
 
@@ -401,6 +408,8 @@ export class FallingInput {
     this._mouseFull = false;
     this._mouseLight = false;
     this._rightHeld = false;
+    /** When set, a right-drag hides the cursor and keeps moving past the window edge. */
+    this.lockRightDrag = false;
     this._yawHeld = false;
     this._yawRingHeld = false;
     this._yawRingPointer = -1;
@@ -461,12 +470,18 @@ export class FallingInput {
     this._moveY = 0;
     /** @type {{ x: number, y: number } | null} */
     this._lastClient = null;
-    /** @type {{ x: number, y: number } | null} */
-    this._touchPrev = null;
     this._prevClear = false;
     this._prevAudio = false;
     this._prevCyclePrev = false;
     this._prevCycleNext = false;
+    this._prevSettings = false;
+    this._prevDebug = false;
+    this._prevCross = false;
+    /** Last settings-menu direction, so a hold repeats and a fresh press steps once. */
+    this._menuNavDir = "";
+    this._menuNavHeld = 0;
+    /** True after the first repeat delay, so later repeats use the shorter gap. */
+    this._menuNavArmed = false;
     /** Presses of Tab / Shift+Tab since the last sample. */
     this._keyCycle = 0;
     /** "idle" until a device is used, then "pointer" or "pad". */
@@ -602,6 +617,7 @@ export class FallingInput {
     this._unbindYawRing();
     this._unbindEmitButton();
     dualsenseHid.routeTouchToMixer = true;
+    dualsenseHid.resetTouchMotion();
     if (document.pointerLockElement) document.exitPointerLock();
     this._canvas = null;
     this.resetTransient();
@@ -644,11 +660,16 @@ export class FallingInput {
     this._moveX = 0;
     this._moveY = 0;
     this._lastClient = null;
-    this._touchPrev = null;
     this._prevClear = false;
     this._prevAudio = false;
     this._prevCyclePrev = false;
     this._prevCycleNext = false;
+    this._prevSettings = false;
+    this._prevDebug = false;
+    this._prevCross = false;
+    this._menuNavDir = "";
+    this._menuNavHeld = 0;
+    this._menuNavArmed = false;
     this._keyCycle = 0;
     this._device = "idle";
     this._pointerKind = null;
@@ -694,14 +715,16 @@ export class FallingInput {
 
     const lx = mergeAxis(axis(mixer?.rawX), padLx);
     const ly = mergeAxis(axis(mixer?.rawY), padLy);
-    const dpad = dpadAxes(mixer?.dpad, {
+    const dpadBits = {
       up: pressed(gamepadButtons.dpadUp),
       down: pressed(gamepadButtons.dpadDown),
       left: pressed(gamepadButtons.dpadLeft),
       right: pressed(gamepadButtons.dpadRight),
-    });
-    const aimStickX = clamp(lx + dpad.lx, -1, 1);
-    const aimStickY = clamp(ly + dpad.ly, -1, 1);
+    };
+    const dpad = dpadAxes(mixer?.dpad, dpadBits);
+    const menuOpen = settingsMenuOpen();
+    const aimStickX = menuOpen ? 0 : clamp(lx + dpad.lx, -1, 1);
+    const aimStickY = menuOpen ? 0 : clamp(ly + dpad.ly, -1, 1);
 
     const rx = mergeAxis(axis(mixer?.rightX), padRx);
     const ry = mergeAxis(axis(mixer?.rightY), padRy);
@@ -720,12 +743,31 @@ export class FallingInput {
       if (rightStick.y) zoomFactor *= Math.exp(-rightStick.y * g.zoomStickRate * dt);
     }
 
+    let navX = 0;
+    let navY = 0;
+    const navUp = dpadBits.up || !!mixer?.dpad?.up;
+    const navDown = dpadBits.down || !!mixer?.dpad?.down;
+    const navLeft = dpadBits.left || !!mixer?.dpad?.left;
+    const navRight = dpadBits.right || !!mixer?.dpad?.right;
+    if (navLeft) navX -= 1;
+    if (navRight) navX += 1;
+    if (navUp) navY -= 1;
+    if (navDown) navY += 1;
+    if (!navX && !navY && (Math.abs(lx) >= MENU_STICK_THRESHOLD || Math.abs(ly) >= MENU_STICK_THRESHOLD)) {
+      if (Math.abs(lx) >= Math.abs(ly)) navX = lx > 0 ? 1 : -1;
+      else navY = ly > 0 ? -1 : 1;
+    }
+    const menuNav = this._settingsNav(dt, menuOpen, navX, navY);
+
     const screen = this._screenTouch.consume();
     if (screen.zoomFactor !== 1) zoomFactor *= screen.zoomFactor;
 
     const rt = readAnalogTrigger(mixer?.rt, pad, gamepadButtons.rt);
     const lt = readAnalogTrigger(mixer?.lt, pad, gamepadButtons.lt);
-    const digitalPad = pressed(gamepadButtons[g.emitDigital]);
+    const crossDown = pressed(gamepadButtons[g.emitDigital]);
+    const digitalPad = !menuOpen && crossDown;
+    const menuConfirm = menuOpen && crossDown && !this._prevCross;
+    this._prevCross = crossDown;
     const touch = readTouchpad(pad, pressed);
     const mouseFull = this._mouseFull;
     const mouseLight = this._mouseLight;
@@ -795,20 +837,29 @@ export class FallingInput {
     if (cyclePrev && !this._prevCyclePrev) cycleDelta -= 1;
     if (cycleNext && !this._prevCycleNext) cycleDelta += 1;
 
+    const settingsDown = pressed(gamepadButtons[g.settingsToggle]);
+    const debugDown = pressed(gamepadButtons[g.debugToggle]);
+    const settingsEdge = settingsDown && !this._prevSettings;
+    const debugEdge = debugDown && !this._prevDebug;
+
     this._prevClear = clearDown;
     this._prevAudio = audioDown;
     this._prevCyclePrev = cyclePrev;
     this._prevCycleNext = cycleNext;
+    this._prevSettings = settingsDown;
+    this._prevDebug = debugDown;
     this._syncGlyphDevice(pad);
 
     const touchDelta = this._consumeTouchDelta();
-    const dx = this._moveX + touchDelta.x;
-    const dy = this._moveY + touchDelta.y;
+    const dx = this._moveX;
+    const dy = this._moveY;
     this._moveX = 0;
     this._moveY = 0;
 
     return {
       pointerDelta: dx || dy ? { x: dx, y: dy } : null,
+      padDelta: touchDelta.x || touchDelta.y ? { x: touchDelta.x, y: touchDelta.y } : null,
+      padDown: !!(dualsenseHid.touch?.active && this._canvas),
       pointerAt: this._pointerAt,
       aimAt: screen.active ? null : this._aimAt,
       emit,
@@ -840,27 +891,61 @@ export class FallingInput {
       shiftHeld: this._shiftHeld,
       touchAim: !!touch.aim,
       fingerAim: false,
+      settingsEdge,
+      debugEdge,
+      menuNavX: menuNav.x,
+      menuNavY: menuNav.y,
+      menuConfirm,
     };
   }
 
   /**
-   * Finger motion on the touchpad, in canvas pixels. A new contact does not jump.
+   * One settings-menu step. A new direction steps at once. Holding repeats.
+   * The direction is remembered while the menu is closed, so a stick already
+   * held does not jump the highlight the moment the menu opens.
+   * @param {number} dt
+   * @param {boolean} menuOpen
+   * @param {number} nx
+   * @param {number} ny
+   * @returns {{ x: number, y: number }}
+   */
+  _settingsNav(dt, menuOpen, nx, ny) {
+    const dir = nx || ny ? `${nx},${ny}` : "";
+    if (!dir) {
+      this._menuNavDir = "";
+      this._menuNavHeld = 0;
+      this._menuNavArmed = false;
+      return { x: 0, y: 0 };
+    }
+    if (dir !== this._menuNavDir) {
+      this._menuNavDir = dir;
+      this._menuNavHeld = 0;
+      this._menuNavArmed = false;
+      return menuOpen ? { x: nx, y: ny } : { x: 0, y: 0 };
+    }
+    if (!menuOpen) return { x: 0, y: 0 };
+    this._menuNavHeld += Math.min(0.05, Math.max(0, dt));
+    const wait = this._menuNavArmed ? MENU_NAV_REPEAT : MENU_NAV_DELAY;
+    if (this._menuNavHeld < wait) return { x: 0, y: 0 };
+    this._menuNavHeld = 0;
+    this._menuNavArmed = true;
+    return { x: nx, y: ny };
+  }
+
+  /**
+   * Finger motion on the touchpad, in canvas pixels.
+   * The HID layer smooths every report; this only scales that step to the view.
    * @returns {{ x: number, y: number }}
    */
   _consumeTouchDelta() {
-    const touch = dualsenseHid.touch;
+    const step = dualsenseHid.consumeTouchStep();
     const canvas = this._canvas;
-    if (!touch?.active || !canvas) {
-      this._touchPrev = null;
-      return { x: 0, y: 0 };
-    }
+    if (!canvas || (!step.dx && !step.dy)) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    const prev = this._touchPrev;
-    this._touchPrev = { x: touch.x, y: touch.y };
-    if (!prev || rect.width < 1 || rect.height < 1) return { x: 0, y: 0 };
+    if (rect.width < 1 || rect.height < 1) return { x: 0, y: 0 };
     return {
-      x: (touch.x - prev.x) * rect.width,
-      y: (touch.y - prev.y) * rect.height,
+      x: step.dx * rect.width,
+      y: step.dy * rect.height,
     };
   }
 
@@ -978,7 +1063,6 @@ export class FallingInput {
     this._moveX = 0;
     this._moveY = 0;
     this._lastClient = null;
-    this._touchPrev = null;
     this._endEmitGesture();
     this._screenTouch.reset();
   }
@@ -1156,6 +1240,20 @@ export class FallingInput {
     this._aimAt = { x: event.clientX, y: event.clientY };
   }
 
+  /** Hide the cursor and keep reading movement past the edge of the window. */
+  _requestPanLock() {
+    const canvas = this._canvas;
+    if (!this.lockRightDrag || !(canvas instanceof HTMLElement) || !canvas.requestPointerLock) return;
+    if (document.pointerLockElement === canvas) return;
+    const pending = canvas.requestPointerLock();
+    if (pending && typeof pending.catch === "function") pending.catch(() => {});
+  }
+
+  _releasePanLock() {
+    if (!this.lockRightDrag) return;
+    if (document.pointerLockElement === this._canvas) document.exitPointerLock();
+  }
+
   /**
    * @param {"pan" | "yaw" | null} mode
    */
@@ -1192,6 +1290,7 @@ export class FallingInput {
       this._setDragCursor(this._yawing() ? "yaw" : "pan");
       event.preventDefault();
       canvas?.setPointerCapture?.(event.pointerId);
+      this._requestPanLock();
       return;
     }
     if (event.button === m.emitButton) {
@@ -1222,6 +1321,7 @@ export class FallingInput {
     if (event.button === m.orbitButton) {
       this._rightHeld = false;
       this._setDragCursor(this._yawHeld ? "yaw" : null);
+      this._releasePanLock();
       return;
     }
     if (event.button === m.emitButton) {
@@ -1239,6 +1339,7 @@ export class FallingInput {
     this._rightHeld = false;
     this._yawHeld = false;
     this._setDragCursor(null);
+    this._releasePanLock();
     this._emitHeld = false;
     this._syncMouseEmit();
   }
@@ -1855,6 +1956,18 @@ function clamp(n, lo, hi) {
 function clamp01(n) {
   if (!Number.isFinite(n)) return 0;
   return Math.min(1, Math.max(0, n));
+}
+
+/** Left-stick throw that steps the settings menu. A lighter push still rests. */
+const MENU_STICK_THRESHOLD = 0.55;
+/** Pause before a held direction starts repeating. */
+const MENU_NAV_DELAY = 0.32;
+/** Gap between repeats after that first pause. */
+const MENU_NAV_REPEAT = 0.14;
+
+function settingsMenuOpen() {
+  const panel = document.querySelector("[data-falling-settings-panel]");
+  return panel instanceof HTMLElement && !panel.hasAttribute("hidden");
 }
 
 function dpadAxes(mixerDpad, padDpad) {

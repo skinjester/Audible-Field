@@ -7,14 +7,15 @@
  *   move            → aim emitter
  *   LMB hold        → largest emitter (full field, full atom size)
  *   Shift+LMB hold  → smallest emitter (one half-size column)
- *   RMB drag             → slide the playfield
+ *   RMB drag             → slide the playfield, holding the emitter on the cursor.
+ *                          The pointer stays locked until the button is released.
  *   Shift+RMB or Alt+RMB → yaw the playfield
  *   MMB drag             → yaw the playfield (the wheel is ignored while it is held)
  *   top-center ring      → drag sideways to yaw, up or down to zoom; double-click resets the heading
  *   wheel           → zoom (a middle click does not yaw while the wheel is moving)
  *
  * Touchpad (DualSense, after Connect touchpad):
- *   finger          → aim the emitter on the emit-height plane
+ *   finger          → steer the centered emitter; the pour travels with the finger
  *   touchpad click  → emit a clump (largest brush) while the pad is pressed in
  *
  * Right trigger emits. A light pull is a single stream; a full pull is the wide field.
@@ -25,6 +26,11 @@
  * At the edge of the view they scroll the plane, so the whole surface stays reachable.
  * Right stick X turns the plane about the center of the view. Right stick Y zooms.
  * A push nearer one axis favors that action. A diagonal still does both.
+ *
+ * Options opens and closes settings. While that menu is open, the D-pad or
+ * left stick moves between its options and Cross confirms the highlighted one.
+ * Create, the button to the left of the DualSense touchpad, opens and closes
+ * the frame readout.
  *
  * Keyboard:
  *   X hold          → emit
@@ -53,6 +59,10 @@ export const gamepadButtons = {
   r1: 5,
   lt: 6,
   rt: 7,
+  /** Create / Share / View. Left of the DualSense touchpad. */
+  create: 8,
+  /** Options / Menu / Start. Right of the DualSense touchpad. */
+  options: 9,
   ls: 10,
   rs: 11,
   dpadUp: 12,
@@ -109,6 +119,10 @@ export const inputBindings = {
     clear: "circle",
     /** Toggles sonification of the field. */
     audioToggle: "square",
+    /** Options / Start. Opens and closes the settings menu. */
+    settingsToggle: "options",
+    /** Create, left of the DualSense touchpad. Opens and closes the frame readout. */
+    debugToggle: "create",
     cyclePrev: "l1",
     cycleNext: "r1",
     /** Right-stick X → yaw about the view center (rad/s at full deflection). */

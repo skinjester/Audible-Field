@@ -30,7 +30,7 @@ An emitter sits above the plane. Aim it, choose a material, and hold an emit con
 | Move the pointer | Aim the emitter |
 | Left mouse button or `X` | Pour the widest full-size clump |
 | Shift + left mouse button | Pour one half-size stream |
-| Right-drag | Slide the plane |
+| Right-drag | Slide the plane, holding the emitter on the cursor. The pointer stays locked until the button is released |
 | Middle-drag | Turn the plane |
 | Shift + right-drag or Alt + right-drag | Turn the plane |
 | Mouse wheel | Zoom |
@@ -64,7 +64,7 @@ Moving the Emit control before the hold finishes restarts the 280 ms wait. The s
 | Circle | Clear the field |
 | Square | Turn field audio on or off |
 
-On a DualSense touchpad, a finger aims and a mechanical click pours. The touchpad controls the field instead of the four-corner mixer while this tab is active.
+On a DualSense touchpad, a finger steers the centered emitter: the pour travels with the stroke, and a circle on the pad is a circle of atoms. A mechanical click pours. The touchpad controls the field instead of the four-corner mixer while this tab is active.
 
 ### How clumps form
 

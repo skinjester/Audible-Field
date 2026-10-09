@@ -7,8 +7,8 @@
  *   BT   report 0x31 → common payload at DataView 1 (touch at 33, click at byte 10 bit 1)
  * Reading feature report 0x05 switches BT from short 0x01 → full 0x31.
  *
- * Falling Blocks reads `touch` directly and sets `routeTouchToMixer` false
- * so a finger aims the emitter instead of the mix pad.
+ * Falling Blocks reads a smoothed finger step from `consumeTouchStep` and sets
+ * `routeTouchToMixer` false so the pad pans the field instead of the mix pad.
  */
 
 import { setTarget } from "./mixer-core.js?v=67";
@@ -30,6 +30,32 @@ const HID_FILTERS_SONY = [{ vendorId: SONY_VENDOR }];
 
 const TOUCH_MAX_X = 1920;
 const TOUCH_MAX_Y = 1080;
+/**
+ * Smooth the finger at report rate. One report is a single sensor count, and
+ * the frame loop only used to see the newest of those, so the pan stepped.
+ * About 40ms tracks a drawn circle and knocks the stair-step out.
+ */
+const TOUCH_SMOOTH_SEC = 0.04;
+/**
+ * Outer band of each axis where pan eases off. A fingertip's reported point
+ * stops short of 0 and 1, so this has to start well in from the rim.
+ */
+const TOUCH_EDGE_MARGIN = 0.36;
+/** Pan scale if the contact could sit on the sensor's absolute edge. */
+const TOUCH_EDGE_MIN_GAIN = 0.15;
+
+/**
+ * Soften motion as a finger nears either end of one pad axis.
+ * @param {number} t normalized contact, 0 at one edge and 1 at the other
+ */
+function touchEdgeGain(t) {
+  const u0 = Math.min(1, Math.max(0, t));
+  const edge = Math.min(u0, 1 - u0);
+  if (edge >= TOUCH_EDGE_MARGIN) return 1;
+  const u = edge / TOUCH_EDGE_MARGIN;
+  const s = Math.pow(u, 1.6);
+  return TOUCH_EDGE_MIN_GAIN + (1 - TOUCH_EDGE_MIN_GAIN) * s;
+}
 
 function isDualSenseDevice(device) {
   if (!device || device.vendorId !== SONY_VENDOR) return false;
@@ -142,6 +168,16 @@ export class DualsenseHid {
       x: 0.5,
       y: 0.5,
     };
+    /** Smoothed contact, normalized. Separate from `touch`, which stays raw for the mixer. */
+    this._touchFx = null;
+    this._touchFy = null;
+    this._touchFilterAt = 0;
+    /** Last smoothed point already handed to a caller. */
+    this._touchReadX = null;
+    this._touchReadY = null;
+    /** Last raw contact, so the smooth can finish after the finger lifts. */
+    this._touchHoldX = null;
+    this._touchHoldY = null;
     this._onInputReport = (event) => this._handleInputReport(event);
     this._onDisconnect = (event) => {
       if (event.device === this.device) this._clearDevice();
@@ -287,6 +323,7 @@ export class DualsenseHid {
     this.lastReportLen = 0;
     this.touch.active = false;
     this.touch.pressed = false;
+    this.resetTouchMotion();
 
     // Prefer the standard event; oninputreport is a fallback property some demos use.
     device.addEventListener("inputreport", this._onInputReport);
@@ -315,9 +352,91 @@ export class DualsenseHid {
     this.padId = "";
     this.touch.active = false;
     this.touch.pressed = false;
+    this.resetTouchMotion();
     this.reportCount = 0;
     this.lastReportId = null;
     this.lastReportLen = 0;
+  }
+
+  /** Drop the smoothed finger path. The next contact starts clean. */
+  resetTouchMotion() {
+    this._touchFx = null;
+    this._touchFy = null;
+    this._touchFilterAt = 0;
+    this._touchReadX = null;
+    this._touchReadY = null;
+    this._touchHoldX = null;
+    this._touchHoldY = null;
+  }
+
+  /**
+   * Finger motion since the last call, in normalized pad units.
+   * Every HID report updates the smooth path; this only reads how far it moved.
+   * @returns {{ dx: number, dy: number }}
+   */
+  consumeTouchStep() {
+    const now = performance.now();
+    if (!this.touch.active) {
+      if (this._touchFx == null || this._touchHoldX == null || this._touchReadX == null) {
+        this.resetTouchMotion();
+        return { dx: 0, dy: 0 };
+      }
+      this._advanceTouchFilter(now, this._touchHoldX, this._touchHoldY);
+      const step = this._takeTouchStep();
+      const left = Math.hypot(this._touchHoldX - this._touchFx, this._touchHoldY - this._touchFy);
+      if (left < 1 / 8000) this.resetTouchMotion();
+      return step;
+    }
+    if (this._touchFx == null) return { dx: 0, dy: 0 };
+    return this._takeTouchStep();
+  }
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   */
+  _smoothTouch(x, y) {
+    const now = performance.now();
+    this._touchHoldX = x;
+    this._touchHoldY = y;
+    if (this._touchFx == null) {
+      this._touchFx = x;
+      this._touchFy = y;
+      this._touchFilterAt = now;
+      return;
+    }
+    this._advanceTouchFilter(now, x, y);
+  }
+
+  /**
+   * @param {number} now
+   * @param {number} targetX
+   * @param {number} targetY
+   */
+  _advanceTouchFilter(now, targetX, targetY) {
+    const dt = Math.min(0.05, Math.max(0, (now - this._touchFilterAt) / 1000));
+    this._touchFilterAt = now;
+    if (dt <= 0 || this._touchFx == null || this._touchFy == null) return;
+    const a = 1 - Math.exp(-dt / TOUCH_SMOOTH_SEC);
+    this._touchFx += (targetX - this._touchFx) * a;
+    this._touchFy += (targetY - this._touchFy) * a;
+  }
+
+  /** @returns {{ dx: number, dy: number }} */
+  _takeTouchStep() {
+    if (this._touchFx == null || this._touchFy == null) return { dx: 0, dy: 0 };
+    if (this._touchReadX == null || this._touchReadY == null) {
+      this._touchReadX = this._touchFx;
+      this._touchReadY = this._touchFy;
+      return { dx: 0, dy: 0 };
+    }
+    const dx = this._touchFx - this._touchReadX;
+    const dy = this._touchFy - this._touchReadY;
+    this._touchReadX = this._touchFx;
+    this._touchReadY = this._touchFy;
+    const x = this._touchHoldX ?? this._touchFx;
+    const y = this._touchHoldY ?? this._touchFy;
+    return { dx: dx * touchEdgeGain(x), dy: dy * touchEdgeGain(y) };
   }
 
   _handleInputReport(event) {
@@ -346,6 +465,7 @@ export class DualsenseHid {
     const n = normalizeTouch(contact.x, contact.y);
     this.touch.x = n.x;
     this.touch.y = n.y;
+    this._smoothTouch(n.x, n.y);
 
     // Drive mixer immediately (don't wait for rAF poll).
     if (this._shouldDriveMixer()) {

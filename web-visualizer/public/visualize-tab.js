@@ -4,8 +4,8 @@ import {
   onFaceEdge,
   renderDiagnostics,
   tickXyAudio,
-} from "./diagnostics.js?v=61";
-import { dualsenseHid } from "./dualsense-hid.js?v=5";
+} from "./diagnostics.js?v=64";
+import { dualsenseHid } from "./dualsense-hid.js?v=8";
 
 const canvas = document.querySelector("[data-viz-canvas]");
 const padGate = document.querySelector("[data-viz-pad-gate]");

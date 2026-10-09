@@ -15,7 +15,7 @@ import {
   STEM_CORNERS,
 } from "./mixer-core.js?v=67";
 import { audioEngine } from "./audio-engine.js?v=116";
-import { DualsenseHid } from "./dualsense-hid.js?v=5";
+import { DualsenseHid } from "./dualsense-hid.js?v=8";
 import { openStemDropdown } from "./sample-picker.js?v=19";
 import { openFxDropdown } from "./fx-picker.js?v=6";
 import { formatParamReadout, neutralParamValue, paramSentValue, stickAxisOn, withStickAxis } from "./wam-host.js?v=17";

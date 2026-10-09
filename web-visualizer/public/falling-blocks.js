@@ -3,8 +3,10 @@ import { audioEngine } from "./audio-engine.js?v=116";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=78";
 import { inputBindings } from "./input-bindings.js?v=17";
-import { fallingInput } from "./falling-input.js?v=83";
+import { fallingInput } from "./falling-input.js?v=92";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
+
+fallingInput.lockRightDrag = true;
 
 /**
  * Fixed atom pitch. Smaller than the old default so the playfield holds a
@@ -271,6 +273,12 @@ let aimWorldX = 0;
  * A resting cursor does not pull the emitter back until the mouse moves.
  */
 let stickAimPointer = null;
+/** Mouse point captured while the touchpad owns the view. */
+let padMouseLatch = null;
+/** Touchpad pan keeps the centered emitter until the mouse actually moves. */
+let padHoldsView = false;
+/** This contact has already panned, so a pause still owns the view. */
+let padGesture = false;
 let aimWorldZ = 0;
 let emitAcc = 0;
 let emitting = false;
@@ -1261,7 +1269,6 @@ function slideGround(dx, dz) {
 
 /**
  * Move the ground with this pointer drag, in the same sample.
- * The plane follows the hand 1:1, so the ground under the cursor stays with it.
  * The emitter stays on its cell and is not pulled back to the center of the screen.
  */
 const DRAG_GAIN = 1;
@@ -1296,10 +1303,20 @@ function panBedUnderEmitter(pan) {
   const from = groundAtPixels(pan.from.x - rect.left, pan.from.y - rect.top, rect);
   const to = groundAtPixels(pan.to.x - rect.left, pan.to.y - rect.top, rect);
   if (!from || !to) return;
+  panGroundByWorld(to.x - from.x, to.z - from.z);
+}
+
+/**
+ * Slide the ground by a world delta and keep the center cell on the bed.
+ * @param {number} dx
+ * @param {number} dz
+ */
+function panGroundByWorld(dx, dz) {
+  if (!surface || (!dx && !dz)) return;
   const focus = groundFocus();
   if (!focus) return;
-  let nx = surface.position.x + (to.x - from.x);
-  let nz = surface.position.z + (to.z - from.z);
+  let nx = surface.position.x + dx;
+  let nz = surface.position.z + dz;
   const sy = surface.rotation.y;
   const c = Math.cos(sy);
   const s = Math.sin(sy);
@@ -1318,23 +1335,106 @@ function panBedUnderEmitter(pan) {
   pinEmitterAtScreenCenter();
 }
 
-function slidePointer(dx, dy, pointer) {
+/** Mouse must travel this far after a touchpad pan before it aims again. */
+const PAD_AIM_RELEASE_PX = 3;
+
+/**
+ * Screen-center ground steps for one pixel right and one pixel down,
+ * scaled to the same length so a circle on the pad is a circle on the field.
+ */
+function padWorldAxes() {
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) return null;
+  const cx = rect.width / 2;
+  const cy = rect.height / 2;
+  const origin = groundAtPixels(cx, cy, rect);
+  const right = groundAtPixels(cx + 1, cy, rect);
+  const down = groundAtPixels(cx, cy + 1, rect);
+  if (!origin || !right || !down) return null;
+  const rx = right.x - origin.x;
+  const rz = right.z - origin.z;
+  const dx = down.x - origin.x;
+  const dz = down.z - origin.z;
+  const rightLen = Math.hypot(rx, rz);
+  const downLen = Math.hypot(dx, dz);
+  if (rightLen < 1e-8 || downLen < 1e-8) return null;
+  const len = (rightLen + downLen) / 2;
+  return {
+    rx: (rx / rightLen) * len,
+    rz: (rz / rightLen) * len,
+    dx: (dx / downLen) * len,
+    dz: (dz / downLen) * len,
+  };
+}
+
+/**
+ * Touchpad drag. The emitter stays centered and the pour travels with the
+ * finger, so a circle on the pad is a circle of atoms. Equal finger travel
+ * moves the ground the same distance in every direction.
+ * @param {{ x: number, y: number }} delta
+ */
+function panFromPadDelta(delta) {
+  if (!delta.x && !delta.y) return;
+  const axes = padWorldAxes();
+  if (!axes) return;
+  panGroundByWorld(
+    -(delta.x * axes.rx + delta.y * axes.dx),
+    -(delta.x * axes.rz + delta.y * axes.dz),
+  );
+}
+
+/**
+ * Canvas pixels stretch with the window. Equal touchpad sensor steps should
+ * stay equal, so a circle drawn on the pad is not tall or wide.
+ * @param {{ x: number, y: number }} delta
+ */
+function squarePadDelta(delta) {
+  if (!canvas) return delta;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) return delta;
+  const padAspect = 1920 / 1080;
+  const canvasAspect = rect.width / rect.height;
+  return { x: delta.x * (padAspect / canvasAspect), y: delta.y };
+}
+
+function resetPadPan() {
+  padMouseLatch = null;
+  padHoldsView = false;
+  padGesture = false;
+}
+
+/**
+ * @param {{ x: number, y: number } | null} aim
+ * @param {{ x: number, y: number } | null} latch
+ */
+function aimLeftPadLatch(aim, latch) {
+  if (!aim) return false;
+  if (!latch) return true;
+  return Math.hypot(aim.x - latch.x, aim.y - latch.y) > PAD_AIM_RELEASE_PX;
+}
+
+/**
+ * Right-drag. The movement is taken on the emitter's plane, so the mark
+ * stays on the cursor and the ground moves with it.
+ */
+function slidePointer(dx, dy, pointer, planeY = emitWorldY()) {
   if ((!dx && !dy) || !canvas) return;
   const rect = canvas.getBoundingClientRect();
   if (rect.width < 1 || rect.height < 1) return;
   const x1 = pointer ? pointer.x - rect.left : rect.width / 2;
   const y1 = pointer ? pointer.y - rect.top : rect.height / 2;
-  const from = groundAtPixels(x1 - dx, y1 - dy, rect);
-  const to = groundAtPixels(x1, y1, rect);
+  const from = groundAtPixels(x1 - dx, y1 - dy, rect, planeY);
+  const to = groundAtPixels(x1, y1, rect, planeY);
   if (!from || !to) return;
   dragGround((to.x - from.x) * DRAG_GAIN, (to.z - from.z) * DRAG_GAIN);
 }
 
-/** Ground point under a canvas pixel. */
-function groundAtPixels(px, py, rect) {
+/** Ground point under a canvas pixel. y is the horizontal plane to hit. */
+function groundAtPixels(px, py, rect, y = 0) {
   const ndcX = (px / rect.width) * 2 - 1;
   const ndcY = 1 - (py / rect.height) * 2;
-  return worldOnPlane(ndcX, ndcY, 0);
+  return worldOnPlane(ndcX, ndcY, y);
 }
 
 /** Put the emitter on a world XZ point, clamped to the playfield. The grid stays put. */
@@ -2055,15 +2155,135 @@ export function onFieldPress(el, onPress) {
   });
 }
 
+/** @type {HTMLElement | null} */
+let settingsFocusEl = null;
+
+function settingsPanelEl() {
+  const panel = document.querySelector("[data-falling-settings-panel]");
+  return panel instanceof HTMLElement ? panel : null;
+}
+
+/** Visible settings controls, grouped into rows by their on-screen position. */
+function settingsMenuRows() {
+  const panel = settingsPanelEl();
+  if (!panel || panel.hasAttribute("hidden")) return [];
+  const nodes = panel.querySelectorAll(
+    "[data-falling-yaw-center], [data-falling-diffuse-reverb], .falling-rise-option, [data-falling-clear]"
+  );
+  /** @type {HTMLElement[]} */
+  const items = [];
+  for (const node of nodes) {
+    if (node instanceof HTMLElement && node.getClientRects().length > 0) items.push(node);
+  }
+  items.sort((a, b) => {
+    const ra = a.getBoundingClientRect();
+    const rb = b.getBoundingClientRect();
+    if (Math.abs(ra.top - rb.top) > 8) return ra.top - rb.top;
+    return ra.left - rb.left;
+  });
+  /** @type {{ top: number, items: HTMLElement[] }[]} */
+  const rows = [];
+  for (const el of items) {
+    const top = el.getBoundingClientRect().top;
+    const row = rows[rows.length - 1];
+    if (!row || Math.abs(row.top - top) > 8) rows.push({ top, items: [el] });
+    else row.items.push(el);
+  }
+  return rows;
+}
+
+function clearSettingsFocus() {
+  settingsFocusEl?.classList.remove("is-pad-focus");
+  settingsFocusEl = null;
+}
+
+/** @param {HTMLElement | null} el */
+function focusSettingsItem(el) {
+  if (settingsFocusEl === el) return;
+  settingsFocusEl?.classList.remove("is-pad-focus");
+  settingsFocusEl = el;
+  settingsFocusEl?.classList.add("is-pad-focus");
+}
+
+/** @param {boolean} open */
+function setSettingsOpen(open) {
+  const panel = settingsPanelEl();
+  const btn = document.querySelector("[data-falling-settings]");
+  if (!panel || !(btn instanceof HTMLButtonElement)) return;
+  panel.toggleAttribute("hidden", !open);
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+  if (!open) {
+    clearSettingsFocus();
+    return;
+  }
+  const rows = settingsMenuRows();
+  focusSettingsItem(rows[0]?.items[0] ?? null);
+}
+
+function toggleSettingsMenu() {
+  const panel = settingsPanelEl();
+  if (!panel) return;
+  setSettingsOpen(panel.hasAttribute("hidden"));
+}
+
+/**
+ * Move the settings highlight. Positive Y is down the menu.
+ * @param {number} dx
+ * @param {number} dy
+ */
+function moveSettingsFocus(dx, dy) {
+  const rows = settingsMenuRows();
+  if (!rows.length) return;
+  let r = 0;
+  let c = 0;
+  if (settingsFocusEl) {
+    for (let i = 0; i < rows.length; i += 1) {
+      const j = rows[i].items.indexOf(settingsFocusEl);
+      if (j >= 0) {
+        r = i;
+        c = j;
+        break;
+      }
+    }
+  }
+  if (dy) {
+    const next = Math.min(rows.length - 1, Math.max(0, r + dy));
+    if (next !== r) {
+      r = next;
+      c = Math.min(rows[r].items.length - 1, c);
+    }
+  }
+  if (dx) c = Math.min(rows[r].items.length - 1, Math.max(0, c + dx));
+  focusSettingsItem(rows[r].items[c] ?? null);
+}
+
+function confirmSettingsFocus() {
+  const el = settingsFocusEl;
+  if (!(el instanceof HTMLElement) || !el.isConnected) return;
+  if (el.classList.contains("falling-rise-option")) {
+    const input = el.querySelector("input");
+    if (!(input instanceof HTMLInputElement) || input.checked) return;
+    input.checked = true;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
+  el.click();
+}
+
+/** Create opens and closes the frame, atom, and audio readout. */
+function toggleFrameReadout() {
+  const btn = document.querySelector("[data-falling-fps-toggle]");
+  if (!(btn instanceof HTMLButtonElement)) return;
+  const open = btn.getAttribute("aria-expanded") !== "true";
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
 function bindFpsUi() {
   const btn = document.querySelector("[data-falling-fps-toggle]");
   if (!(btn instanceof HTMLButtonElement) || btn.dataset.bound === "1") return;
   btn.dataset.bound = "1";
-  const setOpen = (open) => {
-    btn.setAttribute("aria-expanded", open ? "true" : "false");
-  };
   onFieldPress(btn, () => {
-    setOpen(btn.getAttribute("aria-expanded") !== "true");
+    toggleFrameReadout();
   });
 }
 
@@ -2107,12 +2327,8 @@ function bindSettingsUi() {
   if (!(btn instanceof HTMLButtonElement) || !(panel instanceof HTMLElement)) return;
   if (btn.dataset.bound === "1") return;
   btn.dataset.bound = "1";
-  const setOpen = (open) => {
-    panel.toggleAttribute("hidden", !open);
-    btn.setAttribute("aria-expanded", open ? "true" : "false");
-  };
   onFieldPress(btn, () => {
-    setOpen(panel.hasAttribute("hidden"));
+    toggleSettingsMenu();
   });
   // Capture runs before the control under the pointer. Close the menu, then
   // let the press through so that control still engages, including a drag.
@@ -2132,11 +2348,11 @@ function bindSettingsUi() {
         // Emit captures this pointer in the same event. Hiding the panel first
         // cancels that drag, so close once the gesture has the pointer.
         queueMicrotask(() => {
-          if (!panel.hasAttribute("hidden")) setOpen(false);
+          if (!panel.hasAttribute("hidden")) setSettingsOpen(false);
         });
         return;
       }
-      setOpen(false);
+      setSettingsOpen(false);
     },
     true
   );
@@ -2256,9 +2472,14 @@ function applyInput(dt) {
   if (!camera || dt <= 0) return;
 
   const frame = fallingInput.sample(dt, controller, connectedPad());
+  if (frame.debugEdge) toggleFrameReadout();
+  if (frame.settingsEdge) toggleSettingsMenu();
+  if (frame.menuNavX || frame.menuNavY) moveSettingsFocus(frame.menuNavX, frame.menuNavY);
+  if (frame.menuConfirm) confirmSettingsFocus();
 
   const stickAim = !!(frame.aimStickX || frame.aimStickY);
   const dragging = !!frame.pointerDelta;
+  const padDragging = !!frame.padDelta;
   const twisting = !!frame.touchTwist;
   const aim = frame.aimAt;
 
@@ -2271,16 +2492,32 @@ function applyInput(dt) {
   ) {
     stickAimPointer = null;
   }
-  if (dragging || twisting) stickAimPointer = null;
+  if (dragging || padDragging || twisting) stickAimPointer = null;
 
   // A bare move places the emitter on the emit-height plane. Right-drag slides the grid.
   // Pointer yaw turns about the emitter unless the settings switch uses the view center.
   // Right-stick yaw turns about the view center.
-  // One finger pans the field under the screen-center emitter. Two fingers yaw
+  // One finger pans the field under the screen-center emitter. A touchpad
+  // finger steers that same point in the direction of the stroke. Two fingers yaw
   // about that point. Stick and D-pad move the emitter and are not snapped back
   // to a resting cursor, and a screen finger does not pull a stick aim to center.
   const stickHoldsAim = stickAim || !!stickAimPointer;
-  if (aim && !dragging && !twisting && !stickHoldsAim) {
+  if (!stickHoldsAim && !twisting && frame.padDelta) {
+    panFromPadDelta(squarePadDelta(frame.padDelta));
+  }
+  const padDown = !!frame.padDown;
+  if (padDown && padDragging) padGesture = true;
+  if (padDown && padGesture) {
+    padHoldsView = true;
+    if (aim) padMouseLatch = { x: aim.x, y: aim.y };
+  } else if (!padDown) {
+    padGesture = false;
+    if (padHoldsView && aimLeftPadLatch(aim, padMouseLatch)) {
+      padHoldsView = false;
+      padMouseLatch = null;
+    }
+  }
+  if (aim && !dragging && !padHoldsView && !twisting && !stickHoldsAim) {
     placeEmitterAtPointer(aim, frame.fingerAim ? FINGER_ABOVE_PLANE_PX : 0);
   }
   if (dragging && !twisting) slidePointer(frame.pointerDelta.x, frame.pointerDelta.y, frame.pointerAt);
@@ -4677,6 +4914,7 @@ export function hideFallingBlocks() {
   document.body.classList.remove("has-dualsense");
   if (canvas) canvas.style.filter = "";
   fallingInput.detach();
+  resetPadPan();
   emitting = false;
   shiftStream = false;
   canvas?.classList.remove("is-emitting", "is-single-stream");
