@@ -14,11 +14,11 @@ import {
   state,
   STEM_CORNERS,
 } from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=118";
+import { audioEngine } from "./audio-engine.js?v=119";
 import { DualsenseHid } from "./dualsense-hid.js?v=8";
 import { openStemDropdown } from "./sample-picker.js?v=19";
 import { openFxDropdown } from "./fx-picker.js?v=6";
-import { formatParamReadout, neutralParamValue, paramSentValue, stickAxisOn, withStickAxis } from "./wam-host.js?v=18";
+import { formatParamReadout, neutralParamValue, paramSentValue, stickAxisOn, withStickAxis } from "./wam-host.js?v=19";
 
 const root = document.querySelector('[data-panel="diagnostics"]');
 const pad = root?.querySelector("[data-pad]");

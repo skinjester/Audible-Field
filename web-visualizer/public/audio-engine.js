@@ -28,7 +28,7 @@ import {
   listWamParams,
   createParamModel,
   applyWamControls,
-} from "./wam-host.js?v=18";
+} from "./wam-host.js?v=19";
 import {
   NATIVE_FX,
   DEFAULT_STICK_SCALE,
@@ -138,6 +138,12 @@ function glideParam(param, value, now, tau, eps = 1e-3, live = true) {
 function greyholeIdle(level, feedback, wet) {
   return level <= 0.001 && feedback <= 0.02 && wet <= 0.02;
 }
+
+/**
+ * Diffuse Greyhole return at a fully open send.
+ * The send itself is already 0..1 from the rise. This is how loud that return sits against the dry bed.
+ */
+const DIFFUSE_WET = 0.8;
 
 /**
  * A voice counts as audible only when its effective gain is above this.
@@ -337,17 +343,18 @@ const RISE_THREAD_SEC = 0.5;
 const RISE_HALO_SEC = 0.24;
 /**
  * Halo bandpass follows the same altitude curve as the diffuse send.
- * Full open is the crowded cluster at 2.5 world units, linear with that height.
+ * Full open is the crowded cluster at 10 world units, with the same ease as that send.
  * Low cluster sits in the low mids; a fully lifted cluster reaches the upper mids.
  */
-const HALO_RISE_FULL = 2.5;
+const HALO_RISE_FULL = 10;
+const HALO_RISE_CURVE = 0.55;
 const HALO_HZ_LOW = 380;
 const HALO_HZ_HIGH = 1400;
 const HALO_Q = 1.15;
 
 function haloHz(lift) {
   const tip = Math.max(0, Number(lift) || 0);
-  const open = Math.min(1, tip / HALO_RISE_FULL);
+  const open = Math.min(1, Math.pow(tip / HALO_RISE_FULL, HALO_RISE_CURVE));
   return HALO_HZ_LOW + (HALO_HZ_HIGH - HALO_HZ_LOW) * open;
 }
 const RISE_MODE_IDS = new Set(["loose", "flake", "drift", "thread", "shed", "halo"]);
@@ -2791,8 +2798,7 @@ export class EchoScapeAudioEngine {
         send.channelCountMode = "explicit";
         send.channelInterpretation = "speakers";
         const ret = this.ctx.createGain();
-        // Same wet level as the main-branch Greyhole (diagnostics wet bus).
-        ret.gain.value = 0.45;
+        ret.gain.value = 0;
         const stem = this.stems[corner];
         if (stem?.pan) stem.pan.connect(send);
         send.connect(node);
@@ -2876,7 +2882,7 @@ export class EchoScapeAudioEngine {
       if (!asleep) this._glide(rec.send.gain, level, 0.08, 0.008);
       else writeParam(rec.send.gain, 0, 1e-4);
       if (rec.ret) {
-        if (!asleep) this._glide(rec.ret.gain, 0.45 * wet, 0.08, 0.008);
+        if (!asleep) this._glide(rec.ret.gain, DIFFUSE_WET * wet, 0.08, 0.008);
         else writeParam(rec.ret.gain, 0, 1e-4);
       }
       if (!rec.node?.setParamValue) continue;

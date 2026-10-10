@@ -33,6 +33,11 @@ const WHEEL_ACCIDENT_NOTCHES = 1.25;
 /** How close that stray detent has to be to the middle-button press. */
 const WHEEL_ACCIDENT_MS = 50;
 /**
+ * Pointer lock puts the cursor back where the right-drag started.
+ * Aim stays on the dragged plane until the mouse leaves that spot.
+ */
+const PAN_AIM_RELEASE_PX = 3;
+/**
  * Miniature of the playfield camera: 60° down, so the ring is the ground
  * plane seen from the same height. The far side is the top of the ellipse.
  */
@@ -466,6 +471,14 @@ export class FallingInput {
     /** Canvas pointer while it is just hovering, so the emitter can follow it. */
     /** @type {{ x: number, y: number } | null} */
     this._aimAt = null;
+    /**
+     * Cursor after a locked right-drag. Hover aim waits until the mouse leaves
+     * it, so the unlock warp cannot pull the emitter back to the drag start.
+     * @type {{ x: number, y: number } | null}
+     */
+    this._aimHold = null;
+    /** The move that follows a locked drag is the cursor warp. Do not aim from it. */
+    this._skipAimMove = false;
     this._moveX = 0;
     this._moveY = 0;
     /** @type {{ x: number, y: number } | null} */
@@ -657,6 +670,8 @@ export class FallingInput {
     this._pointerFresh = false;
     this._pointerAt = null;
     this._aimAt = null;
+    this._aimHold = null;
+    this._skipAimMove = false;
     this._moveX = 0;
     this._moveY = 0;
     this._lastClient = null;
@@ -1058,6 +1073,7 @@ export class FallingInput {
     }
     this._pointerAt = null;
     this._aimAt = null;
+    this._skipAimMove = false;
     this._pointer = null;
     this._pointerFresh = false;
     this._moveX = 0;
@@ -1223,6 +1239,14 @@ export class FallingInput {
     }
     const m = this.bindings.mouse;
     this._noteModifiers(event);
+    if (this._skipAimMove) {
+      this._skipAimMove = false;
+      this._aimAt = null;
+      this._moveX = 0;
+      this._moveY = 0;
+      this._aimHold = { x: event.clientX, y: event.clientY };
+      return;
+    }
     if (this._yawing()) {
       if (event.movementX || event.movementY) this._undoStrayWheel();
       this._aimAt = null;
@@ -1232,12 +1256,47 @@ export class FallingInput {
     }
     if (this._rightHeld) {
       this._aimAt = null;
+      this._aimHold = null;
       this._setDragCursor("pan");
       this._moveX += event.movementX || 0;
       this._moveY += event.movementY || 0;
       return;
     }
+    if (this._aimHeldStill(event.clientX, event.clientY)) {
+      this._aimAt = null;
+      return;
+    }
     this._aimAt = { x: event.clientX, y: event.clientY };
+  }
+
+  /**
+   * Remember where the cursor reappears so the unlock sample does not aim.
+   * @param {{ clientX?: number, clientY?: number } | null} event
+   */
+  _holdAimAfterPan(event) {
+    if (!this.lockRightDrag) return;
+    this._aimAt = null;
+    this._moveX = 0;
+    this._moveY = 0;
+    if (!this._yawHeld) this._orbitAccum = 0;
+    this._skipAimMove = true;
+    const x = Number.isFinite(event?.clientX) ? event.clientX : this._pointerAt?.x;
+    const y = Number.isFinite(event?.clientY) ? event.clientY : this._pointerAt?.y;
+    this._aimHold = Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+  }
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   */
+  _aimHeldStill(x, y) {
+    const hold = this._aimHold;
+    if (!hold) return false;
+    if (Math.hypot(x - hold.x, y - hold.y) > PAN_AIM_RELEASE_PX) {
+      this._aimHold = null;
+      return false;
+    }
+    return true;
   }
 
   /** Hide the cursor and keep reading movement past the edge of the window. */
@@ -1284,6 +1343,8 @@ export class FallingInput {
       return;
     }
     if (event.button === m.orbitButton) {
+      this._skipAimMove = false;
+      this._aimHold = null;
       this._rightHeld = true;
       this._shiftHeld = event.shiftKey;
       this._altHeld = event.altKey;
@@ -1321,6 +1382,7 @@ export class FallingInput {
     if (event.button === m.orbitButton) {
       this._rightHeld = false;
       this._setDragCursor(this._yawHeld ? "yaw" : null);
+      this._holdAimAfterPan(event);
       this._releasePanLock();
       return;
     }
@@ -1336,9 +1398,11 @@ export class FallingInput {
       this._screenTouch.pointerUp(event);
       return;
     }
+    const wasRight = this._rightHeld;
     this._rightHeld = false;
     this._yawHeld = false;
     this._setDragCursor(null);
+    if (wasRight) this._holdAimAfterPan(event);
     this._releasePanLock();
     this._emitHeld = false;
     this._syncMouseEmit();

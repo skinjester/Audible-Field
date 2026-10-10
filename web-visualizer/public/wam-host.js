@@ -54,15 +54,41 @@ export const OWL_SHIMMER_PATH = "wimmics/OwlShimmer/index.js";
  * @param {string|string[]} names
  * @param {number} value
  */
+/**
+ * Write one parameter. Some composite plugins (Ping Pong Delay) only
+ * expose setParamValue on paramMgr / _wamNode, not on the audio node.
+ * @param {object} audioNode
+ * @param {string|string[]} names
+ * @param {number} value
+ */
 export function setWamParam(audioNode, names, value) {
-  if (!audioNode?.setParamValue) return;
+  if (!audioNode) return;
+  const writers = [];
+  const seen = new Set();
+  for (const node of [audioNode, audioNode.paramMgr, audioNode._wamNode]) {
+    if (!node || seen.has(node) || typeof node.setParamValue !== "function") continue;
+    seen.add(node);
+    writers.push(node);
+  }
   const list = Array.isArray(names) ? names : [names];
   for (const name of list) {
-    try {
-      audioNode.setParamValue(name, value);
-      return;
-    } catch {
-      /* try next alias */
+    for (const node of writers) {
+      try {
+        node.setParamValue(name, value);
+        return;
+      } catch {
+        /* try the next writer or alias */
+      }
+    }
+    if (typeof audioNode.setParameterValues === "function") {
+      try {
+        audioNode.setParameterValues({
+          [name]: { id: name, value, normalized: false },
+        });
+        return;
+      } catch {
+        /* try next alias */
+      }
     }
   }
 }

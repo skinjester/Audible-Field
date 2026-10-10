@@ -4,7 +4,7 @@
  * A single column stays near 7 kHz. A wide pour opens toward 20 kHz.
  * Each pile's resting height is weight on that stem: darker, a low shelf, and a soft clip.
  * Full weight is 10 atoms (2.5 world units). Taller than that stays pinned. Rising grains do not add weight.
- * Rising Diffuse grains open that bed's Greyhole send. The altitude is the average height of the cluster that holds the most of them, fully open by 2.5 world units, so one grain above that cluster does not open the mix by itself. Feedback follows that same climb and reaches the long tail only as the cluster gets there. The send is then scaled by how much rising mass is in the quadrant: one full-size atom is already a clear fraction, and more atoms, counted by their drawn size, fill the rest. Delay time and size stay fixed. The send is taken before the weight filters. After the last grain is gone the tail keeps ringing; only a quadrant that was not holding that tail drops quickly.
+ * Rising Diffuse grains open that bed's Greyhole send. The altitude is the average height of the cluster that holds the most of them, fully open at 10 world units, so one grain above that cluster does not open the mix by itself. Feedback follows that same climb and reaches the long tail only as the cluster gets there. The send is then scaled by how much rising mass is in the quadrant: one full-size atom is already a clear fraction, and more atoms, counted by their drawn size, fill the rest. Delay time and size stay fixed. The send is taken before the weight filters. After the last grain is gone the tail keeps ringing; only a quadrant that was not holding that tail drops quickly.
  * Greyhole stays off the resting stack: moving its delay with the stack was glitching playback.
  * Each connected pile plays that quadrant's sample as its own note.
  * The note is the pitch at the pile's center: an octave up at the quadrant center, the sample's own pitch at the corners.
@@ -50,14 +50,15 @@ const STACK_FIELD_U = 12;
 /**
  * Drawn altitude (world units) that fully opens the Diffuse Greyhole send.
  * This is the average height of the busiest rising cluster, not the single highest grain.
- * Send and feedback stay in proportion to that height. 2.5 is full.
+ * The playfield is 12. Full open stays near the top of that climb, so a cluster
+ * that has only risen a few units is not already pinned at the ceiling.
  */
-const RISE_FULL = 2.5;
+const RISE_FULL = 10;
 /**
- * 1 keeps the diffuse open even with the climb.
- * Below 1 the mix gets ahead of the grains.
+ * Below 1, a mid climb is already a clear reverb and the rest of the rise still opens it.
+ * 1 is linear with height. Above 1 holds the mix back until the cluster is high.
  */
-const RISE_CURVE = 1;
+const RISE_CURVE = 0.55;
 /** Greyhole feedback at a fully risen cluster. Just under runaway, same as the main branch. */
 const FEEDBACK_MAX = 0.98;
 /** How quickly the send and feedback catch the climb. The target itself moves with the grains. */
