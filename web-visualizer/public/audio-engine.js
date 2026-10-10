@@ -897,8 +897,20 @@ export class EchoScapeAudioEngine {
     ctx.addEventListener("statechange", () => {
       console.info("[EchoScape audio] AudioContext:", ctx.state);
       this._trace("ctx", { ctx: ctx.state });
-      if (ctx.state === "running" && this.ctx === ctx) this._onContextRunning();
+      if (this.ctx !== ctx) return;
+      // Another app, a lock, or a new output route freezes the clock. Looping
+      // buffer beds do not continue when it moves again, so they start over.
+      if (contextNeedsResume(ctx)) this._armBedRestart();
+      if (ctx.state === "running") this._onContextRunning();
     });
+  }
+
+  /** Remember every decoded bed so the next running clock starts it again. */
+  _armBedRestart() {
+    for (const corner of CORNERS) {
+      const stem = this.stems[corner];
+      if (stem?.bedBuffer) stem.bedAwaitingRun = true;
+    }
   }
 
   /** The audio clock is moving. Beds that were started on a frozen clock start again. */
@@ -1010,8 +1022,15 @@ export class EchoScapeAudioEngine {
    */
   async _safeResume(timeoutMs = 300) {
     if (!this._audible) return;
-    if (!this.ctx || this.ctx.state === "running") return;
-    if (!this._unlocked && navigator.userActivation?.isActive !== true) return;
+    if (!this.ctx || this.ctx.state === "running" || this.ctx.state === "closed") return;
+    const active = navigator.userActivation?.isActive === true;
+    // Outside a gesture, iOS leaves resume() pending forever. While one is
+    // outstanding, the tap that should leave "interrupted" (YouTube, a lock,
+    // headphones) is ignored. The gesture path calls resume() itself.
+    if (!active && (isCoarseTouch() || !this._unlocked || this.ctx.state === "interrupted")) {
+      if (this._unlocked || this.ctx.state === "interrupted") this._trace("resume-skip", { why: this.ctx.state });
+      return;
+    }
     this._unlocked = true;
     try {
       await Promise.race([
@@ -1036,6 +1055,7 @@ export class EchoScapeAudioEngine {
     const ctx = this.ctx;
     if (!ctx || ctx.state === "closed") return;
     if (!contextNeedsResume(ctx)) return;
+    this._armBedRestart();
     const act = navigator.userActivation?.isActive;
     const id = (this._resumeSeq = (this._resumeSeq || 0) + 1);
     this._trace("resume", { id, act });
@@ -1140,11 +1160,15 @@ export class EchoScapeAudioEngine {
   async recoverForeground() {
     const ctx = this.ctx;
     if (!ctx || ctx.state === "closed") return;
-    this._trace("foreground", {});
+    this._trace("foreground", { ctx: ctx.state });
+    if (contextNeedsResume(ctx)) this._armBedRestart();
     if (ctx.state === "running") {
+      this._restartSuspendedBeds();
       this._pokePausedBeds();
       return;
     }
+    // No resume() here unless this call is already inside a gesture.
+    // _safeResume refuses the phone case and leaves it for the next tap.
     if (this._unlocked && this._audible) await this._safeResume(1000);
   }
 

@@ -4,7 +4,7 @@ import {
   onFaceEdge,
   renderDiagnostics,
   tickXyAudio,
-} from "./diagnostics.js?v=67";
+} from "./diagnostics.js?v=68";
 import { dualsenseHid } from "./dualsense-hid.js?v=8";
 
 const canvas = document.querySelector("[data-viz-canvas]");
