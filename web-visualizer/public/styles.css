@@ -287,7 +287,7 @@ h1 {
   position: relative;
   flex: 0 0 auto;
   width: 100%;
-  /* Half the diagnostics pane. dvh covers browsers without container queries. */
+  /* Half the diagnostics pane when the mixer is stacked. dvh covers browsers without container queries. */
   height: calc((100dvh - 9rem) / 2);
   min-width: 0;
   min-height: 0;
@@ -296,6 +296,40 @@ h1 {
 @container diagnostics (min-width: 0px) {
   .pad-slot {
     height: 50cqh;
+  }
+}
+
+/* Desktop: mixer sits beside the DualSense block so the plugin dials stay in view. */
+@media (min-width: 840px) and (pointer: fine) {
+  .diag-top {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "mixer ctrl"
+      "fx fx";
+    align-items: stretch;
+  }
+
+  .diag-top > .mixer-col {
+    grid-area: mixer;
+    min-height: 100%;
+  }
+
+  .diag-top > .ctrl {
+    grid-area: ctrl;
+    align-self: stretch;
+  }
+
+  .diag-top > .fx {
+    grid-area: fx;
+  }
+
+  /* The pad takes leftover height so the readout shares the DualSense panel's bottom edge. */
+  .diag-top .pad-slot {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: clamp(180px, 24vh, 260px);
+    max-height: none;
   }
 }
 
@@ -756,9 +790,17 @@ dd {
   margin-top: 8px;
 }
 
-.stick-body .mini-stick {
+.stick-face {
+  position: relative;
+  width: min(100%, 76px);
+  aspect-ratio: 1;
+  flex: 0 0 auto;
+}
+
+.stick-face .mini-stick {
+  width: 100%;
+  height: 100%;
   margin: 0;
-  width: min(100%, 64px);
 }
 
 .stick-axes {
@@ -775,40 +817,62 @@ dd {
   font-size: 12px;
 }
 
-.ctrl-card-stick {
-  container-type: inline-size;
-}
-
 .ctrl-card-stick .stick-body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: var(--card-gap);
-  flex: 1 1 auto;
+  justify-content: flex-start;
+  gap: 0;
+  flex: 0 0 auto;
   min-height: 0;
+  margin-top: 4px;
+}
+
+/* X sits on the horizontal axis, Y on the vertical, so the card doesn't grow a readout row. */
+.ctrl-card-stick .stick-face {
+  margin: 20px 4px 0 70px;
 }
 
 .ctrl-card-stick .stick-axes {
-  width: max-content;
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: auto;
   max-width: none;
-  flex: none;
-}
-
-.ctrl-card-stick .mini-stick {
   margin: 0;
-  width: min(56%, 88px);
+  pointer-events: none;
 }
 
-@container (max-width: 240px) {
-  .ctrl-card-stick .stick-body {
-    flex-direction: column;
-    align-items: center;
-  }
+.stick-axes > .stick-axis-x,
+.stick-axes > .stick-axis-y {
+  position: absolute;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 
-  .ctrl-card-stick .mini-stick {
-    width: 100%;
-  }
+.stick-axes > .stick-axis-x dt,
+.stick-axes > .stick-axis-y dt {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.stick-axes > .stick-axis-x {
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.stick-axes > .stick-axis-y {
+  left: 50%;
+  bottom: calc(100% + 4px);
+  transform: translateX(-50%);
 }
 
 .mini-stick {
@@ -826,6 +890,30 @@ dd {
   user-select: none;
 }
 
+.mini-stick::before,
+.mini-stick::after {
+  content: "";
+  position: absolute;
+  background: rgba(255, 255, 255, 0.16);
+  pointer-events: none;
+}
+
+.mini-stick::before {
+  left: 16%;
+  right: 16%;
+  top: 50%;
+  height: 1px;
+  margin-top: -0.5px;
+}
+
+.mini-stick::after {
+  top: 16%;
+  bottom: 16%;
+  left: 50%;
+  width: 1px;
+  margin-left: -0.5px;
+}
+
 .mini-stick.is-interactive {
   cursor: grab;
 }
@@ -838,6 +926,7 @@ dd {
 
 .mini-stick-dot {
   position: absolute;
+  z-index: 1;
   width: 10px;
   height: 10px;
   margin: -5px 0 0 -5px;
@@ -3090,8 +3179,9 @@ body:not(.has-dualsense) .pad-glyph {
     margin-bottom: 6px;
   }
 
-  .mini-stick {
-    width: min(100%, 56px);
+  .ctrl-card-stick .stick-face {
+    width: 64px;
+    margin-left: 64px;
   }
 }
 
@@ -3120,9 +3210,33 @@ body:not(.has-dualsense) .pad-glyph {
     align-items: center;
   }
 
+  .ctrl-card-stick .stick-face {
+    width: 100%;
+    height: auto;
+    aspect-ratio: auto;
+    margin: 0;
+  }
+
+  .ctrl-card-stick .stick-axes {
+    position: static;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    margin-top: 8px;
+    pointer-events: none;
+  }
+
+  .stick-axes > .stick-axis-x,
+  .stick-axes > .stick-axis-y {
+    position: static;
+    transform: none;
+    justify-content: center;
+  }
+
   .ctrl-card-stick .mini-stick,
   .stick-body .mini-stick {
     width: 100%;
+    height: auto;
     max-width: none;
   }
 
