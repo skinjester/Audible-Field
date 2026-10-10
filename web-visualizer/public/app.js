@@ -512,14 +512,19 @@ document.addEventListener("visibilitychange", () => {
  * touch press and never on the release of a hold. Emit is a hold, so the first
  * Emit on a phone cannot open the speaker; the trace showed every resume() from
  * it left pending until a later tap. On a touch device the page therefore opens
- * on a start screen whose tap is that gesture. It is shown once per load, and
- * again only if a lock or a backgrounded tab leaves the context interrupted.
+ * on a start screen whose tap is that gesture.
+ * That opening screen is mandatory on every load. A reload often finds the
+ * audio context already running (media engagement, restored page), and that
+ * must not skip it. It stays up until a tap. After that tap it returns only
+ * if a lock or a backgrounded tab leaves the context interrupted.
  * The document-level lift listeners do the actual resume.
  */
 const audioGateEl = document.querySelector("[data-audio-gate]");
 const audioGateTitle = document.querySelector("[data-audio-gate-title]");
 let gateBlockedSince = 0;
 let gateShownOnce = false;
+/** True after the opening screen has been tapped on this load. */
+let gateDismissed = false;
 
 function phoneClass() {
   return window.matchMedia?.("(pointer: coarse)")?.matches === true && (navigator.maxTouchPoints || 0) > 0;
@@ -527,6 +532,8 @@ function phoneClass() {
 
 function audioGateNeeded() {
   if (!phoneClass()) return false;
+  // Opening screen stays up until a tap, even when the context is already running.
+  if (!gateDismissed) return true;
   if (!audioShouldBeAudible()) return false;
   const ctx = audioEngine.ctx;
   if (!ctx || ctx.state === "closed") return false;
@@ -560,15 +567,21 @@ if (audioGateEl instanceof HTMLElement) {
   // Release events carry activation; the capture listeners above already called resume().
   const onLift = (event) => {
     audioEngine.trace("gate-tap", { ev: event.type, act: navigator.userActivation?.isActive ?? "n/a" });
+    gateDismissed = true;
     if (audioGateTitle) audioGateTitle.textContent = "Starting…";
+    syncAudioGate(performance.now());
     // A hold instead of a tap carries no activation. Ask again rather than sit on "Starting…".
     window.setTimeout(() => {
-      if (!audioGateEl.hidden && audioGateTitle) audioGateTitle.textContent = "Tap to begin";
+      if (!audioGateEl.hidden && audioGateTitle) {
+        audioGateTitle.textContent = audioGateEl.classList.contains("is-resume") ? "Tap to resume sound" : "Tap to begin";
+      }
     }, 1200);
   };
   audioGateEl.addEventListener("pointerup", onLift);
   audioGateEl.addEventListener("touchend", onLift);
 }
+
+syncAudioGate(performance.now());
 
 const TRACE_STORE_KEY = "audible-field.trace-log";
 const TRACE_STORE_MAX = 600;

@@ -3650,8 +3650,9 @@ body:not(.has-dualsense) .pad-glyph {
   cursor: grabbing;
 }
 
-/* Phone start screen. Shown on a touch device while the AudioContext is not running.
-   The browser starts sound only on the release of a short tap, so the first touch is this one. */
+/* Phone start screen. Shown on every load of a touch device until the user taps,
+   including when the AudioContext is already running. The browser starts sound
+   only on the release of a short tap, so the first touch is this one. */
 .start-screen {
   position: fixed;
   inset: 0;
