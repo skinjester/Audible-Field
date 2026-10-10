@@ -50,7 +50,7 @@ export default class greyholePlugin extends WebAudioModule {
 
   async initialize(state) {
     await this._loadDescriptor();
-    const imported = await import("./Node.js");
+    const imported = await import("./Node.js?v=4");
     this._PluginFactory = imported[Object.keys(imported)[0]];
     return super.initialize(state);
   }

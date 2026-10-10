@@ -59,8 +59,11 @@ const RISE_FULL = 10;
  * 1 is linear with height. Above 1 holds the mix back until the cluster is high.
  */
 const RISE_CURVE = 0.55;
-/** Greyhole feedback at a fully risen cluster. Just under runaway, same as the main branch. */
-const FEEDBACK_MAX = 0.98;
+/**
+ * Greyhole feedback at a fully risen cluster.
+ * Above this, with the diffuser's own recirculation, the tank crackles and then resets.
+ */
+const FEEDBACK_MAX = 0.9;
 /** How quickly the send and feedback catch the climb. The target itself moves with the grains. */
 const DECAY_ATTACK = 0.45;
 /** How long the long tail keeps ringing after the rise is gone, including after the last atom despawns. */

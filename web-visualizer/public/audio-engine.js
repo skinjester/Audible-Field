@@ -36,7 +36,7 @@ import {
 } from "./wam-catalog.js?v=5";
 
 const CORNERS = ["tl", "tr", "bl", "br"];
-const GREYHOLE_PATH = "wimmics/greyhole/index.js";
+const GREYHOLE_PATH = "wimmics/greyhole/index.js?v=4";
 const FX_IDS = ["cross", "square", "triangle", "circle"];
 const FX_PICK_SLOTS = ["square", "triangle", "circle"];
 const FX_STORAGE_KEY = "echoscape.fxPrefs";
@@ -231,6 +231,14 @@ function tanhCurve(n) {
   return curve;
 }
 
+/** Identity curve. Headroom around it is the pre/post gain, because a shaper clamps its input to ±1. */
+function safetyCurve(n) {
+  const curve = new Float32Array(n);
+  const last = n - 1;
+  for (let i = 0; i < n; i += 1) curve[i] = (i / last) * 2 - 1;
+  return curve;
+}
+
 function strikeLife(hit) {
   if (typeof hit === "number") return hit;
   return Number(hit?.life) || 0;
@@ -360,6 +368,12 @@ function haloHz(lift) {
 const RISE_MODE_IDS = new Set(["loose", "flake", "drift", "thread", "shed", "halo"]);
 
 /**
+ * Small lift on every rising diffuse voice.
+ * The mode bases below set the mix. This makes the atoms a little more apparent against the bed.
+ */
+const RISE_LEVEL = 1.25;
+
+/**
  * Dry level of one rising atom.
  * A single full-size atom sits clearly beside the bed.
  * More atoms in that quadrant are each a little quieter, and the sum still grows.
@@ -376,7 +390,7 @@ function riseVoiceLevel(scale, count, mode) {
   else if (mode === "shed") base = 1.05;
   else if (mode === "thread") base = 0.97;
   else if (mode === "halo") base = 0.68;
-  return base * body * share;
+  return RISE_LEVEL * base * body * share;
 }
 
 /** @param {{ corner?: string }[]} list */
@@ -405,6 +419,39 @@ function riseSlice(buffer, atom, seconds) {
   const h = Math.abs((x | 0) * 17 + (z | 0) * 31 + (Number(atom?.id) | 0));
   const offset = span > 1e-4 ? ((h % 997) / 997) * span : 0;
   return { offset, duration: slice };
+}
+
+/**
+ * Looping a raw slice clicks wherever the ends do not meet.
+ * The tail is mixed into the head so the wrap is the next sample of the bed.
+ * @param {AudioContext} ctx
+ * @param {AudioBuffer} buffer
+ * @param {number} offset seconds
+ * @param {number} duration seconds
+ */
+function crossfadedLoop(ctx, buffer, offset, duration) {
+  const rate = buffer.sampleRate;
+  const channels = buffer.numberOfChannels || 1;
+  const srcLen = buffer.length;
+  const start = Math.max(0, Math.min(srcLen - 1, Math.floor(offset * rate)));
+  const available = Math.max(1, srcLen - start);
+  const length = Math.min(Math.max(2, Math.floor(duration * rate)), available);
+  const fade = Math.min(Math.floor(rate * 0.012), Math.floor(length * 0.25));
+  const play = length - fade;
+  if (!(fade >= 8) || play < 8) return null;
+  const out = ctx.createBuffer(channels, play, rate);
+  for (let c = 0; c < channels; c += 1) {
+    const src = buffer.getChannelData(c);
+    const dst = out.getChannelData(c);
+    for (let i = 0; i < play; i += 1) dst[i] = src[start + i];
+    for (let i = 0; i < fade; i += 1) {
+      const t = i / fade;
+      const fadeIn = Math.sin(t * Math.PI * 0.5);
+      const fadeOut = Math.cos(t * Math.PI * 0.5);
+      dst[i] = dst[i] * fadeIn + src[start + play + i] * fadeOut;
+    }
+  }
+  return out;
 }
 /** Tick bandpass at the pile's pitch. Wide enough to read as a tick, not a whistle. */
 const TICK_BASE_HZ = 240;
@@ -613,6 +660,8 @@ export class EchoScapeAudioEngine {
     this.splashMode = "phrase";
     /** Dry voice of a rising atom: a scrap of its quadrant's bed. */
     this.riseMode = "thread";
+    /** Settings switch. Off keeps every diffuse Greyhole bypassed. */
+    this._diffuseReverbOn = false;
     /** @type {Map<number, object>} */
     this._riseVoices = new Map();
     /** Cell ids that already played their one-shot flake. */
@@ -770,7 +819,19 @@ export class EchoScapeAudioEngine {
     this._splashOut.connect(this._shoulderOut);
     this._panner.connect(this._comp);
     this._comp.connect(this._outBus);
-    this._outBus.connect(this._limiter);
+    // Linear until the sum reaches 2, then hard-clip. A shaper only sees ±1,
+    // so the trim around it is what keeps a normal diffuse voice untouched.
+    this._safetyIn = this.ctx.createGain();
+    this._safetyIn.gain.value = 0.5;
+    this._safety = this.ctx.createWaveShaper();
+    this._safety.curve = safetyCurve(2048);
+    this._safety.oversample = "none";
+    this._safetyOut = this.ctx.createGain();
+    this._safetyOut.gain.value = 2;
+    this._outBus.connect(this._safetyIn);
+    this._safetyIn.connect(this._safety);
+    this._safety.connect(this._safetyOut);
+    this._safetyOut.connect(this._limiter);
     this._limiter.connect(this._master);
     this._buildCameraStage();
 
@@ -2799,9 +2860,18 @@ export class EchoScapeAudioEngine {
         send.channelInterpretation = "speakers";
         const ret = this.ctx.createGain();
         ret.gain.value = 0;
+        // The bed can already be full scale. A pad and a soft clip keep that
+        // peak out of the feedback loop, which is what was cracking the tank.
+        const pad = this.ctx.createGain();
+        pad.gain.value = 0.55;
+        const clip = this.ctx.createWaveShaper();
+        clip.curve = tanhCurve(1024);
+        clip.oversample = "none";
         const stem = this.stems[corner];
         if (stem?.pan) stem.pan.connect(send);
-        send.connect(node);
+        send.connect(pad);
+        pad.connect(clip);
+        clip.connect(node);
         node.connect(ret);
         ret.connect(this._sum);
         this._applyAiryGreyhole(node);
@@ -2812,6 +2882,47 @@ export class EchoScapeAudioEngine {
     }
     const loaded = Object.keys(this._stemReverbs);
     if (loaded.length) console.info("[EchoScape audio] Greyhole per stem", loaded.join(", "));
+    if (!this._diffuseReverbOn) this._silenceDiffuseReverbs();
+  }
+
+  /**
+   * Settings switch for the diffuse Greyhole. Off closes every tank immediately.
+   * Rising grains still play. They do not open the reverb.
+   * @param {boolean} enabled
+   */
+  setDiffuseReverbEnabled(enabled) {
+    const on = !!enabled;
+    if (this._diffuseReverbOn === on) return;
+    this._diffuseReverbOn = on;
+    if (!on) this._silenceDiffuseReverbs();
+  }
+
+  /** Bypass every diffuse tank and zero its send, return, and feedback. */
+  _silenceDiffuseReverbs() {
+    const recs = this._stemReverbs;
+    if (!recs) return;
+    for (const corner of CORNERS) {
+      const rec = recs[corner];
+      if (!rec) continue;
+      rec.asleep = true;
+      rec.quietSince = 0;
+      rec.feedbackHeld = 0;
+      rec.wetHeld = 0;
+      rec.feedback = 0;
+      if (rec.send) writeParam(rec.send.gain, 0, 1e-4);
+      if (rec.ret) writeParam(rec.ret.gain, 0, 1e-4);
+      if (!rec.node?.setParamValue) continue;
+      try {
+        rec.node.setParamValue("/greyhole/feedback", 0);
+      } catch {
+        /* param name differs */
+      }
+      try {
+        rec.node.setParamValue("/greyhole/bypass", 1);
+      } catch {
+        /* param name differs */
+      }
+    }
   }
 
   /**
@@ -2824,9 +2935,11 @@ export class EchoScapeAudioEngine {
     const delay = this._greyholeDelayCeil();
     const targets = {
       "/greyhole/bypass": 0,
-      "/greyhole/damping": 0,
-      "/greyhole/modDepth": 0.1,
-      "/greyhole/modFreq": 2,
+      // A little damping so a long tail loses the highs that were building into a tick.
+      // Modulation is off: it moves the delay read, which is the same glitch as moving delayTime.
+      "/greyhole/damping": 0.22,
+      "/greyhole/modDepth": 0,
+      "/greyhole/modFreq": 0,
       "/greyhole/size": 3,
       "/greyhole/delayTime": delay,
       "/greyhole/feedback": 0,
@@ -2852,6 +2965,15 @@ export class EchoScapeAudioEngine {
    */
   setDiffuseGreyhole(levels, feedbacks, wets) {
     if (!this.running || !this._stemReverbs || !this.ctx) return;
+    if (!this._diffuseReverbOn) {
+      for (const corner of CORNERS) {
+        if (this._stemReverbs[corner]?.asleep !== true) {
+          this._silenceDiffuseReverbs();
+          break;
+        }
+      }
+      return;
+    }
     const now = this.ctx.currentTime;
     for (const corner of CORNERS) {
       const rec = this._stemReverbs[corner];
@@ -2868,7 +2990,12 @@ export class EchoScapeAudioEngine {
       const wet = idle ? 0 : this._ringRelease(prevWet, askedWet, dt);
       rec.feedbackHeld = feedback;
       rec.wetHeld = wet;
-      const asleep = greyholeIdle(level, feedback, wet);
+      const wantSleep = greyholeIdle(level, feedback, wet);
+      if (!wantSleep) rec.quietSince = 0;
+      else if (!(rec.quietSince > 0)) rec.quietSince = now;
+      // Keep computing with the send closed until the delays have drained.
+      // Bypassing a full tank, or resetting it on the audio thread, is the tick.
+      const asleep = wantSleep && now - rec.quietSince >= 0.5;
       // Wake the tank before any send reaches it. Sleep only after the tail is dry.
       // Delay time and size stay where they were set: moving them crossfades the buffer.
       if (rec.node?.setParamValue && rec.asleep !== asleep) {
@@ -2879,7 +3006,7 @@ export class EchoScapeAudioEngine {
           /* param name differs */
         }
       }
-      if (!asleep) this._glide(rec.send.gain, level, 0.08, 0.008);
+      if (!asleep) this._glide(rec.send.gain, wantSleep ? 0 : level, 0.08, 0.008);
       else writeParam(rec.send.gain, 0, 1e-4);
       if (rec.ret) {
         if (!asleep) this._glide(rec.ret.gain, DIFFUSE_WET * wet, 0.08, 0.008);
@@ -2897,7 +3024,7 @@ export class EchoScapeAudioEngine {
         }
         continue;
       }
-      const sent = feedback < 0.01 ? 0 : Math.round(feedback * 100) / 100;
+      const sent = feedback < 0.008 ? 0 : Math.round(feedback * 250) / 250;
       if (rec.feedback === sent) continue;
       rec.feedback = sent;
       try {
@@ -3123,7 +3250,11 @@ export class EchoScapeAudioEngine {
     voice.buffer = buffer;
     voice.loop = true;
     voice.playbackRate.value = rate;
-    voice.connect(stem.gain);
+    const trim = this.ctx.createGain();
+    trim.gain.value = 1;
+    voice.connect(trim);
+    trim.connect(stem.gain);
+    stem.bedTrim = trim;
     const when = this.ctx.currentTime;
     voice.start(when, pos);
     stem.bedVoice = voice;
@@ -3142,15 +3273,53 @@ export class EchoScapeAudioEngine {
     };
   }
 
-  /** @param {{ bedVoice?: AudioBufferSourceNode | null }} stem */
-  _stopBufferBed(stem) {
+  /**
+   * Stop the looping bed.
+   * `fadeSec` lets a pile note take over without a cut. The trim is that voice's own gain, so the next bed is not faded with it.
+   * @param {{ bedVoice?: AudioBufferSourceNode | null, bedTrim?: GainNode | null }} stem
+   * @param {number} [fadeSec]
+   */
+  _stopBufferBed(stem, fadeSec) {
     const voice = stem?.bedVoice;
     if (!voice) return;
+    const trim = stem.bedTrim;
     stem.bedVoice = null;
+    stem.bedTrim = null;
     try {
       voice.onended = null;
     } catch {
       /* ignore */
+    }
+    const fade = Number(fadeSec) > 0 ? Number(fadeSec) : 0;
+    if (fade > 0 && this.ctx && trim) {
+      const now = this.ctx.currentTime;
+      const gain = trim.gain;
+      const current = Math.max(0.0001, gain.value || 0.0001);
+      try {
+        gain.cancelScheduledValues(now);
+        gain.setValueAtTime(current, now);
+        gain.linearRampToValueAtTime(0.0001, now + fade);
+        voice.stop(now + fade + 0.02);
+      } catch {
+        try {
+          voice.stop();
+        } catch {
+          /* already stopped */
+        }
+      }
+      window.setTimeout(() => {
+        try {
+          voice.disconnect();
+        } catch {
+          /* already gone */
+        }
+        try {
+          trim.disconnect();
+        } catch {
+          /* already gone */
+        }
+      }, Math.ceil((fade + 0.06) * 1000));
+      return;
     }
     try {
       voice.stop();
@@ -3159,6 +3328,11 @@ export class EchoScapeAudioEngine {
     }
     try {
       voice.disconnect();
+    } catch {
+      /* already disconnected */
+    }
+    try {
+      trim?.disconnect();
     } catch {
       /* already disconnected */
     }
@@ -3319,7 +3493,7 @@ export class EchoScapeAudioEngine {
     if (!stem.bedVoice) this._ensureBed(corner);
     this._stopPileNotes(stem);
     const voice = stem.bedVoice;
-    if (voice && Math.abs(voice.playbackRate.value - next) > 0.002) voice.playbackRate.value = next;
+    if (voice) this._glide(voice.playbackRate, next, 0.05, 0.004);
   }
 
   /**
@@ -3352,7 +3526,8 @@ export class EchoScapeAudioEngine {
       if (Math.abs(el.playbackRate - next) > 0.002) el.playbackRate = next;
       return;
     }
-    this._stopBufferBed(stem);
+    const bedAt = stem.bedVoice ? this._bedPosition(stem) : 0;
+    this._stopBufferBed(stem, 0.045);
     if (stem.el && !stem.el.paused) {
       try {
         stem.el.pause();
@@ -3416,7 +3591,7 @@ export class EchoScapeAudioEngine {
         voice.loop = true;
         voice.playbackRate.value = rate;
         const dur = buffer.duration;
-        let pos = 0;
+        let pos = bedAt;
         for (let n = 0; n < stem.notes.length; n += 1) {
           if (stem.notes[n].voice) {
             pos = this._notePosition(stem.notes[n]);
@@ -3437,9 +3612,9 @@ export class EchoScapeAudioEngine {
         else stem.notes.push(slot);
         continue;
       }
-      if (Math.abs((existing.rate || 0) - rate) > 0.01) {
+      if (Math.abs((existing.rate || 0) - rate) > 0.004) {
         existing.rate = rate;
-        writeParam(existing.voice.playbackRate, rate, 0.01);
+        this._glide(existing.voice.playbackRate, rate, 0.05, 0.004);
       }
       if (Math.abs((existing.level ?? -1) - level) > 0.008) {
         existing.level = level;
@@ -3554,7 +3729,7 @@ export class EchoScapeAudioEngine {
     this._riseFired.clear();
     this._riseShedAt?.clear();
     const flakes = this._riseFlakes || [];
-    while (flakes.length) this._disposeRiseVoice(flakes.pop());
+    while (flakes.length) this._dropFlake(flakes.pop());
   }
 
   _clearRiseLoops() {
@@ -3610,8 +3785,35 @@ export class EchoScapeAudioEngine {
     gain.exponentialRampToValueAtTime(0.0001, now + release);
     if (!this._riseReleasing) this._riseReleasing = [];
     this._riseReleasing.push(voice);
-    while (this._riseReleasing.length > RISE_RELEASE_CAP) {
-      this._disposeRiseVoice(this._riseReleasing[0]);
+    let guard = this._riseReleasing.length;
+    while (this._riseReleasing.length > RISE_RELEASE_CAP && guard > 0) {
+      guard -= 1;
+      const oldest = this._riseReleasing[0];
+      const level = oldest?.gain?.gain?.value || 0;
+      if (level > 0.015 && this.ctx && !oldest._rushed) {
+        oldest._rushed = true;
+        const at = this.ctx.currentTime;
+        const fading = oldest.gain.gain;
+        const heard = Math.max(0.0001, level);
+        try {
+          fading.cancelScheduledValues(at);
+          fading.setValueAtTime(heard, at);
+          fading.exponentialRampToValueAtTime(0.0001, at + 0.045);
+        } catch {
+          /* already stopped */
+        }
+        if (oldest.timer) window.clearTimeout(oldest.timer);
+        oldest.timer = window.setTimeout(() => this._disposeRiseVoice(oldest), 120);
+        this._riseReleasing.shift();
+        this._riseReleasing.push(oldest);
+        continue;
+      }
+      if (level > 0.015 && oldest._rushed) {
+        this._riseReleasing.shift();
+        this._riseReleasing.push(oldest);
+        continue;
+      }
+      this._disposeRiseVoice(oldest);
     }
     voice.timer = window.setTimeout(() => this._disposeRiseVoice(voice), Math.ceil(release * 1000) + 60);
   }
@@ -3621,6 +3823,12 @@ export class EchoScapeAudioEngine {
     if (list) {
       const index = list.indexOf(voice);
       if (index >= 0) list.splice(index, 1);
+    }
+    if (!voice || voice.gone) return;
+    const level = voice.gain?.gain?.value || 0;
+    if (level > 0.02 && !voice.released) {
+      this._releaseRiseVoice(voice, 0.04);
+      return;
     }
     this._disposeRiseVoice(voice);
   }
@@ -3663,11 +3871,15 @@ export class EchoScapeAudioEngine {
     pan.pan.value = Math.min(1, Math.max(-1, Number(atom.pan) || 0));
     this._copySplashShelves(stem, body, air);
     const source = ctx.createBufferSource();
-    source.buffer = buffer;
+    const looped = loop ? crossfadedLoop(ctx, buffer, start, Math.max(0.02, playEnd - start)) : null;
+    source.buffer = looped || buffer;
     source.loop = loop;
-    if (loop) {
+    if (loop && !looped) {
       source.loopStart = start;
       source.loopEnd = Math.min(buffer.duration, playEnd);
+    } else if (looped) {
+      source.loopStart = 0;
+      source.loopEnd = looped.duration;
     }
     source.playbackRate.value = this._riseRate(atom, mode);
     source.connect(gain);
@@ -3679,7 +3891,8 @@ export class EchoScapeAudioEngine {
     const when = ctx.currentTime;
     const playDur = Math.max(0.01, Math.min(buffer.duration - start, playEnd - start));
     try {
-      if (loop) source.start(when, start);
+      if (looped) source.start(when, 0);
+      else if (loop) source.start(when, start);
       else source.start(when, start, playDur);
     } catch {
       try {
@@ -3711,7 +3924,7 @@ export class EchoScapeAudioEngine {
     const level = Math.max(0.0001, riseVoiceLevel(atom.scale, count, mode));
     this._glide(voice.gain.gain, level, 0.06, 0.008);
     const rate = this._riseRate(atom, mode);
-    if (voice.voice) writeParam(voice.voice.playbackRate, rate, 0.01);
+    if (voice.voice) this._glide(voice.voice.playbackRate, rate, 0.05, 0.004);
     const panValue = Math.min(1, Math.max(-1, Number(atom.pan) || 0));
     if (voice.pan) this._glide(voice.pan.pan, panValue, 0.05, 0.02);
     if (mode === "drift" && voice.filter) {
@@ -3940,11 +4153,12 @@ export class EchoScapeAudioEngine {
    */
   _copySplashShelves(stem, body, air) {
     const apply = (from, to, fallback) => {
+      if (!to) return;
       to.type = from?.type || fallback.type;
-      writeParam(to.frequency, Number(from?.frequency?.value) || fallback.frequency, 0.5);
-      writeParam(to.Q, Number(from?.Q?.value) || fallback.Q, 1e-3);
       const gain = Number(from?.gain?.value);
-      writeParam(to.gain, Number.isFinite(gain) ? gain : fallback.gain, 1e-3);
+      this._glide(to.frequency, Number(from?.frequency?.value) || fallback.frequency, 0.04, 0.5);
+      this._glide(to.Q, Number(from?.Q?.value) || fallback.Q, 0.04, 1e-3);
+      this._glide(to.gain, Number.isFinite(gain) ? gain : fallback.gain, 0.04, 1e-3);
     };
     apply(stem?.body, body, { type: "lowshelf", frequency: 200, Q: 0.7, gain: 0 });
     apply(stem?.air, air, { type: "highshelf", frequency: 650, Q: 0.7, gain: 0 });
@@ -3964,9 +4178,11 @@ export class EchoScapeAudioEngine {
     const hold = dur - release;
     const level = Math.max(0.001, peak);
     const gain = strike.gain.gain;
+    const attack = Math.min(0.004, Math.max(0.001, dur * 0.08));
     gain.cancelScheduledValues(when);
-    gain.setValueAtTime(level, when);
-    if (hold > 0.02) gain.setValueAtTime(level, when + hold);
+    gain.setValueAtTime(0.001, when);
+    gain.exponentialRampToValueAtTime(level, when + attack);
+    if (hold > attack + 0.02) gain.setValueAtTime(level, when + hold);
     gain.exponentialRampToValueAtTime(0.001, when + dur);
 
     const cutoff = strike.filter.frequency;
@@ -3992,12 +4208,14 @@ export class EchoScapeAudioEngine {
     const holdAt = until - release;
     const level = Math.max(0.001, peak);
     const gain = strike.gain.gain;
+    const current = Math.max(0.001, gain.value || 0.001);
     gain.cancelScheduledValues(when);
-    gain.setValueAtTime(level, when);
+    gain.setValueAtTime(current, when);
+    if (Math.abs(current - level) > 0.02) gain.exponentialRampToValueAtTime(level, when + 0.008);
     if (holdAt > when + 0.02) gain.setValueAtTime(level, holdAt);
     gain.exponentialRampToValueAtTime(0.001, until);
     if (strike.pan) strike.pan.pan.setValueAtTime(panValue, when);
-    if (strike.voice) strike.voice.playbackRate.setValueAtTime(rate, when);
+    if (strike.voice) strike.voice.playbackRate.setTargetAtTime(rate, when, 0.03);
     strike.until = until;
     strike.live = true;
   }
@@ -4013,16 +4231,43 @@ export class EchoScapeAudioEngine {
   _sparkSplash(strike, buffer, when, rate, offset, peak, sparkDur) {
     if (!this.ctx || !buffer || !strike?.sparkGain) return;
     const previous = strike.sparkVoice;
+    const previousEnv = strike.sparkEnv;
     if (previous) {
-      try {
-        previous.stop();
-      } catch {
-        /* already stopped */
-      }
       try {
         previous.disconnect();
       } catch {
         /* already gone */
+      }
+      if (previousEnv) {
+        const fading = previousEnv.gain;
+        const current = Math.max(0.0001, fading.value || 0.0001);
+        try {
+          fading.cancelScheduledValues(when);
+          fading.setValueAtTime(current, when);
+          fading.exponentialRampToValueAtTime(0.0001, when + 0.02);
+        } catch {
+          /* already stopped */
+        }
+        const oldVoice = previous;
+        const oldEnv = previousEnv;
+        window.setTimeout(() => {
+          try {
+            oldVoice.stop();
+          } catch {
+            /* already stopped */
+          }
+          try {
+            oldEnv.disconnect();
+          } catch {
+            /* already gone */
+          }
+        }, 40);
+      } else {
+        try {
+          previous.stop();
+        } catch {
+          /* already stopped */
+        }
       }
       const index = strike.nodes?.indexOf(previous) ?? -1;
       if (index >= 0) strike.nodes.splice(index, 1);
@@ -4032,7 +4277,10 @@ export class EchoScapeAudioEngine {
     voice.buffer = buffer;
     voice.loop = false;
     voice.playbackRate.value = sparkRate;
-    voice.connect(strike.sparkGain);
+    const env = this.ctx.createGain();
+    env.gain.value = 0.001;
+    voice.connect(env);
+    env.connect(strike.sparkHp || strike.sparkGain);
     const heard = Math.max(0.05, sparkDur);
     const playDur = Math.min(buffer.duration, Math.max(0.02, heard * sparkRate));
     const startAt = this._loopOffset(offset, buffer.duration);
@@ -4045,14 +4293,24 @@ export class EchoScapeAudioEngine {
       } catch {
         /* already gone */
       }
+      try {
+        env.disconnect();
+      } catch {
+        /* already gone */
+      }
       return;
     }
     strike.sparkVoice = voice;
-    if (strike.nodes) strike.nodes.push(voice);
+    strike.sparkEnv = env;
+    if (strike.nodes) {
+      strike.nodes.push(voice);
+      strike.nodes.push(env);
+    }
     const level = Math.max(0.001, peak * SPARKLE_LEVEL);
-    const gain = strike.sparkGain.gain;
+    const gain = env.gain;
     gain.cancelScheduledValues(when);
-    gain.setValueAtTime(level, when);
+    gain.setValueAtTime(0.001, when);
+    gain.exponentialRampToValueAtTime(level, when + 0.004);
     gain.exponentialRampToValueAtTime(0.001, when + heard);
   }
 
@@ -4282,7 +4540,7 @@ export class EchoScapeAudioEngine {
         this._armSplashRelease(stem, live, wantUntil - when);
       } else {
         if (live.pan) live.pan.pan.setValueAtTime(panValue, when);
-        if (live.voice) live.voice.playbackRate.setValueAtTime(rate, when);
+        if (live.voice) live.voice.playbackRate.setTargetAtTime(rate, when, 0.03);
       }
       if (buffer) this._sparkSplash(live, buffer, when, rate, this._bedPosition(stem, pileId), peak, ring);
       return;
@@ -4343,6 +4601,8 @@ export class EchoScapeAudioEngine {
       filter,
       pan,
       sparkGain,
+      sparkHp,
+      sparkEnv: null,
       sparkVoice: null,
       sparkAt: null,
       pileId,

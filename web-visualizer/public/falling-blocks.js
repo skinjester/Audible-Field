@@ -1,9 +1,9 @@
 import * as THREE from "three";
-import { audioEngine } from "./audio-engine.js?v=119";
+import { audioEngine } from "./audio-engine.js?v=122";
 import { STEM_CORNERS, controller, subscribe } from "./mixer-core.js?v=67";
 import { applyConvert, applyInfect, applyPostMoves, applyVacuum, compileMaterials, parseMaterialsJson, stepWorld, tickEffects } from "./rule-engine.js?v=78";
 import { inputBindings } from "./input-bindings.js?v=17";
-import { fallingInput } from "./falling-input.js?v=93";
+import { fallingInput } from "./falling-input.js?v=95";
 import { createBlockExpSurface } from "./block-exp-surface.js?v=4";
 
 // Leave the system cursor free. Pointer lock hides it, then puts it back

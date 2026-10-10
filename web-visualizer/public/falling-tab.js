@@ -1,4 +1,4 @@
-import { audioEngine } from "./audio-engine.js?v=119";
+import { audioEngine } from "./audio-engine.js?v=122";
 import {
   clearBoard,
   hideFallingBlocks,
@@ -6,8 +6,8 @@ import {
   onFieldPress,
   readGridSnapshot,
   showFallingBlocks,
-} from "./falling-blocks.js?v=437";
-import { fieldDebug, fieldFrame, resetFieldSonify, setDiffuseReverb } from "./grid-sonify.js?v=56";
+} from "./falling-blocks.js?v=439";
+import { fieldDebug, fieldFrame, resetFieldSonify, setDiffuseReverb } from "./grid-sonify.js?v=57";
 import { STEM_CORNERS, controller, setActiveFx } from "./mixer-core.js?v=67";
 
 /** falling-input.js already turns these into clear, audio toggle, and emit. */
@@ -138,6 +138,7 @@ function bindDiffuseReverbUi() {
     button.setAttribute("aria-checked", on ? "true" : "false");
     button.title = on ? "Turn reverb off" : "Turn reverb on";
     setDiffuseReverb(on);
+    audioEngine.setDiffuseReverbEnabled(on);
     try {
       sessionStorage.setItem(DIFFUSE_REVERB_KEY, on ? "1" : "0");
     } catch {

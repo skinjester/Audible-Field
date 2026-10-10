@@ -872,8 +872,11 @@ let greyholeProcessorString = `
 
             // A dry quadrant used to keep this diffuser network running for the
             // whole session. Bypass skips it. Delay time is left untouched.
+            // The lines are already empty: the send stays open until the tail drains.
+            // Rebuilding the tank here drops the audio thread.
             var bypassNow = this.getParamValue("/greyhole/bypass");
             if (bypassNow >= 0.5) {
+                this.feedbackSlew = 0;
                 if (output) {
                     for (var b = 0; b < output.length; b++) {
                         if (output[b]) output[b].fill(0);
@@ -881,6 +884,18 @@ let greyholeProcessorString = `
                 }
                 return true;
             }
+
+            // Feedback arrives in steps. Move it a little per block so the
+            // diffuser coefficient does not jump.
+            var fbArr = parameters["/greyhole/feedback"];
+            var targetFb = fbArr && fbArr.length ? fbArr[0] : 0;
+            if (!(this.feedbackSlew >= 0)) this.feedbackSlew = targetFb;
+            var slewStep = 0.003;
+            var slewDiff = targetFb - this.feedbackSlew;
+            if (slewDiff > slewStep) this.feedbackSlew += slewStep;
+            else if (slewDiff < -slewStep) this.feedbackSlew -= slewStep;
+            else this.feedbackSlew = targetFb;
+            this.setParamValue("/greyhole/feedback", this.feedbackSlew);
         
           	// Compute
             try {
@@ -920,11 +935,23 @@ let greyholeProcessorString = `
             // Update bargraph
             this.update_outputs();
             
-            // Copy outputs
+            // Copy outputs. Samples past full scale fold so a hot tail
+            // saturates instead of slamming the limiter in one sample.
             if (output !== undefined) {
                 for (var chan = 0; chan < Math.min(this.numOut, output.length); ++chan) {
                     var dspOutput = this.dspOutChannnels[chan];
-                    output[chan].set(dspOutput);
+                    var dst = output[chan];
+                    if (!dspOutput || !dst) continue;
+                    var nOut = Math.min(dspOutput.length, dst.length);
+                    for (var s = 0; s < nOut; ++s) {
+                        var x = dspOutput[s];
+                        var ax = x < 0 ? -x : x;
+                        if (ax > 1) {
+                            var folded = 1 + 0.2 * Math.tanh((ax - 1) / 0.2);
+                            x = x < 0 ? -folded : folded;
+                        }
+                        dst[s] = x;
+                    }
                 }
             }
             
