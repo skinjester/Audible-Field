@@ -356,6 +356,16 @@ function stickForAxes(axis, stickX, stickY) {
 }
 
 /**
+ * Ping Pong Delay multiplies the delay input by feedback. A rest of 0
+ * on time, feedback, or mix leaves the repeats silent.
+ * @param {{ id?: string }} param
+ */
+function pingPongLevelParam(param) {
+  const id = String(param?.id || "");
+  return id === "time" || id === "feedback" || id === "mix";
+}
+
+/**
  * Value sent while a continuous parameter is not on X or Y.
  * Booleans and choices use this as their initial switch value too.
  * @param {{ id: string, label: string, type?: string, min: number, max: number, def: number, authored?: boolean }} param
@@ -366,6 +376,7 @@ export function neutralParamValue(param) {
   if (isEnabledParam(param)) return clampNum(1, param.min, param.max);
   if (param.type === "boolean") return clampNum(Number.isFinite(param.def) ? param.def : 0, param.min, param.max);
   if (param.type === "choice") return clampNum(param.def, param.min, param.max);
+  if (pingPongLevelParam(param)) return clampNum(param.def, param.min, param.max);
   if (!param.authored) return clampNum(param.def, param.min, param.max);
   if (param.min <= 0 && param.max >= 0) return 0;
   return clampNum(param.def, param.min, param.max);
@@ -730,7 +741,14 @@ export function createParamModel(params, saved, path) {
     const axis = saved?.axes?.[param.id];
     axes[param.id] =
       param.type === "float" && (axis === "x" || axis === "y" || axis === "xy") ? axis : null;
-    const stored = Number(saved?.switches?.[param.id]);
+    let stored = Number(saved?.switches?.[param.id]);
+    // A saved 0 on every Ping Pong level is the old rest position, which mutes the delay.
+    const savedPingPong =
+      saved?.switches &&
+      Number(saved.switches.time) === 0 &&
+      Number(saved.switches.feedback) === 0 &&
+      Number(saved.switches.mix) === 0;
+    if (pingPongLevelParam(param) && savedPingPong) stored = NaN;
     switches[param.id] = quantizeParam(
       Number.isFinite(stored) ? stored : neutralParamValue(param),
       param

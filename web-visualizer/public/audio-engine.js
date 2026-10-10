@@ -28,7 +28,7 @@ import {
   listWamParams,
   createParamModel,
   applyWamControls,
-} from "./wam-host.js?v=17";
+} from "./wam-host.js?v=18";
 import {
   NATIVE_FX,
   DEFAULT_STICK_SCALE,
@@ -2074,6 +2074,16 @@ export class EchoScapeAudioEngine {
         insertIn.connect(wamNode);
         wamNode.connect(slot.out);
         this._fxWam[button] = instance;
+        // The equalizer starts with its dry copy and filter bank both open,
+        // and ignores a later "enabled" of 1. Close the internal dry path
+        // so the bands are the signal, not a layer under an untouched copy.
+        if (String(path).includes("graphicEqualizer") && wamNode.dryGainNode && wamNode.wetGainNode) {
+          wamNode.isEnabled = true;
+          wamNode.dryGainNode.gain.cancelScheduledValues(this.ctx.currentTime);
+          wamNode.wetGainNode.gain.cancelScheduledValues(this.ctx.currentTime);
+          wamNode.dryGainNode.gain.value = 0;
+          wamNode.wetGainNode.gain.value = 1;
+        }
         let listed = [];
         try {
           listed = await listWamParams(wamNode, instance, path);
@@ -2553,6 +2563,9 @@ export class EchoScapeAudioEngine {
 
     this.activeFx = button;
     const bypass = button === "cross";
+    // A WAM replaces the mix. Native faces stay a quieter parallel color,
+    // because those graphs output only the effect and not a dry copy.
+    const insert = !bypass && !!this._fxWam?.[button];
     const t = this.ctx.currentTime;
     for (const id of FX_IDS) {
       const node = this.fx[id];
@@ -2560,8 +2573,8 @@ export class EchoScapeAudioEngine {
       // Cross is the mute face: every slot, including native Saturn, stays closed.
       node.out.gain.setTargetAtTime(!bypass && id === button ? 1 : 0, t, RAMP);
     }
-    this._wet.gain.setTargetAtTime(bypass ? 0 : 0.45, t, RAMP);
-    this._dry.gain.setTargetAtTime(bypass ? 1 : 0.85, t, RAMP);
+    this._wet.gain.setTargetAtTime(bypass ? 0 : insert ? 1 : 0.45, t, RAMP);
+    this._dry.gain.setTargetAtTime(bypass ? 1 : insert ? 0 : 0.85, t, RAMP);
     // Slot gains mute inactive faces (including WAMs). Do not destroy WAM
     // instances here — X / Cross only turns FX off until that face is selected again.
   }
