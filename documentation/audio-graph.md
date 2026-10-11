@@ -78,11 +78,13 @@ Each stem starts from the same sample but has independent processing.
 | Diffuse tail | Pan → Grey Hole send → Grey Hole return → stem sum |
 | Native hall | Pan → shared hall → stem sum. These sends are currently held at zero |
 
-The source samples are stereo. The graph folds each one to mono before its stem panner so Falling Blocks can place a pile in the stereo field. Diagnostics and Visualize leave this stem pan centered.
+The beds the menu can assign are delivered as mono. The graph still folds each one to a single channel before its stem panner, so Falling Blocks can place a pile in the stereo field. Diagnostics and Visualize leave this stem pan centered.
 
 ### From media element to looping buffer
 
-Each bed begins as an HTML media element. This lets a trusted tap call `play()` before the file has finished decoding. When the decoded `AudioBuffer` is ready, the engine switches to a looping `AudioBufferSourceNode` and pauses the media element.
+Each bed begins as an HTML media element. This lets a trusted tap call `play()` before the file has finished decoding. The file that tap starts is WebM/Opus. `decodeAudioData` loads that same URL. AAC is fetched for a corner only when that decode rejects while the audio context is already running. When the decoded `AudioBuffer` is ready, the engine switches to a looping `AudioBufferSourceNode`, disconnects the media element from the mix, and clears its `src`.
+
+The decoded buffer is trimmed when it is only slightly longer than the original WAV, which drops encoder padding at the end. A few milliseconds at the join are crossfaded. Pile notes, grains, and landings loop that same buffer, so the padding never remains in a side voice. A buffer with no stored musical length is left unchanged.
 
 The buffer loop avoids the gap that an HTML media loop can leave at its wrap point. It also avoids keeping a second media decoder active.
 
@@ -166,7 +168,7 @@ The helper `writeParam` also avoids writing the same value every frame. Repeated
 
 ## Start, pause, and sample replacement
 
-`start` builds the graph and wires the four stems at once. The engine counts as running as soon as the graph exists; it does not wait for the bed files. Each bed joins the mix when its media element has data, and switches to a decoded loop when its buffer arrives. Buffers download one after another, in corner order. `start` restores WAM preferences after that. `app.js` places start, resume, and suspend work on one promise chain so those operations cannot overlap.
+`start` builds the graph and wires the four stems at once. The engine counts as running as soon as the graph exists; it does not wait for the bed files. Each bed joins the mix when its media element has data, and switches to a decoded loop when its buffer arrives. The four startup downloads are the WebM files requested from `/sample-runtime/`, one after another, in corner order. Choosing another row in the diagnostics menu loads that row's WebM the same way. The menu still lists the WAV library by name. AAC files are not listed. `start` restores WAM preferences after the beds are wired. `app.js` places start, resume, and suspend work on one promise chain so those operations cannot overlap.
 
 `suspendPlayback` pauses media elements and suspends the `AudioContext` without destroying the graph. Falling Blocks uses it when field audio is turned off.
 
@@ -174,7 +176,7 @@ The helper `writeParam` also avoids writing the same value every frame. Repeated
 
 ## iOS Safari
 
-Safari creates every `AudioContext` suspended and ignores `resume()` and `play()` outside a trusted gesture. So the page always starts silent, and the first press, touch, or key must do the unlock. That gesture does exactly what the browser asks for, synchronously and without waiting on anything: `play()` on each bed element and `resume()` on the context. There is no second, engine-side unlock. `ctx.state` is the only truth about whether audio is running.
+Safari creates every `AudioContext` suspended and ignores `resume()` and `play()` outside a trusted gesture. So the page always starts silent, and the first press, touch, or key must do the unlock. That gesture does exactly what the browser asks for, synchronously and without waiting on anything: `play()` on each bed element and `resume()` on the context. The element URL is the WebM file. WebM/Opus is the playback target on iOS/iPadOS 17.4+ and current macOS Safari. There is no second, engine-side unlock. `ctx.state` is the only truth about whether audio is running.
 
 The engine listens for the context's `statechange`. When the browser reports `running`, it restarts any decoded bed that was started while the clock was frozen and calls `play()` on any element that is still paused. No timer, proof buffer, or retry counter stands between the tap and the sound. An earlier design gated resume, beds, and the master gain on a proof buffer finishing; when that proof did not finish, the first tap turned the context on and only the second tap made sound.
 

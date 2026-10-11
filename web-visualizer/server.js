@@ -5,6 +5,8 @@ const path = require("path");
 
 const HTTP_PORT = Number(process.env.PORT) || 8080;
 const DIST_DIR = path.join(__dirname, "dist");
+const RUNTIME_DIR = path.join(__dirname, "..", "sample-runtime");
+const RUNTIME_URL = "/sample-runtime";
 /** Audio trace lines posted by a page opened with `?trace` land here, one per line. */
 const TRACE_FILE = path.join(__dirname, "trace.log");
 const TRACE_MAX_BODY = 256 * 1024;
@@ -50,6 +52,7 @@ const MIME = {
   ".ogg": "audio/ogg",
   ".flac": "audio/flac",
   ".m4a": "audio/mp4",
+  ".webm": "audio/webm",
   ".wasm": "application/wasm",
   ".woff": "font/woff",
   ".woff2": "font/woff2",
@@ -65,7 +68,18 @@ function underRoot(filePath, root) {
   return resolved === rootResolved || resolved.startsWith(rootResolved + path.sep);
 }
 
+function resolveRuntimeFile(urlPath) {
+  if (urlPath !== RUNTIME_URL && !urlPath.startsWith(`${RUNTIME_URL}/`)) return undefined;
+  const relative = urlPath.slice(RUNTIME_URL.length).replace(/^\/+/, "");
+  if (!relative || relative.includes("\0")) return null;
+  const filePath = path.normalize(path.join(RUNTIME_DIR, relative));
+  if (!underRoot(filePath, RUNTIME_DIR)) return null;
+  return filePath;
+}
+
 function resolveFilePath(urlPath) {
+  const runtimeFile = resolveRuntimeFile(urlPath);
+  if (runtimeFile !== undefined) return runtimeFile;
   const relative = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
   if (!relative || relative.includes("\0")) return null;
   const filePath = path.normalize(path.join(DIST_DIR, relative));

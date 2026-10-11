@@ -1,3 +1,5 @@
+import { resolveRuntimeBed } from "./runtime-beds.js?v=2";
+
 export const FOLLOW_TAU = 0.035;
 export const DPAD_MS = 2000;
 
@@ -109,30 +111,60 @@ const DEFAULT_STEM_CORNERS = {
     id: "loops/tonal/Bowed Guitar G.wav",
     label: "Bowed Guitar G",
     file: "Bowed Guitar G.wav",
-    url: "/samples/loops/tonal/Bowed%20Guitar%20G.wav",
+    url: "/sample-runtime/samples/loops/tonal/Bowed%20Guitar%20G.webm",
+    fallbackUrl: "/sample-runtime/samples/loops/tonal/Bowed%20Guitar%20G.m4a",
+    loopDuration: 49.466167,
+    loopCrossfade: 0.012,
   },
   tr: {
     id: "loops/percussive/Industry-01.wav",
     label: "Industry-01",
     file: "Industry-01.wav",
-    url: "/samples/loops/percussive/Industry-01.wav",
+    url: "/sample-runtime/samples/loops/percussive/Industry-01.webm",
+    fallbackUrl: "/sample-runtime/samples/loops/percussive/Industry-01.m4a",
+    loopDuration: 13.714292,
+    loopCrossfade: 0.012,
   },
-  bl: { id: "river", label: "River", file: "River-rx.wav", url: "/beds/River-rx.wav" },
+  bl: {
+    id: "river",
+    label: "River",
+    file: "River-rx.wav",
+    url: "/sample-runtime/beds/River-rx.webm",
+    fallbackUrl: "/sample-runtime/beds/River-rx.m4a",
+    loopDuration: 48,
+    loopCrossfade: 0.012,
+  },
   br: {
     id: "pads/ambient/Atmos Hi Ho.wav",
     label: "Atmos Hi Ho",
     file: "Atmos Hi Ho.wav",
-    url: "/samples/pads/ambient/Atmos%20Hi%20Ho.wav",
+    url: "/sample-runtime/samples/pads/ambient/Atmos%20Hi%20Ho.webm",
+    fallbackUrl: "/sample-runtime/samples/pads/ambient/Atmos%20Hi%20Ho.m4a",
+    loopDuration: 15.829188,
+    loopCrossfade: 0.012,
   },
 };
 
+function copyFinite(stem, key, value, min) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < min) return;
+  stem[key] = n;
+}
+
 function cloneStem(meta) {
-  return {
-    id: String(meta.id || ""),
-    label: String(meta.label || ""),
-    file: String(meta.file || ""),
-    url: String(meta.url || ""),
+  const resolved = resolveRuntimeBed(meta?.url) || resolveRuntimeBed(meta?.fallbackUrl);
+  const stem = {
+    id: String(meta?.id || ""),
+    label: String(meta?.label || ""),
+    file: String(meta?.file || ""),
+    url: String(resolved?.url || meta?.url || ""),
   };
+  const fallbackUrl = resolved?.fallbackUrl || meta?.fallbackUrl;
+  if (fallbackUrl) stem.fallbackUrl = String(fallbackUrl);
+  copyFinite(stem, "loopDuration", resolved?.loopDuration ?? meta?.loopDuration, 0.0001);
+  const fade = resolved?.loopCrossfade ?? meta?.loopCrossfade;
+  if (fade != null && fade !== "") copyFinite(stem, "loopCrossfade", fade, 0);
+  return stem;
 }
 
 function loadSavedStemCorners() {
@@ -240,8 +272,18 @@ function applyStemCorner(corner, next) {
   if (!url) return null;
   const file = String(next.file || next.name || fallback.file);
   const id = String(next.id || label.toLowerCase().replace(/\s+/g, "-"));
-  STEM_CORNERS[corner] = { id, label, file, url };
-  return STEM_CORNERS[corner];
+  const stem = cloneStem({
+    id,
+    label,
+    file,
+    url,
+    fallbackUrl: next.fallbackUrl,
+    loopDuration: next.loopDuration,
+    loopCrossfade: next.loopCrossfade,
+  });
+  if (!stem.url) return null;
+  STEM_CORNERS[corner] = stem;
+  return stem;
 }
 
 /** Canonical bed → corner map (Vault `nodes` x/y places: TL TR BL BR). */

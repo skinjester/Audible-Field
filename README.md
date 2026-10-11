@@ -30,7 +30,7 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080). The start command builds `w
 
 Diagnostics is a control panel for testing gamepad input, choosing samples, and assigning effects. Its four-quadrant pad changes the level of each sample. Triggers, shoulder buttons, face buttons, and sticks control filters, delay, reverb, panning, and the selected effect.
 
-Click a quadrant name to choose another sample. Most source samples are stored under `samples/`; the bundled nature beds are under `web-visualizer/public/beds/`. The build copies the library and creates the catalog used by the menu.
+Click a quadrant name to choose another sample. The menu lists the same library as before: the pieces whose masters live in `sample-master/`, including the nature beds. Playback uses the mono WebM/Opus copy of each listed piece. The build creates the catalog used by the menu and does not publish the masters.
 
 ### Visualize
 
@@ -65,7 +65,7 @@ Vendored WAMs are stored under `web-visualizer/public/wams/` and loaded locally.
 The source application is under `web-visualizer/public/`. The build script:
 
 1. Recreates `web-visualizer/dist/`.
-2. Copies the application and sample library.
+2. Copies the application and the encoded playback files.
 3. Creates the sample and WAM catalogs.
 4. Copies the required Three.js module.
 
@@ -75,7 +75,7 @@ Build without starting the server:
 npm run build --prefix web-visualizer
 ```
 
-`web-visualizer/dist` is generated output. Do not edit it directly. Edit files under `web-visualizer/public/`, add samples under `samples/`, and rebuild.
+`web-visualizer/dist` is generated output. Do not edit it directly. Edit files under `web-visualizer/public/`, add masters under `sample-master/`, and rebuild. New or replaced masters need `npm run encode-beds --prefix web-visualizer` before that rebuild. The command writes the mono playback files under `sample-runtime/`. The app requests those files at `/sample-runtime/`, and the local server reads that folder directly. A local build does not copy them into `dist`. Vercel only publishes `web-visualizer/dist`, so that build includes `sample-runtime/` in the published site and nowhere else in the project. `sample-master/` stays on this machine: it is gitignored, and the build does not copy it into `dist`. A build without that folder, including Vercel, rebuilds the menu from the committed playback map. The Vercel build only copies files already committed, and it serves those `.webm` files as `audio/webm`.
 
 ## Repository layout
 
@@ -83,7 +83,8 @@ npm run build --prefix web-visualizer
 | --- | --- |
 | `web-visualizer/public` | Application source, audio engine, views, and vendored WAMs |
 | `web-visualizer/dist` | Generated site used for local serving and deployment |
-| `samples` | Source sample library copied into the build |
+| `sample-master` | Local sample masters, including Beach, Forest, and River. Not committed and not deployed. The diagnostics menu lists these names |
+| `sample-runtime` | The only copy of the mono WebM and AAC playback files. The app requests this folder directly |
 | `EchoScape Max patch files` | Original Max patch and plugin presets |
 | `documentation` | Project guides and technical references |
 

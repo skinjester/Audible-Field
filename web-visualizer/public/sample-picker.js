@@ -1,9 +1,10 @@
 /**
  * Shared sample library picker (shell-level <dialog>).
- * Browse samples/ by folder; callers bind selection via onSelect.
+ * Browse the sample library by folder; callers bind selection via onSelect.
  */
 
 import { attachUiScroll } from "./ui-scroll.js?v=1";
+import { resolveRuntimeBed } from "./runtime-beds.js?v=2";
 
 const AUDIO_HINT = "wav · aif · mp3 · ogg";
 
@@ -199,7 +200,7 @@ function selectFile(name) {
   };
   const cb = activeOnSelect;
   dialogEl?.close();
-  if (typeof cb === "function") cb(file);
+  if (typeof cb === "function") cb(withRuntimePlayback(file));
 }
 
 /**
@@ -242,6 +243,18 @@ function folderHeaderLabel(folder) {
     .filter(Boolean)
     .join(" / ")
     .toUpperCase();
+}
+
+function withRuntimePlayback(file) {
+  const resolved = resolveRuntimeBed(file.url);
+  if (!resolved) return file;
+  return {
+    ...file,
+    url: resolved.url,
+    fallbackUrl: resolved.fallbackUrl,
+    loopDuration: resolved.loopDuration,
+    loopCrossfade: resolved.loopCrossfade,
+  };
 }
 
 function sampleUrl(folder, name, urlBase) {
@@ -405,7 +418,7 @@ function renderDropdownGroups(groups) {
         };
         const cb = dropdownOnSelect;
         closeStemDropdown();
-        if (typeof cb === "function") cb(file);
+        if (typeof cb === "function") cb(withRuntimePlayback(file));
       });
       dropdownListEl.appendChild(btn);
     }

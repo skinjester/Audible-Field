@@ -11,7 +11,7 @@
  * `routeTouchToMixer` false so the pad pans the field instead of the mix pad.
  */
 
-import { setTarget } from "./mixer-core.js?v=67";
+import { setTarget } from "./mixer-core.js?v=69";
 
 const SONY_VENDOR = 0x054c;
 const PRODUCT_DUALSENSE = 0x0ce6;

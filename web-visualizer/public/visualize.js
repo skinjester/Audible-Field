@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { controller, mix, state } from "./mixer-core.js?v=67";
+import { controller, mix, state } from "./mixer-core.js?v=69";
 
 const QUADS = [
   { key: "tl", name: "Sphere", terrain: "Sphere", color: 0x5a5058 },

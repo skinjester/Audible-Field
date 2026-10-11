@@ -225,7 +225,7 @@ export async function openFxDropdown(opts = {}) {
   if (!FX_SLOTS.includes(slot)) return;
 
   ensureDropdownDom();
-  const { closeStemDropdown } = await import("./sample-picker.js?v=19");
+  const { closeStemDropdown } = await import("./sample-picker.js?v=20");
   closeStemDropdown();
 
   if (

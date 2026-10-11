@@ -22,7 +22,7 @@ import {
   state as mixerState,
   controller as mixerController,
   setActiveFx as setMixerActiveFx,
-} from "./mixer-core.js?v=67";
+} from "./mixer-core.js?v=69";
 import {
   loadWam,
   listWamParams,
@@ -917,6 +917,7 @@ export class EchoScapeAudioEngine {
   _onContextRunning() {
     this._restartSuspendedBeds();
     this._pokePausedBeds();
+    this._retrySuspendedDecodes();
   }
 
   /** True while the browser reports the audio thread rendering. */
@@ -1119,10 +1120,11 @@ export class EchoScapeAudioEngine {
     for (const corner of CORNERS) {
       if (this.stems[corner]?.bedVoice || this.stems[corner]?.notes?.length) continue;
       const wired = this.stems[corner]?.el;
-      if (wired) {
+      if (wired?.getAttribute("src")) {
         this._playEl(wired, true);
         continue;
       }
+      if (this.stems[corner]?.bedBuffer) continue;
       let pending = this._pendingEls[corner];
       if (!pending) pending = this._openPendingBed(corner);
       if (pending) this._playEl(pending, false);
@@ -1177,10 +1179,11 @@ export class EchoScapeAudioEngine {
     for (const corner of CORNERS) {
       if (this.stems[corner]?.bedVoice || this.stems[corner]?.notes?.length) continue;
       const wired = this.stems[corner]?.el;
-      if (wired) {
+      if (wired?.getAttribute("src")) {
         if (wired.paused) this._playEl(wired, true);
         continue;
       }
+      if (this.stems[corner]?.bedBuffer) continue;
       const pending = this._pendingEls[corner];
       if (pending?.paused) this._playEl(pending, false);
     }
@@ -1450,7 +1453,7 @@ export class EchoScapeAudioEngine {
   }
 
   _playEl(el, audible) {
-    if (!el) return;
+    if (!el?.getAttribute("src")) return;
     el.muted = !this._audible;
     // The ringer switch mutes element output. Phones hear the buffer voice only.
     if (audible && this._audible && !isCoarseTouch()) el.volume = 1;
@@ -1504,7 +1507,7 @@ export class EchoScapeAudioEngine {
   async _playAll() {
     const plays = CORNERS.map(async (corner) => {
       const stem = this.stems[corner];
-      if (!stem?.el || stem.bedVoice || stem.notes?.length) return;
+      if (!stem?.el?.getAttribute("src") || stem.bedVoice || stem.notes?.length) return;
       stem.el.muted = !this._audible;
       if (this._audible && !isCoarseTouch()) stem.el.volume = 1;
       if (stem.el.paused) {
@@ -2440,7 +2443,7 @@ export class EchoScapeAudioEngine {
 
     const source = this.ctx.createMediaElementSource(el);
     const gain = this.ctx.createGain();
-    // Beds are wide stereo files. Fold to mono so the panner can place them.
+    // Delivered beds are mono. The fold still places a file that arrives stereo.
     const mono = this.ctx.createGain();
     mono.channelCount = 1;
     mono.channelCountMode = "explicit";
@@ -3204,6 +3207,8 @@ export class EchoScapeAudioEngine {
 
   /**
    * Decode a copy of the bed so a landing can play at its own pitch.
+   * WebM stays the file the gesture already started. AAC is fetched only after
+   * a running context rejects that WebM.
    * @param {string} corner
    * @param {string} url
    */
@@ -3211,32 +3216,172 @@ export class EchoScapeAudioEngine {
     if (!this.ctx || !url) return;
     if (!this._strikeBuffers) this._strikeBuffers = {};
     if (!this._strikeToken) this._strikeToken = {};
+    if (!this._strikeRetry) this._strikeRetry = {};
     const next = (this._strikeToken[corner] || 0) + 1;
     this._strikeToken[corner] = next;
+    this._strikeRetry[corner] = null;
     this._strikeBuffers[corner] = null;
     const ctx = this.ctx;
-    // Beds decode one after another, in corner order, so the first can sound
-    // before the network is split four ways. The fetch needs no user gesture,
-    // so on a phone the first bed is usually decoded before the first tap.
     const chain = this._bedFetchChain || Promise.resolve();
     this._bedFetchChain = chain
-      .then(() => {
-        if (this._strikeToken[corner] !== next || this.ctx !== ctx) return null;
-        return fetch(url).then((res) => {
-          if (!res.ok) throw new Error(String(res.status));
-          return res.arrayBuffer();
-        });
-      })
-      .then((raw) => (raw ? ctx.decodeAudioData(raw) : null))
-      .then((buffer) => {
-        if (!buffer || this._strikeToken[corner] !== next || this.ctx !== ctx) return;
-        this._strikeBuffers[corner] = buffer;
-        this._adoptBufferBed(corner, buffer);
-        this._trace("bed-decoded", { corner, seconds: Number(buffer.duration.toFixed(1)) });
-      })
+      .then(() => this._decodeBed(corner, url, next, ctx, false))
       .catch((err) => {
         console.warn("[EchoScape audio] strike buffer", corner, err?.message || err);
       });
+  }
+
+  /**
+   * One suspended-context retry per decode token. A later state change does not fetch again.
+   */
+  _retrySuspendedDecodes() {
+    if (!this._strikeRetry || !this.ctx || this.ctx.state !== "running") return;
+    for (const corner of CORNERS) {
+      const pending = this._strikeRetry[corner];
+      if (!pending) continue;
+      this._strikeRetry[corner] = null;
+      if (this._strikeToken[corner] !== pending.token) continue;
+      const ctx = this.ctx;
+      const chain = this._bedFetchChain || Promise.resolve();
+      this._bedFetchChain = chain
+        .then(() => this._decodeBed(corner, pending.url, pending.token, ctx, true))
+        .catch((err) => {
+          console.warn("[EchoScape audio] strike buffer", corner, err?.message || err);
+        });
+    }
+  }
+
+  /**
+   * @param {string} corner
+   * @param {string} url
+   * @param {number} token
+   * @param {AudioContext} ctx
+   * @param {boolean} fromRetry
+   */
+  async _decodeBed(corner, url, token, ctx, fromRetry) {
+    if (this._strikeToken[corner] !== token || this.ctx !== ctx) return;
+    let raw = null;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(String(res.status));
+      raw = await res.arrayBuffer();
+    } catch (err) {
+      await this._failBedDecode(corner, url, token, ctx, fromRetry, err, false);
+      return;
+    }
+    if (this._strikeToken[corner] !== token || this.ctx !== ctx) return;
+    try {
+      const decoded = await ctx.decodeAudioData(raw.slice(0));
+      this._commitBedBuffer(corner, decoded, token, ctx);
+    } catch (err) {
+      await this._failBedDecode(corner, url, token, ctx, fromRetry, err, true);
+    }
+  }
+
+  /**
+   * @param {string} corner
+   * @param {string} url
+   * @param {number} token
+   * @param {AudioContext} ctx
+   * @param {boolean} fromRetry
+   * @param {Error | unknown} err
+   * @param {boolean} decodeRejected
+   */
+  async _failBedDecode(corner, url, token, ctx, fromRetry, err, decodeRejected) {
+    if (this._strikeToken[corner] !== token || this.ctx !== ctx) return;
+    const running = ctx.state === "running";
+    const fallback = this.stems[corner]?.meta?.fallbackUrl;
+    if (decodeRejected && running && fallback && fallback !== url) {
+      await this._decodeBed(corner, fallback, token, ctx, true);
+      return;
+    }
+    if (!fromRetry) {
+      if (running) {
+        await this._decodeBed(corner, url, token, ctx, true);
+        return;
+      }
+      if (!this._strikeRetry) this._strikeRetry = {};
+      this._strikeRetry[corner] = { url, token };
+      return;
+    }
+    console.warn("[EchoScape audio] strike buffer", corner, err?.message || err);
+  }
+
+  /**
+   * @param {string} corner
+   * @param {AudioBuffer} decoded
+   * @param {number} token
+   * @param {AudioContext} ctx
+   */
+  _commitBedBuffer(corner, decoded, token, ctx) {
+    if (!decoded || this._strikeToken[corner] !== token || this.ctx !== ctx) return;
+    const stem = this.stems[corner];
+    const prepared = this._prepareLoopBuffer(
+      ctx,
+      decoded,
+      stem?.meta?.loopDuration,
+      stem?.meta?.loopCrossfade
+    );
+    this._strikeBuffers[corner] = prepared;
+    this._adoptBufferBed(corner, prepared);
+    this._trace("bed-decoded", { corner, seconds: Number(prepared.duration.toFixed(1)) });
+  }
+
+  /**
+   * Drop a short encoder tail, then crossfade the join so every voice loops the same PCM.
+   * @param {AudioContext} ctx
+   * @param {AudioBuffer} buffer
+   * @param {number} [loopDuration]
+   * @param {number} [loopCrossfade]
+   */
+  _prepareLoopBuffer(ctx, buffer, loopDuration, loopCrossfade) {
+    const musical = Number(loopDuration);
+    if (!buffer || !Number.isFinite(musical) || musical <= 0) return buffer;
+    let working = buffer;
+    const excess = buffer.duration - musical;
+    if (excess > 0 && excess <= 0.08) {
+      const frames = Math.max(1, Math.min(buffer.length, Math.round(musical * buffer.sampleRate)));
+      if (frames < buffer.length) {
+        const trimmed = ctx.createBuffer(buffer.numberOfChannels, frames, buffer.sampleRate);
+        for (let ch = 0; ch < buffer.numberOfChannels; ch += 1) {
+          trimmed.getChannelData(ch).set(buffer.getChannelData(ch).subarray(0, frames));
+        }
+        working = trimmed;
+      }
+    } else if (excess < 0 || excess > 0.08) {
+      console.info("[EchoScape audio] loop length", {
+        duration: Number(buffer.duration.toFixed(3)),
+        loopDuration: Number(musical.toFixed(3)),
+      });
+    }
+    const fadeSec = Number.isFinite(Number(loopCrossfade)) ? Number(loopCrossfade) : 0.012;
+    if (!(fadeSec > 0) || working.duration <= fadeSec * 2) return working;
+    return this._crossfadeLoop(ctx, working, fadeSec);
+  }
+
+  /**
+   * Equal-power mix of the start and end so the loop point is not a click.
+   * @param {AudioContext} ctx
+   * @param {AudioBuffer} buffer
+   * @param {number} fadeSec
+   */
+  _crossfadeLoop(ctx, buffer, fadeSec) {
+    const fade = Math.floor(fadeSec * buffer.sampleRate);
+    if (fade < 2 || buffer.length < fade * 2) return buffer;
+    const out = ctx.createBuffer(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
+    for (let ch = 0; ch < buffer.numberOfChannels; ch += 1) {
+      const src = buffer.getChannelData(ch);
+      const dst = out.getChannelData(ch);
+      dst.set(src);
+      for (let i = 0; i < fade; i += 1) {
+        const inGain = Math.sin((i / fade) * Math.PI * 0.5);
+        const outGain = Math.cos((i / fade) * Math.PI * 0.5);
+        const head = src[i];
+        const tail = src[src.length - fade + i];
+        dst[i] = head * inGain + tail * outGain;
+        dst[dst.length - fade + i] = tail * inGain + head * outGain;
+      }
+    }
+    return out;
   }
 
   /**
@@ -3273,6 +3418,8 @@ export class EchoScapeAudioEngine {
     const voice = this.ctx.createBufferSource();
     voice.buffer = buffer;
     voice.loop = true;
+    voice.loopStart = 0;
+    voice.loopEnd = dur;
     voice.playbackRate.value = rate;
     const trim = this.ctx.createGain();
     trim.gain.value = 1;
@@ -3285,6 +3432,7 @@ export class EchoScapeAudioEngine {
     stem.bedBuffer = buffer;
     stem.bedStartedAt = when;
     stem.bedOffset = pos;
+    stem.bedPlayhead = pos;
     // A start() while the context is suspended is discarded on iOS.
     // `_onContextRunning` starts it once more when the browser reports running.
     stem.bedAwaitingRun = this.ctx.state !== "running";
@@ -3295,6 +3443,37 @@ export class EchoScapeAudioEngine {
       if (stem.notes?.length) return;
       this._adoptBufferBed(corner, buffer, 0);
     };
+    this._releaseBedInput(stem);
+  }
+
+  /**
+   * The buffer voice is the bed. Disconnect the media element so it cannot click the mix,
+   * and drop its decoder. The element object stays so pitch can still read playbackRate.
+   * @param {{ source?: AudioNode, el?: HTMLAudioElement, bedInputReleased?: boolean }} stem
+   */
+  _releaseBedInput(stem) {
+    if (!stem || stem.bedInputReleased) return;
+    stem.bedInputReleased = true;
+    const el = stem.el;
+    if (el) {
+      try {
+        el.pause();
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      stem.source?.disconnect();
+    } catch {
+      /* already disconnected */
+    }
+    if (!el) return;
+    try {
+      el.removeAttribute("src");
+      el.load();
+    } catch {
+      /* ignore */
+    }
   }
 
   /**
@@ -3306,6 +3485,7 @@ export class EchoScapeAudioEngine {
   _stopBufferBed(stem, fadeSec) {
     const voice = stem?.bedVoice;
     if (!voice) return;
+    stem.bedPlayhead = this._voiceBedPosition(stem);
     const trim = stem.bedTrim;
     stem.bedVoice = null;
     stem.bedTrim = null;
@@ -3391,13 +3571,31 @@ export class EchoScapeAudioEngine {
     if (note) return this._notePosition(note);
     const buffer = stem?.bedBuffer;
     const voice = stem?.bedVoice;
-    if (buffer && voice && buffer.duration > 0 && this.ctx) {
-      const rate = voice.playbackRate.value || 1;
-      const elapsed = (this.ctx.currentTime - (stem.bedStartedAt || 0)) * rate;
-      const pos = (stem.bedOffset || 0) + elapsed;
-      return ((pos % buffer.duration) + buffer.duration) % buffer.duration;
+    if (buffer && voice && buffer.duration > 0 && this.ctx) return this._voiceBedPosition(stem);
+    const el = stem?.el;
+    if (el?.getAttribute("src")) {
+      const fromEl = Number(el.currentTime);
+      if (Number.isFinite(fromEl)) return fromEl;
     }
-    return Number(stem?.el?.currentTime) || 0;
+    const stored = Number(stem?.bedPlayhead);
+    return Number.isFinite(stored) ? stored : 0;
+  }
+
+  /**
+   * Seconds into the current buffer voice.
+   * @param {{ bedVoice?: AudioBufferSourceNode | null, bedBuffer?: AudioBuffer | null, bedStartedAt?: number, bedOffset?: number, bedPlayhead?: number }} stem
+   */
+  _voiceBedPosition(stem) {
+    const buffer = stem?.bedBuffer;
+    const voice = stem?.bedVoice;
+    if (!buffer || !voice || !(buffer.duration > 0) || !this.ctx) {
+      const stored = Number(stem?.bedPlayhead);
+      return Number.isFinite(stored) ? stored : 0;
+    }
+    const rate = voice.playbackRate.value || 1;
+    const elapsed = (this.ctx.currentTime - (stem.bedStartedAt || 0)) * rate;
+    const pos = (stem.bedOffset || 0) + elapsed;
+    return ((pos % buffer.duration) + buffer.duration) % buffer.duration;
   }
 
   /** Offset inside a looping buffer. Never equal to the duration, which start() rejects. */
@@ -3497,7 +3695,7 @@ export class EchoScapeAudioEngine {
       return;
     }
     const el = stem.el;
-    if (el?.paused) this._playEl(el, true);
+    if (el?.getAttribute("src") && el.paused) this._playEl(el, true);
   }
 
   /**

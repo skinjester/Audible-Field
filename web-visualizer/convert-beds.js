@@ -6,7 +6,7 @@ const fs = require("fs");
 const path = require("path");
 
 const SRC_DIR = path.join(__dirname, "..", "EchoScape Max patch files");
-const OUT_DIR = path.join(__dirname, "public", "beds");
+const OUT_DIR = path.join(__dirname, "..", "sample-master", "beds");
 
 const FILES = [
   "Beach-rx.wav",

@@ -13,10 +13,10 @@ import {
   setTarget,
   state,
   STEM_CORNERS,
-} from "./mixer-core.js?v=67";
-import { audioEngine } from "./audio-engine.js?v=123";
+} from "./mixer-core.js?v=69";
+import { audioEngine } from "./audio-engine.js?v=124";
 import { DualsenseHid } from "./dualsense-hid.js?v=8";
-import { openStemDropdown } from "./sample-picker.js?v=19";
+import { openStemDropdown } from "./sample-picker.js?v=20";
 import { openFxDropdown } from "./fx-picker.js?v=6";
 import { formatParamReadout, neutralParamValue, paramSentValue, stickAxisOn, withStickAxis } from "./wam-host.js?v=19";
 
@@ -837,6 +837,9 @@ async function assignCornerSample(corner, file) {
     file: file.name,
     url: file.url,
     id: file.path,
+    fallbackUrl: file.fallbackUrl,
+    loopDuration: file.loopDuration,
+    loopCrossfade: file.loopCrossfade,
   });
   if (!meta) return;
   updateCornerLabels();

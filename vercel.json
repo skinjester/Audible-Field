@@ -3,5 +3,11 @@
   "framework": null,
   "installCommand": "npm install --prefix web-visualizer",
   "buildCommand": "npm run build --prefix web-visualizer",
-  "outputDirectory": "web-visualizer/dist"
+  "outputDirectory": "web-visualizer/dist",
+  "headers": [
+    {
+      "source": "/(.*)\\.webm",
+      "headers": [{ "key": "Content-Type", "value": "audio/webm" }]
+    }
+  ]
 }

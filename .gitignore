@@ -6,3 +6,6 @@
 
 /videos/
 
+# Local sample masters. Playback uses the encoded files in sample-runtime/.
+/sample-master/
+

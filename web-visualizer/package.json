@@ -5,6 +5,7 @@
   "description": "4-quadrant mixer visualizer for EchoScape",
   "scripts": {
     "build": "node scripts/build-static.js",
+    "encode-beds": "node scripts/encode-runtime-beds.js",
     "start": "node scripts/build-static.js && node server.js"
   },
   "dependencies": {

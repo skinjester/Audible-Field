@@ -7,13 +7,15 @@ const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
 const PUBLIC_DIR = path.join(ROOT, "public");
-const SAMPLES_DIR = path.join(ROOT, "..", "samples");
-const BEDS_DIR = path.join(PUBLIC_DIR, "beds");
+const SAMPLES_DIR = path.join(ROOT, "..", "sample-master");
+const NATURE_DIR = path.join(SAMPLES_DIR, "beds");
+const NATURE_FILES = ["Beach-rx.wav", "Forest-rx.wav", "River-rx.wav"];
+const RUNTIME_DIR = path.join(ROOT, "..", "sample-runtime");
 const WAMS_DIR = path.join(PUBLIC_DIR, "wams");
 const THREE_FILE = path.join(ROOT, "node_modules", "three", "build", "three.module.js");
 const DIST_DIR = path.join(ROOT, "dist");
 
-const AUDIO_EXTS = new Set([".wav", ".aif", ".aiff", ".mp3", ".ogg", ".flac", ".m4a"]);
+const AUDIO_EXTS = new Set([".wav", ".aif", ".aiff", ".mp3", ".ogg", ".flac", ".m4a", ".webm", ".aac"]);
 const SKIP_DIRS = new Set(["docs", "__test__", "node_modules"]);
 
 function underRoot(filePath, root) {
@@ -25,12 +27,21 @@ function underRoot(filePath, root) {
 function shouldSkipPublic(src) {
   const rel = path.relative(PUBLIC_DIR, src);
   if (!rel || rel.startsWith("..")) return false;
-  return rel.split(path.sep).some((part) => SKIP_DIRS.has(part));
+  if (rel.split(path.sep).some((part) => SKIP_DIRS.has(part))) return true;
+  try {
+    if (fs.statSync(src).isFile() && AUDIO_EXTS.has(path.extname(src).toLowerCase())) return true;
+  } catch {
+    return false;
+  }
+  return false;
 }
 
-function listAllSamplesGrouped() {
-  const byFolder = new Map();
+function addSample(byFolder, folder, name) {
+  if (!byFolder.has(folder)) byFolder.set(folder, []);
+  byFolder.get(folder).push(name);
+}
 
+function walkSampleMasters(byFolder) {
   function walk(absDir, relDir) {
     if (!fs.existsSync(absDir)) return;
     let entries;
@@ -44,6 +55,7 @@ function listAllSamplesGrouped() {
       const abs = path.join(absDir, entry.name);
       const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
+        if (!relDir && entry.name === "beds") continue;
         if (!underRoot(abs, SAMPLES_DIR)) continue;
         walk(abs, rel);
         continue;
@@ -51,13 +63,39 @@ function listAllSamplesGrouped() {
       if (!entry.isFile()) continue;
       const ext = path.extname(entry.name).toLowerCase();
       if (!AUDIO_EXTS.has(ext)) continue;
-      const folder = relDir || "";
-      if (!byFolder.has(folder)) byFolder.set(folder, []);
-      byFolder.get(folder).push(entry.name);
+      addSample(byFolder, relDir || "", entry.name);
     }
   }
 
   walk(SAMPLES_DIR, "");
+}
+
+/** Menu names from the committed playback map when the local masters are absent. */
+function listSamplesFromRuntimeMap(byFolder) {
+  const mapFile = path.join(PUBLIC_DIR, "runtime-beds.js");
+  if (!fs.existsSync(mapFile)) return;
+  const text = fs.readFileSync(mapFile, "utf8");
+  const re = /"(\/samples\/[^"]+)"/g;
+  let match;
+  while ((match = re.exec(text))) {
+    let rel;
+    try {
+      rel = decodeURIComponent(match[1].slice("/samples/".length));
+    } catch {
+      continue;
+    }
+    if (!rel || rel.split("/").includes("..")) continue;
+    const parts = rel.split("/");
+    const name = parts.pop();
+    if (!name || !AUDIO_EXTS.has(path.extname(name).toLowerCase())) continue;
+    addSample(byFolder, parts.join("/"), name);
+  }
+}
+
+function listAllSamplesGrouped() {
+  const byFolder = new Map();
+  walkSampleMasters(byFolder);
+  if (byFolder.size === 0) listSamplesFromRuntimeMap(byFolder);
 
   const groups = [...byFolder.entries()]
     .filter(([, files]) => files.length > 0)
@@ -67,15 +105,22 @@ function listAllSamplesGrouped() {
     }))
     .sort((a, b) => a.folder.localeCompare(b.folder));
 
-  const natureFiles = ["Beach-rx.wav", "Forest-rx.wav", "River-rx.wav"].filter((name) => {
-    const filePath = path.join(BEDS_DIR, name);
+  const natureFiles = NATURE_FILES.filter((name) => {
+    const filePath = path.join(NATURE_DIR, name);
     return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
   });
-  if (natureFiles.length) {
+  const listedNature = natureFiles.length
+    ? natureFiles
+    : NATURE_FILES.filter((name) => {
+        const mapFile = path.join(PUBLIC_DIR, "runtime-beds.js");
+        if (!fs.existsSync(mapFile)) return false;
+        return fs.readFileSync(mapFile, "utf8").includes(`"/beds/${name}"`);
+      });
+  if (listedNature.length) {
     groups.unshift({
       folder: "nature",
       urlBase: "/beds",
-      files: natureFiles,
+      files: listedNature,
     });
   }
 
@@ -134,31 +179,6 @@ function listWams() {
   return { plugins };
 }
 
-function copySamples(destRoot) {
-  let count = 0;
-  function walk(absDir, relDir) {
-    if (!fs.existsSync(absDir)) return;
-    for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
-      if (entry.name.startsWith(".")) continue;
-      const abs = path.join(absDir, entry.name);
-      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        if (!underRoot(abs, SAMPLES_DIR)) continue;
-        walk(abs, rel);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      if (!AUDIO_EXTS.has(path.extname(entry.name).toLowerCase())) continue;
-      const dest = path.join(destRoot, ...rel.split("/"));
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.copyFileSync(abs, dest);
-      count += 1;
-    }
-  }
-  walk(SAMPLES_DIR, "");
-  return count;
-}
-
 function writeJson(filePath, body) {
   const text = `${JSON.stringify(body, null, 2)}\n`;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -178,12 +198,18 @@ function main() {
     filter: (src) => !shouldSkipPublic(src),
   });
 
-  const sampleCount = copySamples(path.join(DIST_DIR, "samples"));
+  if (process.env.VERCEL && fs.existsSync(RUNTIME_DIR)) {
+    fs.cpSync(RUNTIME_DIR, path.join(DIST_DIR, "sample-runtime"), { recursive: true });
+  }
+
   const threeDest = path.join(DIST_DIR, "vendor", "three", "build", "three.module.js");
   fs.mkdirSync(path.dirname(threeDest), { recursive: true });
   fs.copyFileSync(THREE_FILE, threeDest);
 
   const samples = listAllSamplesGrouped();
+  const sampleCount = samples.groups
+    .filter((group) => group.folder !== "nature")
+    .reduce((count, group) => count + group.files.length, 0);
   const wams = listWams();
   writeJson(path.join(DIST_DIR, "catalog", "samples-all.json"), samples);
   writeJson(path.join(DIST_DIR, "catalog", "wams.json"), wams);
