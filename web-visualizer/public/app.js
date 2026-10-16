@@ -1,11 +1,11 @@
 import { STEM_CORNERS, notify, tickMixer } from "./mixer-core.js?v=69";
-import { audioEngine } from "./audio-engine.js?v=124";
+import { audioEngine } from "./audio-engine.js?v=125";
 import { gamepadInput } from "./gamepad-input.js?v=22";
 import { dualsenseHid } from "./dualsense-hid.js?v=8";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=68";
-import * as fallingTab from "./falling-tab.js?v=165";
-import * as visualizeTab from "./visualize-tab.js?v=59";
+import * as diagnostics from "./diagnostics.js?v=69";
+import * as fallingTab from "./falling-tab.js?v=166";
+import * as visualizeTab from "./visualize-tab.js?v=60";
 
 const statusEl = document.querySelector(".status");
 const audioLineEls = {
@@ -167,24 +167,6 @@ function dualSenseAvailable() {
   return false;
 }
 
-const AUDIO_PREF_KEY = "audible-field.audio";
-
-function readAudioPref() {
-  try {
-    return localStorage.getItem(AUDIO_PREF_KEY) !== "0";
-  } catch {
-    return true;
-  }
-}
-
-function writeAudioPref(on) {
-  try {
-    localStorage.setItem(AUDIO_PREF_KEY, on ? "1" : "0");
-  } catch {
-    /* storage unavailable */
-  }
-}
-
 function syncAudioSwitch() {
   const button = document.querySelector("[data-audio-switch]");
   if (!(button instanceof HTMLButtonElement)) return;
@@ -197,7 +179,6 @@ function syncAudioSwitch() {
 function setGlobalAudio(on) {
   const enabled = !!on;
   audioEngine.setAudible(enabled);
-  writeAudioPref(enabled);
   syncAudioSwitch();
   refreshStatusLine();
   if (enabled) void ensureBrowserAudio();
@@ -900,7 +881,6 @@ diagnostics.initDiagnostics(deps);
 fallingTab.initFallingTab(deps);
 
 mountAudioTrace();
-if (!readAudioPref()) audioEngine.setAudible(false);
 bindAudioSwitch();
 mountUiScrolls();
 notify();
