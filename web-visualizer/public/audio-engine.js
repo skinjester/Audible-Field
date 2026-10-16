@@ -151,6 +151,24 @@ const DIFFUSE_WET = 0.8;
  */
 const AUDIBLE_EPS = 0.003;
 
+/** iOS mutes Web Audio under the ring/silent switch unless the session type is "playback". */
+function claimPlaybackSession() {
+  try {
+    const session = navigator.audioSession;
+    if (session && session.type !== "playback") session.type = "playback";
+  } catch {
+    /* unsupported session type */
+  }
+}
+
+/** Trace label for a bed file. */
+function bedCodec(url) {
+  const path = String(url || "").split("?")[0].split("#")[0].toLowerCase();
+  if (path.endsWith(".webm")) return "webm";
+  if (path.endsWith(".m4a")) return "aac";
+  return "other";
+}
+
 /**
  * Last requested value for a gain, not the lagging sampled `.value`.
  * Falls back to `.value` for voices whose envelopes are scheduled directly
@@ -748,11 +766,12 @@ export class EchoScapeAudioEngine {
       throw new Error(this.error);
     }
 
+    claimPlaybackSession();
     if (!this.ctx || this.ctx.state === "closed") this.ctx = new AC();
     this._watchContext(this.ctx);
     // Outside a user gesture, some Chromium builds never resolve resume().
     await this._safeResume(300);
-    this._trace("start", { ctx: this.ctx.state });
+    this._trace("start", { ctx: this.ctx.state, session: navigator.audioSession?.type || "none" });
 
     this._sum = this.ctx.createGain();
     this._sum.gain.value = 1;
@@ -1142,6 +1161,7 @@ export class EchoScapeAudioEngine {
    */
   beginGesture(fromUser = false, phase = "press") {
     const AC = window.AudioContext || window.webkitAudioContext;
+    claimPlaybackSession();
     if ((!this.ctx || this.ctx.state === "closed") && AC) {
       this.ctx = new AC();
       this._watchContext(this.ctx);
@@ -1482,6 +1502,14 @@ export class EchoScapeAudioEngine {
     el.playsInline = true;
     el.volume = 0;
     el.dataset.bedUrl = url;
+    el.addEventListener(
+      "error",
+      () => {
+        if (!el.getAttribute("src")) return;
+        this._trace("bed-el-error", { codec: bedCodec(url), code: el.error?.code || 0 });
+      },
+      { once: true }
+    );
     el.src = url;
     if (document.body && !el.isConnected) {
       el.setAttribute("playsinline", "");
@@ -3260,21 +3288,27 @@ export class EchoScapeAudioEngine {
   async _decodeBed(corner, url, token, ctx, fromRetry) {
     if (this._strikeToken[corner] !== token || this.ctx !== ctx) return;
     let raw = null;
+    let status = "net";
     try {
       const res = await fetch(url);
-      if (!res.ok) throw new Error(String(res.status));
+      status = String(res.status);
+      if (!res.ok) throw new Error(status);
       raw = await res.arrayBuffer();
     } catch (err) {
+      this._trace("bed-fetch-fail", { corner, codec: bedCodec(url), status });
       await this._failBedDecode(corner, url, token, ctx, fromRetry, err, false);
       return;
     }
     if (this._strikeToken[corner] !== token || this.ctx !== ctx) return;
+    let decoded = null;
     try {
-      const decoded = await ctx.decodeAudioData(raw.slice(0));
-      this._commitBedBuffer(corner, decoded, token, ctx);
+      decoded = await ctx.decodeAudioData(raw.slice(0));
     } catch (err) {
+      this._trace("bed-decode-fail", { corner, codec: bedCodec(url), err: err?.name || String(err) });
       await this._failBedDecode(corner, url, token, ctx, fromRetry, err, true);
+      return;
     }
+    this._commitBedBuffer(corner, decoded, token, ctx, url);
   }
 
   /**
@@ -3290,7 +3324,9 @@ export class EchoScapeAudioEngine {
     if (this._strikeToken[corner] !== token || this.ctx !== ctx) return;
     const running = ctx.state === "running";
     const fallback = this.stems[corner]?.meta?.fallbackUrl;
-    if (decodeRejected && running && fallback && fallback !== url) {
+    // A suspended context can reject a good decode, so that case retries the same file once running.
+    if (fallback && fallback !== url && (running || !decodeRejected)) {
+      this._trace("bed-fallback", { corner, codec: bedCodec(fallback) });
       await this._decodeBed(corner, fallback, token, ctx, true);
       return;
     }
@@ -3311,8 +3347,9 @@ export class EchoScapeAudioEngine {
    * @param {AudioBuffer} decoded
    * @param {number} token
    * @param {AudioContext} ctx
+   * @param {string} url
    */
-  _commitBedBuffer(corner, decoded, token, ctx) {
+  _commitBedBuffer(corner, decoded, token, ctx, url) {
     if (!decoded || this._strikeToken[corner] !== token || this.ctx !== ctx) return;
     const stem = this.stems[corner];
     const prepared = this._prepareLoopBuffer(
@@ -3323,7 +3360,7 @@ export class EchoScapeAudioEngine {
     );
     this._strikeBuffers[corner] = prepared;
     this._adoptBufferBed(corner, prepared);
-    this._trace("bed-decoded", { corner, seconds: Number(prepared.duration.toFixed(1)) });
+    this._trace("bed-decoded", { corner, codec: bedCodec(url), seconds: Number(prepared.duration.toFixed(1)) });
   }
 
   /**

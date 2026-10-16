@@ -82,7 +82,7 @@ The beds the menu can assign are delivered as mono. The graph still folds each o
 
 ### From media element to looping buffer
 
-Each bed begins as an HTML media element. This lets a trusted tap call `play()` before the file has finished decoding. The file that tap starts is WebM/Opus. `decodeAudioData` loads that same URL. AAC is fetched for a corner only when that decode rejects while the audio context is already running. When the decoded `AudioBuffer` is ready, the engine switches to a looping `AudioBufferSourceNode`, disconnects the media element from the mix, and clears its `src`.
+Each bed begins as an HTML media element. This lets a trusted tap call `play()` before the file has finished decoding. The file that tap starts is WebM/Opus. `decodeAudioData` loads that same URL. AAC is fetched for a corner when the WebM download fails, or when its decode rejects while the audio context is already running. A decode that rejects while the context is suspended retries the same WebM once the context runs. The trace logs `bed-fetch-fail` (with the HTTP status, or `net`), `bed-decode-fail`, `bed-fallback`, and `bed-decoded` with the codec that played. When the decoded `AudioBuffer` is ready, the engine switches to a looping `AudioBufferSourceNode`, disconnects the media element from the mix, and clears its `src`.
 
 The decoded buffer is trimmed when it is only slightly longer than the original WAV, which drops encoder padding at the end. A few milliseconds at the join are crossfaded. Pile notes, grains, and landings loop that same buffer, so the padding never remains in a side voice. A buffer with no stored musical length is left unchanged.
 
@@ -177,6 +177,8 @@ The helper `writeParam` also avoids writing the same value every frame. Repeated
 ## iOS Safari
 
 Safari creates every `AudioContext` suspended and ignores `resume()` and `play()` outside a trusted gesture. So the page always starts silent, and the first press, touch, or key must do the unlock. That gesture does exactly what the browser asks for, synchronously and without waiting on anything: `play()` on each bed element and `resume()` on the context. The element URL is the WebM file. WebM/Opus is the playback target on iOS/iPadOS 17.4+ and current macOS Safari. There is no second, engine-side unlock. `ctx.state` is the only truth about whether audio is running.
+
+iOS mutes Web Audio when the ring/silent switch is set to silent. Before the first `AudioContext` is created, the engine sets `navigator.audioSession.type = "playback"` where the Audio Session API exists, so the app plays like media even on a silenced phone. The `start` trace line reports the session type.
 
 The engine listens for the context's `statechange`. When the browser reports `running`, it restarts any decoded bed that was started while the clock was frozen and calls `play()` on any element that is still paused. No timer, proof buffer, or retry counter stands between the tap and the sound. An earlier design gated resume, beds, and the master gain on a proof buffer finishing; when that proof did not finish, the first tap turned the context on and only the second tap made sound.
 
