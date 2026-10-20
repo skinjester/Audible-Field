@@ -7,7 +7,7 @@ Two terms are important in this guide:
 - A **bed** is the looping sample played for one quadrant.
 - A **stem** is that bed plus its gain, pan, filters, and effect sends.
 
-Diagnostics and Visualize mix the four stems from a pointer or stick position. Falling Blocks measures the field and writes its own levels, pitch, pan, and extra voices into the same graph. See [Falling Blocks](falling-blocks.md) for the world-to-sound mapping.
+Diagnostics mixes the four stems from a pointer or stick position. Falling Blocks measures the field and writes its own levels, pitch, pan, and extra voices into the same graph. See [Falling Blocks](falling-blocks.md) for the world-to-sound mapping.
 
 ## Main files
 
@@ -25,7 +25,7 @@ Diagnostics and Visualize mix the four stems from a pointer or stick position. F
 
 The corner IDs are `tl`, `tr`, `bl`, and `br`: top-left, top-right, bottom-left, and bottom-right.
 
-Diagnostics and Visualize use `equalPowerMix` from `mixer-core.js`. It starts with four corner weights, makes the nearest corner more distinct, and then balances their power. This keeps the center from sounding much louder than the corners.
+Diagnostics uses `equalPowerMix` from `mixer-core.js`. It starts with four corner weights, makes the nearest corner more distinct, and then balances their power. This keeps the center from sounding much louder than the corners.
 
 Falling Blocks does not use the pointer position for stem levels. The field sets each stem directly. It closes the master output when there are no atoms, audible measurements, or extra voices left.
 
@@ -78,7 +78,7 @@ Each stem starts from the same sample but has independent processing.
 | Diffuse tail | Pan → Grey Hole send → Grey Hole return → stem sum |
 | Native hall | Pan → shared hall → stem sum. These sends are currently held at zero |
 
-The beds the menu can assign are delivered as mono. The graph still folds each one to a single channel before its stem panner, so Falling Blocks can place a pile in the stereo field. Diagnostics and Visualize leave this stem pan centered.
+The beds the menu can assign are delivered as mono. The graph still folds each one to a single channel before its stem panner, so Falling Blocks can place a pile in the stereo field. Diagnostics leaves this stem pan centered.
 
 ### From media element to looping buffer
 
@@ -147,7 +147,7 @@ Falling Blocks updates this stage from its zoom. Other views leave it at the def
 
 ## How views update the graph
 
-Diagnostics and Visualize call `sync(mixState, controller)`. This updates the four stem levels, selected effect, effect parameters, global pan, triggers, and shoulder buttons.
+Diagnostics calls `sync(mixState, controller)`. This updates the four stem levels, selected effect, effect parameters, global pan, triggers, and shoulder buttons.
 
 Falling Blocks calls `sync` with `stems: false`, then writes field measurements through these main methods:
 

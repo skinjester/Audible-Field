@@ -7,11 +7,10 @@ Audible Field is a browser instrument that turns activity in a three-dimensional
 - Four sound samples mixed across four corners
 - Mouse, keyboard, touchscreen, gamepad, and DualSense controls
 - Local browser effects with stick-controlled parameters
-- A Three.js landscape that reacts to the shared mix
 - A Falling Blocks simulation that turns material behavior into sound
 - Sample and effect selection while the app is running
 
-Input support differs by view. Diagnostics and Visualize support mouse, keyboard, and gamepad input. Falling Blocks also supports touchscreen navigation and an on-screen Emit control. Chrome or Edge is required for DualSense touchpad input through WebHID. DualSense sticks, triggers, shoulders, and face buttons use the standard Gamepad API.
+Input support differs by view. Diagnostics supports mouse, keyboard, and gamepad input. Falling Blocks also supports touchscreen navigation and an on-screen Emit control. Chrome or Edge is required for DualSense touchpad input through WebHID. DualSense sticks, triggers, shoulders, and face buttons use the standard Gamepad API.
 
 ## Run
 
@@ -32,10 +31,6 @@ Diagnostics is a control panel for testing gamepad input, choosing samples, and 
 
 Click a quadrant name to choose another sample. The menu lists the same library as before: the pieces whose masters live in `sample-master/`, including the nature beds. Playback uses the mono WebM/Opus copy of each listed piece. The build creates the catalog used by the menu and does not publish the masters.
 
-### Visualize
-
-Visualize turns the shared four-way mix into a Three.js landscape. Moving toward a quadrant blends its shape into the terrain. Face-button effects create ripples, waves, drift, and rings. The sticks shape those effects and move the camera.
-
 ### Falling Blocks
 
 Falling Blocks pours materials onto a plane divided into four sound quadrants. Wider piles become louder and brighter. Taller resting piles sound darker, heavier, and more saturated. Rising Diffuse atoms create a long reverb tail. Material rules decide how atoms fall, spread, transform, and disappear.
@@ -50,11 +45,10 @@ Falling Blocks supports mouse, keyboard, touchscreen, and DualSense input. See [
 
 ### Main modules
 
-- **App and tabs:** `app.js`, `diagnostics.js`, `visualize-tab.js`, and `falling-tab.js`
+- **App and tabs:** `app.js`, `diagnostics.js`, and `falling-tab.js`
 - **Audio:** `audio-engine.js`, `wam-host.js`, `wam-catalog.js`, and `wam-stick-maps.js`
 - **Samples and effects:** `sample-picker.js` and `fx-picker.js`
 - **Input:** `gamepad-input.js`, `dualsense-hid.js`, `touch-input.js`, and `input-bindings.js`
-- **Visualization:** `visualize.js` and `visualize-tab.js`
 - **Falling Blocks:** `falling-blocks.js`, `falling-input.js`, `rule-engine.js`, and `grid-sonify.js`
 - **Shared UI:** `ui-scroll.js`
 

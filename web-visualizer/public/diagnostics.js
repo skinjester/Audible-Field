@@ -794,7 +794,7 @@ function openFxPicker(slot, anchor) {
   });
 }
 
-/** Face presses while Diagnostics or Visualize is showing. */
+/** Face presses while Diagnostics is showing. */
 export function onFaceCommand(button) {
   if (!deps || !controller.fx[button]) return;
   setActiveFx(button);
@@ -805,7 +805,7 @@ export function onFaceCommand(button) {
   renderDiagnostics();
 }
 
-/** Gamepad rising edge while this tab, or Visualize, is showing. */
+/** Gamepad rising edge while this tab is showing. */
 export function onFaceEdge(button) {
   if (!controller.fx[button]) return;
   setActiveFx(button);
@@ -1063,7 +1063,7 @@ export function syncDualsenseHidUi() {
   updateDualsenseHidUi();
 }
 
-/** XY mix for Diagnostics and Visualize. Falling Blocks does not call this. */
+/** XY mix for Diagnostics. Falling Blocks does not call this. */
 export function tickXyAudio() {
   if (!deps || !audioEngine.running) return;
   audioEngine.setStemPitch(null);

@@ -5,7 +5,6 @@ import { dualsenseHid } from "./dualsense-hid.js?v=8";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
 import * as diagnostics from "./diagnostics.js?v=69";
 import * as fallingTab from "./falling-tab.js?v=166";
-import * as visualizeTab from "./visualize-tab.js?v=60";
 
 const statusEl = document.querySelector(".status");
 const audioLineEls = {
@@ -68,11 +67,11 @@ let sparkAt = 0;
 let audioQuadKey = "";
 let mouseSeen = false;
 let touchSeen = false;
-const tabButtons = document.querySelectorAll("[data-tab]");
+const diagnosticsToggle = document.querySelector("[data-diagnostics-toggle]");
 const panels = document.querySelectorAll("[data-panel]");
 
-const TAB_IDS = new Set(["diagnostics", "visualize", "falling-blocks"]);
-/** @type {"diagnostics" | "visualize" | "falling-blocks"} */
+const TAB_IDS = new Set(["diagnostics", "falling-blocks"]);
+/** @type {"diagnostics" | "falling-blocks"} */
 let activeTab = "falling-blocks";
 let audioStarting = false;
 /** @type {Promise<void> | null} */
@@ -87,7 +86,6 @@ let wamCount = null;
 
 const tabs = {
   diagnostics: diagnostics,
-  visualize: visualizeTab,
   "falling-blocks": fallingTab,
 };
 
@@ -172,7 +170,6 @@ function syncAudioSwitch() {
   if (!(button instanceof HTMLButtonElement)) return;
   const on = audioEngine.isAudible();
   button.setAttribute("aria-checked", on ? "true" : "false");
-  button.setAttribute("aria-label", on ? "Audio on" : "Audio off");
   button.title = on ? "Turn audio off" : "Turn audio on";
 }
 
@@ -842,12 +839,12 @@ function setActiveTab(tabId) {
   const prevTab = activeTab;
   activeTab = tabId;
 
-  document.body.classList.toggle("mode-visualize", tabId === "visualize");
   document.body.classList.toggle("mode-falling-blocks", tabId === "falling-blocks");
 
-  for (const button of tabButtons) {
-    const active = button.dataset.tab === tabId;
-    button.setAttribute("aria-selected", active ? "true" : "false");
+  if (diagnosticsToggle) {
+    const showing = tabId === "diagnostics";
+    diagnosticsToggle.setAttribute("aria-pressed", showing ? "true" : "false");
+    diagnosticsToggle.title = showing ? "Close diagnostics" : "Show diagnostics";
   }
 
   let activePanel = null;
@@ -862,9 +859,9 @@ function setActiveTab(tabId) {
   tabs[tabId].show();
 }
 
-for (const button of tabButtons) {
-  button.addEventListener("click", () => setActiveTab(button.dataset.tab));
-}
+diagnosticsToggle?.addEventListener("click", () => {
+  setActiveTab(activeTab === "diagnostics" ? "falling-blocks" : "diagnostics");
+});
 
 const deps = {
   getActiveTab: () => activeTab,

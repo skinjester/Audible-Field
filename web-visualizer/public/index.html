@@ -25,7 +25,7 @@
       content="Interactive browser instrument where simulated materials fall, spread, collide, and shape sound in real time."
     />
     <meta name="twitter:image" content="https://audible-field.vercel.app/og-image-2026-10-14.png" />
-    <link rel="stylesheet" href="/styles.css?v=321" />
+    <link rel="stylesheet" href="/styles.css?v=324" />
     <script type="importmap">
       {
         "imports": {
@@ -48,35 +48,43 @@
             <span class="status-sep" aria-hidden="true">•</span>
             <span data-status-pad class="is-off">DualSense</span>
           </p>
-          <div class="title-row">
-            <h1>Audible Field</h1>
-            <button
-              type="button"
-              class="audio-switch"
-              data-audio-switch
-              role="switch"
-              aria-checked="true"
-              aria-label="Audio on"
-              title="Turn audio off"
-            >
-              <span class="audio-switch-name">Audio</span>
-              <span class="audio-switch-track" aria-hidden="true"><span class="audio-switch-knob"></span></span>
-            </button>
-          </div>
+          <h1>Audible Field</h1>
+        </div>
+        <div class="top-actions">
+          <button
+            type="button"
+            class="top-btn"
+            data-diagnostics-toggle
+            aria-pressed="false"
+            title="Show diagnostics"
+          >
+            Diagnostics
+          </button>
+          <button
+            type="button"
+            class="speaker-toggle"
+            data-audio-switch
+            role="switch"
+            aria-checked="true"
+            aria-label="Audio"
+            title="Turn audio off"
+          >
+            <svg class="speaker-icon speaker-icon-on" viewBox="0 0 24 24" aria-hidden="true">
+              <path class="speaker-body" d="M3.5 9.25h3.25L11.5 5v14l-4.75-4.25H3.5Z" />
+              <path d="M14.75 9.25a3.9 3.9 0 0 1 0 5.5" />
+              <path d="M17.4 6.6a7.6 7.6 0 0 1 0 10.8" />
+            </svg>
+            <svg class="speaker-icon speaker-icon-off" viewBox="0 0 24 24" aria-hidden="true">
+              <mask id="speaker-slash-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+                <rect width="24" height="24" fill="#fff" />
+                <path d="M3 3 21 21" stroke="#000" stroke-width="4.5" />
+              </mask>
+              <path class="speaker-body" mask="url(#speaker-slash-cut)" d="M3.5 9.25h3.25L11.5 5v14l-4.75-4.25H3.5Z" />
+              <path d="M3 3 21 21" />
+            </svg>
+          </button>
         </div>
       </header>
-
-      <nav class="tabs" aria-label="EchoScape views">
-        <button type="button" data-tab="diagnostics" aria-selected="false">
-          Diagnostics
-        </button>
-        <button type="button" data-tab="visualize" aria-selected="false">
-          Visualize
-        </button>
-        <button type="button" data-tab="falling-blocks" aria-selected="true">
-          Falling Blocks
-        </button>
-      </nav>
 
       <div data-panel="diagnostics" hidden>
         <div class="diag-top">
@@ -284,20 +292,6 @@
           <div class="fx-params" data-fx-params hidden></div>
         </section>
         </div>
-      </div>
-
-      <div data-panel="visualize" hidden>
-        <section class="viz-stage">
-          <div class="viz-canvas-wrap">
-            <canvas data-viz-canvas aria-label="EchoScape terrain visualization"></canvas>
-            <p class="viz-pad-gate" data-viz-pad-gate role="status">DualSense controller required for this demo</p>
-            <p class="viz-error" data-viz-error hidden></p>
-            <div class="viz-hud" aria-live="polite">
-              <div><span data-viz-fps>--</span> fps · <span data-viz-verts>--</span> verts</div>
-              <div class="viz-hud-flags" data-viz-flags></div>
-            </div>
-          </div>
-        </section>
       </div>
 
       <div data-panel="falling-blocks">
@@ -678,6 +672,6 @@
         </div>
       </div>
     </div>
-    <script type="module" src="/app.js?v=555"></script>
+    <script type="module" src="/app.js?v=557"></script>
   </body>
 </html>

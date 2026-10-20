@@ -17,7 +17,7 @@ Falling Blocks uses the same audio engine as the other Audible Field views. See 
 | Field-to-sound mapping | [`grid-sonify.js`](../web-visualizer/public/grid-sonify.js) |
 | Shared audio engine | [`audio-engine.js`](../web-visualizer/public/audio-engine.js) |
 
-Falling Blocks is its own tab. It is not a mode inside Visualize.
+Falling Blocks is its own tab.
 
 ## How to play
 

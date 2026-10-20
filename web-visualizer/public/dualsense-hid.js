@@ -158,7 +158,7 @@ export class DualsenseHid {
     this.uiLockPad = false;
     /**
      * While false, touch updates `touch` only (Falling Blocks aims the emitter).
-     * Diagnostics / visualize still drive the mix pad.
+     * Diagnostics still drives the mix pad.
      */
     this.routeTouchToMixer = true;
     this.touch = {
