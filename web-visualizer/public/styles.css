@@ -77,6 +77,9 @@ img {
 
 .app {
   --app-pad-x: clamp(12px, 1.6vw, 24px);
+  --falling-control: 48px;
+  --falling-control-icon: 26px;
+  --falling-inset-right: 12px;
   width: 100%;
   height: 100dvh;
   margin: 0;
@@ -88,28 +91,40 @@ img {
 }
 
 .top {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  --title-size: clamp(18px, 2.2vw, 24px);
+  --title-line: 1.15;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "status status"
+    "title actions";
+  align-items: end;
+  column-gap: 12px;
   flex: 0 0 auto;
 }
 
 .brand {
+  display: contents;
+}
+
+.brand h1 {
+  grid-area: title;
   min-width: 0;
 }
 
 .status {
+  grid-area: status;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   align-content: flex-start;
-  gap: 0.35em;
-  height: 2.7em;
+  column-gap: 0.35em;
+  row-gap: 0.1em;
+  height: 2.5em;
   margin: 0 0 2px;
   overflow: hidden;
-  font-size: 10px;
-  line-height: 1.35;
+  font-size: 9px;
+  line-height: 1.2;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--ink);
@@ -124,6 +139,10 @@ img {
   letter-spacing: 0;
 }
 
+.status .status-sep:has(+ .is-off) {
+  color: var(--off);
+}
+
 .kicker {
   margin: 0 0 2px;
   letter-spacing: 0.18em;
@@ -134,28 +153,36 @@ img {
 
 h1 {
   margin: 0;
-  font-size: clamp(18px, 2.2vw, 24px);
+  font-size: var(--title-size, clamp(18px, 2.2vw, 24px));
   font-weight: 600;
-  line-height: 1.15;
+  line-height: var(--title-line, 1.15);
 }
 
 .top-actions {
+  --top-control-h: 30px;
+  grid-area: actions;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 2px;
   flex: 0 0 auto;
+  height: calc(var(--title-size) * var(--title-line));
+}
+
+.top-actions .top-btn {
+  height: var(--top-control-h);
+  padding-block: 0;
 }
 
 .speaker-toggle {
   appearance: none;
-  display: inline-grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--falling-control);
+  height: var(--top-control-h);
+  margin: 0 calc(var(--falling-inset-right) - var(--app-pad-x)) 0 0;
   padding: 0;
   border: 0;
-  border-radius: 50%;
   background: none;
   color: var(--muted);
   cursor: pointer;
@@ -169,8 +196,7 @@ h1 {
 }
 
 .speaker-toggle:focus-visible {
-  outline: 1px solid var(--live-line);
-  outline-offset: 0;
+  outline: none;
 }
 
 .speaker-toggle:active {
@@ -178,23 +204,18 @@ h1 {
 }
 
 .speaker-icon {
-  width: 36px;
-  height: 36px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transition: filter 0.15s ease;
-}
-
-.speaker-body {
+  width: var(--falling-control-icon);
+  height: var(--falling-control-icon);
   fill: currentColor;
-  fill-opacity: 0.18;
+  transition: filter 0.15s ease;
 }
 
 .speaker-toggle[aria-checked="true"] .speaker-icon {
   filter: drop-shadow(0 0 6px var(--live-line));
+}
+
+.speaker-toggle:focus-visible .speaker-icon {
+  filter: drop-shadow(0 0 6px var(--live));
 }
 
 .speaker-toggle[aria-checked="true"] .speaker-icon-off,
@@ -360,12 +381,17 @@ h1 {
 /* Desktop: mixer sits beside the DualSense block so the plugin dials stay in view. */
 @media (min-width: 840px) and (pointer: fine) {
   .diag-top {
+    flex: 1 1 auto;
+    min-height: 0;
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    /* Mixer and DualSense stay content-sized. Leftover pane height is the parameter well. */
+    grid-template-rows: auto minmax(260px, 1fr);
     grid-template-areas:
       "mixer ctrl"
       "fx fx";
     align-items: stretch;
+    align-content: start;
   }
 
   .diag-top > .mixer-col {
@@ -411,12 +437,41 @@ h1 {
   max-height: none;
 }
 
-.diag-top .ctrl,
-.diag-top .fx {
+.diag-top .ctrl {
   flex: 0 0 auto;
   height: auto;
   min-height: 0;
   overflow: visible;
+}
+
+.diag-top > .fx {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: auto;
+  overflow: visible;
+}
+
+/* Desktop: the plugin block is the reserved well under the mixer. The face cards stay put and only the parameters scroll. */
+@media (min-width: 840px) and (pointer: fine) {
+  .diag-top > .fx {
+    min-height: 0;
+    height: auto;
+    overflow: hidden;
+  }
+
+  .diag-top > .fx > .fx-head,
+  .diag-top > .fx > .fx-grid {
+    flex: 0 0 auto;
+  }
+
+  .diag-top > .fx > .fx-params {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--muted) 72%, transparent) transparent;
+  }
 }
 
 .pad {
@@ -428,8 +483,6 @@ h1 {
 }
 
 [data-panel="falling-blocks"] {
-  --falling-control: 48px;
-  --falling-control-icon: 26px;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
@@ -1744,8 +1797,12 @@ dd {
 }
 
 @media (pointer: coarse) {
-  [data-panel="falling-blocks"] {
+  .app {
     --falling-edge: 8px;
+    --falling-inset-right: max(var(--falling-edge), env(safe-area-inset-right));
+  }
+
+  [data-panel="falling-blocks"] {
     --emit-size: 112px;
   }
 
@@ -1824,7 +1881,6 @@ dd {
 
   [data-panel="falling-blocks"] .falling-topbar {
     left: max(var(--falling-edge), env(safe-area-inset-left));
-    right: max(var(--falling-edge), env(safe-area-inset-right));
   }
 
   [data-panel="falling-blocks"] .falling-side {
@@ -2061,7 +2117,7 @@ dd {
   position: absolute;
   top: 12px;
   left: 12px;
-  right: 12px;
+  right: var(--falling-inset-right);
   z-index: 3;
   display: flex;
   justify-content: space-between;
@@ -3157,11 +3213,8 @@ body:not(.has-dualsense) .pad-glyph {
   }
 
   .top {
-    gap: 10px;
-  }
-
-  h1 {
-    font-size: 18px;
+    --title-size: 18px;
+    column-gap: 10px;
   }
 
   .fx-card dl {
@@ -3177,14 +3230,8 @@ body:not(.has-dualsense) .pad-glyph {
     padding: 4px 12px;
   }
 
-  .speaker-toggle {
-    width: 40px;
-    height: 40px;
-  }
-
-  .speaker-icon {
-    width: 30px;
-    height: 30px;
+  .top-actions {
+    --top-control-h: 26px;
   }
 
   .fx-head {

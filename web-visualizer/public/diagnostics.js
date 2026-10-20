@@ -14,7 +14,7 @@ import {
   state,
   STEM_CORNERS,
 } from "./mixer-core.js?v=69";
-import { audioEngine } from "./audio-engine.js?v=125";
+import { audioEngine } from "./audio-engine.js?v=127";
 import { DualsenseHid } from "./dualsense-hid.js?v=8";
 import { openStemDropdown } from "./sample-picker.js?v=20";
 import { openFxDropdown } from "./fx-picker.js?v=6";
@@ -687,6 +687,7 @@ function ensureParamList() {
   if (key === fxParamsKey) return;
   fxParamsKey = key;
   host.replaceChildren();
+  host.scrollTop = 0;
   if (!model.params.length) {
     const empty = document.createElement("p");
     empty.className = "fx-params-empty";
@@ -893,19 +894,30 @@ function flushFaceReveal() {
   requestAnimationFrame(() => alignDiagnosticsBelowFace(card, params));
 }
 
+function scrollingAncestor(node) {
+  let current = node?.parentElement;
+  while (current && current !== document.documentElement) {
+    const oy = getComputedStyle(current).overflowY;
+    if ((oy === "auto" || oy === "scroll") && current.scrollHeight > current.clientHeight + 1) return current;
+    current = current.parentElement;
+  }
+  return root;
+}
+
 function alignDiagnosticsBelowFace(card, params) {
-  if (!root || !card.isConnected || params.hidden) return;
-  const panelRect = root.getBoundingClientRect();
+  const scroller = scrollingAncestor(params);
+  if (!scroller || !card.isConnected || params.hidden) return;
+  const panelRect = scroller.getBoundingClientRect();
   const cardRect = card.getBoundingClientRect();
   const paramsRect = params.getBoundingClientRect();
   const pad = 8;
-  const cardTop = root.scrollTop + (cardRect.top - panelRect.top);
-  const paramsBottom = root.scrollTop + (paramsRect.bottom - panelRect.top);
+  const cardTop = scroller.scrollTop + (cardRect.top - panelRect.top);
+  const paramsBottom = scroller.scrollTop + (paramsRect.bottom - panelRect.top);
   const pinCard = Math.max(0, cardTop - pad);
-  const fitBottom = paramsBottom - root.clientHeight + pad;
+  const fitBottom = paramsBottom - scroller.clientHeight + pad;
   const target = Math.max(0, Math.min(fitBottom, pinCard));
-  if (target <= root.scrollTop + 1) return;
-  root.scrollTo({ top: target, behavior: "smooth" });
+  if (target <= scroller.scrollTop + 1) return;
+  scroller.scrollTo({ top: target, behavior: "smooth" });
 }
 
 function setDpadLabel() {

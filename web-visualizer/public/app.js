@@ -1,10 +1,10 @@
 import { STEM_CORNERS, notify, tickMixer } from "./mixer-core.js?v=69";
-import { audioEngine } from "./audio-engine.js?v=125";
+import { audioEngine } from "./audio-engine.js?v=127";
 import { gamepadInput } from "./gamepad-input.js?v=22";
 import { dualsenseHid } from "./dualsense-hid.js?v=8";
 import { mountUiScrolls } from "./ui-scroll.js?v=1";
-import * as diagnostics from "./diagnostics.js?v=69";
-import * as fallingTab from "./falling-tab.js?v=166";
+import * as diagnostics from "./diagnostics.js?v=72";
+import * as fallingTab from "./falling-tab.js?v=168";
 
 const statusEl = document.querySelector(".status");
 const audioLineEls = {
@@ -173,12 +173,17 @@ function syncAudioSwitch() {
   button.title = on ? "Turn audio off" : "Turn audio on";
 }
 
-function setGlobalAudio(on) {
+/**
+ * @param {boolean} on
+ * @param {boolean} [fromUser] The call is on the stack of a trusted press.
+ */
+function setGlobalAudio(on, fromUser = false) {
   const enabled = !!on;
   audioEngine.setAudible(enabled);
   syncAudioSwitch();
   refreshStatusLine();
-  if (enabled) void ensureBrowserAudio();
+  // The document unlock listeners skip this press: they run while the switch is still off.
+  if (enabled) void ensureBrowserAudio(fromUser);
 }
 
 function bindAudioSwitch() {
@@ -186,8 +191,8 @@ function bindAudioSwitch() {
   if (!(button instanceof HTMLButtonElement) || button.dataset.bound === "1") return;
   button.dataset.bound = "1";
   syncAudioSwitch();
-  button.addEventListener("click", () => {
-    setGlobalAudio(!audioEngine.isAudible());
+  button.addEventListener("click", (event) => {
+    setGlobalAudio(!audioEngine.isAudible(), event.isTrusted);
   });
 }
 
@@ -786,9 +791,10 @@ async function runEnsureBrowserAudio() {
   }
 }
 
-function ensureBrowserAudio() {
+/** @param {boolean} [fromUser] The call is on the stack of a trusted press. */
+function ensureBrowserAudio(fromUser = false) {
   if (activeTab === "falling-blocks" && !fallingTab.isAudioEnabled()) return Promise.resolve();
-  audioEngine.beginGesture();
+  audioEngine.beginGesture(fromUser);
   if (!audioEngine.running && !audioStartPromise) {
     audioStarting = true;
     setStatus("loading", "Loading soundscape beds…");

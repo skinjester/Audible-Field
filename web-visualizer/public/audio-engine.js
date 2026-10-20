@@ -106,8 +106,10 @@ function writeParam(param, value, eps = 1e-4) {
 function glideParam(param, value, now, tau, eps = 1e-3, live = true) {
   if (!param || !Number.isFinite(value) || !Number.isFinite(now)) return;
   if (!live) {
+    // From 0, not `now`: Firefox ignores a value assignment while any event is
+    // left, and a glide started before the clock stopped begins before `now`.
     try {
-      param.cancelScheduledValues(now);
+      param.cancelScheduledValues(0);
     } catch {
       /* ignore */
     }
@@ -915,7 +917,11 @@ export class EchoScapeAudioEngine {
     this._watchedCtx = ctx;
     ctx.addEventListener("statechange", () => {
       console.info("[EchoScape audio] AudioContext:", ctx.state);
-      this._trace("ctx", { ctx: ctx.state });
+      this._trace("ctx", {
+        ctx: ctx.state,
+        gate: Number((this._gate?.gain.value ?? -1).toFixed(2)),
+        master: Number((this._master?.gain.value ?? -1).toFixed(2)),
+      });
       if (this.ctx !== ctx) return;
       // Another app, a lock, or a new output route freezes the clock. Looping
       // buffer beds do not continue when it moves again, so they start over.
@@ -989,6 +995,11 @@ export class EchoScapeAudioEngine {
    */
   setAudible(on) {
     this._audible = !!on;
+    this._trace("switch", {
+      on: this._audible ? 1 : 0,
+      ctx: this.ctx?.state || "none",
+      act: navigator.userActivation?.isActive ?? "n/a",
+    });
     this._applyAudibleGate();
     this._applyElementAudible();
     const epoch = (this._muteEpoch = (this._muteEpoch || 0) + 1);
@@ -1005,9 +1016,11 @@ export class EchoScapeAudioEngine {
     const value = this._audible ? 1 : 0;
     const t = this.ctx?.currentTime ?? 0;
     // Until the clock moves, a scheduled event at 0 sticks. Assign the value instead.
+    // The switch-off event predates the suspended clock, so clear from 0: Firefox
+    // ignores the assignment while it remains, and the gate stays shut.
     if (!this._clockLive()) {
       try {
-        gate.gain.cancelScheduledValues(t);
+        gate.gain.cancelScheduledValues(0);
       } catch {
         /* ignore */
       }
@@ -2719,12 +2732,14 @@ export class EchoScapeAudioEngine {
     }
     const target = this._outputOpen * amount;
     const t = this.ctx.currentTime;
-    this._master.gain.cancelScheduledValues(t);
-    // Until the clock moves, a scheduled event at 0 sticks. Assign the value instead.
+    // Until the clock moves, a scheduled event at 0 sticks. Assign the value instead,
+    // after clearing every event: Firefox ignores the assignment while one remains.
     if (!this._clockLive()) {
+      this._master.gain.cancelScheduledValues(0);
       this._master.gain.value = target;
       return;
     }
+    this._master.gain.cancelScheduledValues(t);
     this._master.gain.setValueAtTime(target, t);
   }
 
